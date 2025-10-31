@@ -1,19 +1,8 @@
+// Tests for DataPipelineCoordinator lifecycle and data flow.
+// Verifies BLE start/stop, MQTT connect/disconnect, processing and flush.
 import XCTest
-import CoreBluetooth
 @testable import MSMLLifestyleMonitor
-
-private final class PeripheralDouble: CBPeripheral {
-    private let backingIdentifier: UUID
-
-    init(identifier: UUID = UUID()) {
-        self.backingIdentifier = identifier
-        super.init()
-    }
-
-    override var identifier: UUID {
-        backingIdentifier
-    }
-}
+import CoreBluetooth
 
 final class DataPipelineCoordinatorTests: XCTestCase {
     private var bluetoothManager: MockBluetoothManager!
@@ -77,7 +66,7 @@ final class DataPipelineCoordinatorTests: XCTestCase {
                                 payload: data,
                                 metadata: metadata)
         }
-        let peripheral = PeripheralDouble()
+        let peripheralId = UUID()
         let latestSampleExpectation = expectation(description: "latest sample updated")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             latestSampleExpectation.fulfill()
@@ -85,7 +74,7 @@ final class DataPipelineCoordinatorTests: XCTestCase {
 
         coordinator.bluetoothManager(bluetoothManager,
                                      didReceive: payload,
-                                     from: peripheral)
+                                     from: peripheralId)
 
         XCTAssertEqual(storage.storedSamples.count, 1)
         let storedSample = try XCTUnwrap(storage.storedSamples.first)
@@ -99,7 +88,7 @@ final class DataPipelineCoordinatorTests: XCTestCase {
         processor.processHandler = { _, _ in
             throw MockError.failure
         }
-        let peripheral = PeripheralDouble()
+        let peripheralId = UUID()
         let errorExpectation = expectation(description: "last error updated")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             errorExpectation.fulfill()
@@ -107,7 +96,7 @@ final class DataPipelineCoordinatorTests: XCTestCase {
 
         coordinator.bluetoothManager(bluetoothManager,
                                      didReceive: Data([0x00]),
-                                     from: peripheral)
+                                     from: peripheralId)
 
         wait(for: [errorExpectation], timeout: 1.0)
         XCTAssertNotNil(coordinator.lastError)

@@ -1,3 +1,5 @@
+// Basic UI: shows Bluetooth state, latest sample and errors.
+// Provides Start/Stop controls that call into the coordinator.
 import SwiftUI
 import CoreBluetooth
 
@@ -98,7 +100,9 @@ enum PreviewFactory {
         let bluetoothManager = BluetoothManager(targetServiceUUIDs: [], targetCharacteristicUUIDs: [])
         let processor = SignalProcessor()
         let storage = TemporaryStorage()
-        let mqttClient = MQTTClient(host: URL(string: "mqtt://localhost")!, topic: "preview")
+        let mqttClient = MQTTClient(host: URL(string: "mqtt://localhost")!,
+                                    pubTopic: "preview/out",
+                                    subTopics: ["preview/graphs"]) 
         return DataPipelineCoordinator(bluetoothManager: bluetoothManager,
                                        processor: processor,
                                        storage: storage,

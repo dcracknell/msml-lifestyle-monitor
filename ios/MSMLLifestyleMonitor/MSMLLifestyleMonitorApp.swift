@@ -1,3 +1,5 @@
+// App entry point: builds dependencies and injects the coordinator.
+// Adjust MQTT host/topic and BLE UUIDs as appropriate.
 import SwiftUI
 import CoreBluetooth
 
@@ -10,7 +12,11 @@ struct MSMLLifestyleMonitorApp: App {
                                                 targetCharacteristicUUIDs: [CBUUID(string: "FFF1")])
         let processor = SignalProcessor()
         let storage = TemporaryStorage()
-        let mqttClient = MQTTClient(host: URL(string: "mqtt://broker.example.com")!, topic: "msml/signals")
+        // Configure MQTT publish topic for outbound samples
+        // and a subscription topic for inbound graph data.
+        let mqttClient = MQTTClient(host: URL(string: "mqtt://broker.example.com")!,
+                                    pubTopic: "msml/signals",
+                                    subTopics: ["msml/graphs/#"]) 
         _coordinator = StateObject(wrappedValue: DataPipelineCoordinator(bluetoothManager: bluetoothManager,
                                                                         processor: processor,
                                                                         storage: storage,

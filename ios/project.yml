@@ -1,0 +1,64 @@
+name: MSMLLifestyleMonitor
+options:
+  createIntermediateGroups: true
+packages:
+  CocoaMQTT:
+    url: https://github.com/emqx/CocoaMQTT.git
+    from: 2.1.4
+targets:
+  MSMLLifestyleMonitor:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: MSMLLifestyleMonitor
+    dependencies:
+      - package: CocoaMQTT
+    info:
+      path: MSMLLifestyleMonitor/Info.plist
+      properties:
+        CFBundleName: MSMLLifestyleMonitor
+        CFBundleIdentifier: com.msml.MSMLLifestyleMonitor
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities: [bluetooth-le]
+        NSBluetoothAlwaysUsageDescription: "Bluetooth is used to read sensor data."
+        NSBluetoothPeripheralUsageDescription: "Bluetooth is used to connect to devices."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.msml.MSMLLifestyleMonitor
+        SWIFT_VERSION: 5.9
+        INFOPLIST_FILE: MSMLLifestyleMonitor/Info.plist
+  MSMLLifestyleMonitorTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: MSMLLifestyleMonitorTests
+    dependencies:
+      - target: MSMLLifestyleMonitor
+schemes:
+  MSMLLifestyleMonitor:
+    build:
+      targets:
+        MSMLLifestyleMonitor: [run, test]
+        MSMLLifestyleMonitorTests: [test]
+    test:
+      targets:
+        - name: MSMLLifestyleMonitorTests
+    run:
+      preActions:
+        - name: Run Tests Before Launch
+          script: |
+            set -e
+            if ! command -v xcodebuild >/dev/null 2>&1; then
+              echo "xcodebuild not found; skipping pre-run tests."
+              exit 0
+            fi
+            # Pick the first available iOS Simulator destination name
+            DEST=$(xcodebuild -scheme MSMLLifestyleMonitor -showdestinations 2>/dev/null | awk -F'name: ' '/platform:iOS Simulator/ {print $2; exit}' | sed 's/,.*//')
+            if [ -z "$DEST" ]; then
+              echo "No available iOS Simulator destination; skipping tests."
+              exit 0
+            fi
+            echo "Running tests on $DEST"
+            xcodebuild -scheme MSMLLifestyleMonitor -destination "platform=iOS Simulator,name=$DEST" test || exit 1

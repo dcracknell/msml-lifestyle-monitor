@@ -1,3 +1,4 @@
+// Tests for TemporaryStorage: stores samples and drains in FIFO batches.
 import XCTest
 @testable import MSMLLifestyleMonitor
 

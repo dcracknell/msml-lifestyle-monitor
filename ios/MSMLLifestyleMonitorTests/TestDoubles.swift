@@ -1,3 +1,5 @@
+// Test doubles for Bluetooth, processing, storage, and MQTT.
+// Used across unit tests to observe calls and provide canned responses.
 import Foundation
 import CoreBluetooth
 import XCTest
@@ -64,6 +66,7 @@ final class MockMQTTClient: MQTTClientType {
     var connectExpectation: XCTestExpectation?
     var publishExpectation: XCTestExpectation?
     var disconnectExpectation: XCTestExpectation?
+    var onMessage: ((String, Data) -> Void)?
 
     func connect() async {
         connectCallCount += 1
@@ -80,4 +83,6 @@ final class MockMQTTClient: MQTTClientType {
         disconnectCallCount += 1
         disconnectExpectation?.fulfill()
     }
+
+    func subscribe(to topics: [String]) async { }
 }
