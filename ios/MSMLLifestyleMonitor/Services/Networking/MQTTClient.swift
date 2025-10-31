@@ -83,8 +83,8 @@ extension MQTTClient: CocoaMQTTDelegate {
     }
 
     func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16 ) {
-        guard let data = message.payload else { return }
-        onMessage?(message.topic, Data(data))
+        let data = Data(message.payload)
+        onMessage?(message.topic, data)
     }
 
     func mqtt(_ mqtt: CocoaMQTT, didStateChangeTo state: CocoaMQTTConnState) {
