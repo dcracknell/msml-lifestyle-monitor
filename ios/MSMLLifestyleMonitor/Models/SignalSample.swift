@@ -1,3 +1,5 @@
+// Model representing a single sensor reading.
+// Contains unique id, timestamp, raw payload, and optional metadata.
 import Foundation
 
 /// Represents a unit of sensor data captured from a Bluetooth peripheral.

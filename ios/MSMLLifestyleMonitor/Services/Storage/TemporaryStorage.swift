@@ -1,3 +1,5 @@
+// Temporary in-memory storage for samples.
+// Thread-safe via a serial dispatch queue; supports drain semantics.
 import Foundation
 
 protocol SignalStorage {

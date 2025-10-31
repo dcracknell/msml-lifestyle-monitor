@@ -1,3 +1,5 @@
+// Signal processing: validates and converts raw BLE payloads into SignalSample.
+// Extend with domain decoding/parsing as needed.
 import Foundation
 
 /// Applies domain-specific transformations to raw Bluetooth payloads.

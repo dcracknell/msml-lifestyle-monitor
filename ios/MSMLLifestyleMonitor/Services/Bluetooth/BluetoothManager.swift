@@ -1,9 +1,11 @@
+// Bluetooth manager: scans, connects, subscribes to notifications.
+// Forwards updates and raw data to a delegate for processing.
 import CoreBluetooth
-import Combine
 import os
 
 protocol BluetoothManagerDelegate: AnyObject {
-    func bluetoothManager(_ manager: BluetoothManager, didReceive data: Data, from peripheral: CBPeripheral)
+    // Pass only the peripheral identifier to keep tests simple and decoupled from CoreBluetooth types.
+    func bluetoothManager(_ manager: BluetoothManager, didReceive data: Data, from peripheralId: UUID)
     func bluetoothManager(_ manager: BluetoothManager, didUpdateState state: CBManagerState)
     func bluetoothManager(_ manager: BluetoothManager, didEncounter error: Error)
 }
@@ -127,6 +129,6 @@ extension BluetoothManager: CBPeripheralDelegate {
             return
         }
         guard let value = characteristic.value else { return }
-        delegate?.bluetoothManager(self, didReceive: value, from: peripheral)
+        delegate?.bluetoothManager(self, didReceive: value, from: peripheral.identifier)
     }
 }

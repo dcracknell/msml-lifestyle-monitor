@@ -1,3 +1,4 @@
+// Tests for SignalProcessor: metadata enrichment and error cases.
 import XCTest
 @testable import MSMLLifestyleMonitor
 

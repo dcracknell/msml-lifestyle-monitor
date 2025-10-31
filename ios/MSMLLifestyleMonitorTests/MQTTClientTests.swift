@@ -1,9 +1,11 @@
+// Tests for basic MQTTClient behaviors (no real broker).
+// Ensures empty publishes are no-ops and calls do not throw.
 import XCTest
 @testable import MSMLLifestyleMonitor
 
 final class MQTTClientTests: XCTestCase {
     func testPublishIgnoresEmptySamples() async throws {
-        let client = MQTTClient(host: URL(string: "mqtt://localhost")!, topic: "test")
+        let client = MQTTClient(host: URL(string: "mqtt://localhost")!, pubTopic: "test")
 
         await XCTAssertNoThrowAsync {
             try await client.publish(samples: [])
@@ -11,7 +13,7 @@ final class MQTTClientTests: XCTestCase {
     }
 
     func testPublishWithSamplesDoesNotThrow() async throws {
-        let client = MQTTClient(host: URL(string: "mqtt://localhost")!, topic: "test")
+        let client = MQTTClient(host: URL(string: "mqtt://localhost")!, pubTopic: "test")
         let sample = SignalSample(payload: Data([0x01]))
 
         await XCTAssertNoThrowAsync {
