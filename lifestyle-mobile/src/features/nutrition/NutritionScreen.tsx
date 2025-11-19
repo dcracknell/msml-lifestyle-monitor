@@ -8,6 +8,7 @@ import {
   Platform,
   UIManager,
   Image,
+  Modal,
 } from 'react-native';
 import dayjs from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
@@ -28,13 +29,20 @@ import {
   saveMacroTargetsRequest,
   deleteNutritionEntryRequest,
   searchNutritionRequest,
+  lookupNutritionRequest,
 } from '../../api/endpoints';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import { formatDate, formatNumber } from '../../utils/format';
 import { useSyncQueue } from '../../providers/SyncProvider';
 import * as ImagePicker from 'expo-image-picker';
-import { NutritionSuggestion } from '../../api/types';
+import {
+  CameraView,
+  useCameraPermissions,
+  BarcodeScanningResult,
+  BarcodeType,
+} from 'expo-camera';
+import { NutritionEntry, NutritionLookupProduct, NutritionSuggestion } from '../../api/types';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -52,6 +60,7 @@ type EntryFormState = {
   weightUnit: string;
   photoData: string | null;
 };
+
 
 export function NutritionScreen() {
   const { subjectId } = useSubject();
@@ -78,6 +87,11 @@ export function NutritionScreen() {
   const [suggestionStatus, setSuggestionStatus] = useState('Type at least 2 characters to see suggestions.');
   const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [entryFeedback, setEntryFeedback] = useState<string | null>(null);
+  const [scannerActive, setScannerActive] = useState(false);
+  const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+  const [scannerProcessing, setScannerProcessing] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [historyPhoto, setHistoryPhoto] = useState<{ uri: string; name: string } | null>(null);
   const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeSuggestionRequest = useRef<symbol | null>(null);
   const mountedRef = useRef(true);
@@ -121,6 +135,29 @@ export function NutritionScreen() {
     if (message) {
       setSuggestionStatus(message);
     }
+  };
+
+  const ensureScannerPermission = async () => {
+    if (cameraPermission?.granted) {
+      return true;
+    }
+    const response = await requestCameraPermission();
+    return Boolean(response?.granted);
+  };
+
+  const handleOpenScanner = async () => {
+    setScannerFeedback(null);
+    const allowed = await ensureScannerPermission();
+    if (!allowed) {
+      setScannerFeedback('Camera permission is required to scan barcodes.');
+      return;
+    }
+    setScannerActive(true);
+  };
+
+  const handleCloseScanner = () => {
+    setScannerActive(false);
+    setScannerProcessing(false);
   };
 
   const scheduleSuggestionFetch = (value: string) => {
@@ -210,6 +247,43 @@ export function NutritionScreen() {
     clearSuggestions('Suggestion applied. Adjust anything before saving.');
   };
 
+  const applyLookupProduct = (product?: NutritionLookupProduct | null) => {
+    if (!product) return;
+    if (product.name) {
+      handleEntryChange('name', product.name);
+    }
+    if (product.barcode) {
+      handleEntryChange('barcode', product.barcode);
+    }
+    const setNumericField = (
+      key: keyof EntryFormState,
+      value?: number | null,
+      decimals?: boolean
+    ) => {
+      if (value === null || value === undefined || Number.isNaN(value)) {
+        return;
+      }
+      const normalized = decimals ? Math.round(value * 10) / 10 : Math.round(value);
+      handleEntryChange(key, String(normalized));
+    };
+    setNumericField('calories', product.calories);
+    setNumericField('protein', product.protein);
+    setNumericField('carbs', product.carbs);
+    setNumericField('fats', product.fats);
+    setNumericField('weightAmount', product.weightAmount, true);
+    if (product.weightUnit) {
+      handleEntryChange('weightUnit', product.weightUnit);
+    }
+  };
+
+  const isFoodProduct = (product?: NutritionLookupProduct | null) => {
+    if (!product || !product.name?.trim()) {
+      return false;
+    }
+    const signals = [product.calories, product.protein, product.carbs, product.fats];
+    return signals.some((value) => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  };
+
   const formatSuggestionMeta = (suggestion: NutritionSuggestion) => {
     const parts: string[] = [];
     const calories = suggestion.prefill?.calories;
@@ -228,6 +302,38 @@ export function NutritionScreen() {
   const handleApplyTopSuggestion = () => {
     if (suggestions.length) {
       applySuggestion(suggestions[0]);
+    }
+  };
+
+  const handleBarcodeDetected = async ({ data }: BarcodeScanningResult) => {
+    if (scannerProcessing) {
+      return;
+    }
+    const trimmed = data?.trim();
+    if (!trimmed) {
+      setScannerFeedback('Unable to read barcode. Try again.');
+      return;
+    }
+    setScannerProcessing(true);
+    setScannerFeedback('Barcode detected. Looking up nutrition info...');
+    handleEntryChange('barcode', trimmed);
+    try {
+      const lookup = await lookupNutritionRequest({ barcode: trimmed });
+      if (isFoodProduct(lookup.product)) {
+        applyLookupProduct(lookup.product);
+        setScannerFeedback('Food item detected! Values were added to the form.');
+        setEntryFeedback('Nutrition data loaded from barcode—review before saving.');
+        setScannerActive(false);
+      } else {
+        setScannerFeedback('Not a food item. Please try another barcode.');
+        setEntryFeedback('Scanned barcode is not recognized as a food item.');
+      }
+    } catch (error) {
+      setScannerFeedback(
+        error instanceof Error ? error.message : 'Unable to fetch barcode details right now.'
+      );
+    } finally {
+      setScannerProcessing(false);
     }
   };
 
@@ -355,13 +461,25 @@ export function NutritionScreen() {
     setPhotoStatus(null);
   };
 
+  const handleViewHistoryPhoto = (entry: NutritionEntry) => {
+    if (!entry.photoData) {
+      return;
+    }
+    setHistoryPhoto({ uri: `data:image/jpeg;base64,${entry.photoData}`, name: entry.name });
+  };
+
+  const handleCloseHistoryPhoto = () => {
+    setHistoryPhoto(null);
+  };
+
   return (
-    <RefreshableScrollView
-      contentContainerStyle={styles.container}
-      refreshing={isRefetching}
-      onRefresh={refetch}
-      showsVerticalScrollIndicator={false}
-    >
+    <>
+      <RefreshableScrollView
+        contentContainerStyle={styles.container}
+        refreshing={isRefetching}
+        onRefresh={refetch}
+        showsVerticalScrollIndicator={false}
+      >
       <SectionHeader title="Daily nutrition" subtitle={formatDate(selectedDate)} />
       <View style={styles.dateRow}>
         <AppButton title="Prev" variant="ghost" onPress={() => adjustDate(-1)} />
@@ -404,6 +522,7 @@ export function NutritionScreen() {
               placeholder="Greek yogurt"
               value={entryForm.name}
               onChangeText={handleNameChange}
+              selectTextOnFocus
             />
             <View style={styles.suggestionContainer}>
               <View style={styles.suggestionHeader}>
@@ -453,6 +572,36 @@ export function NutritionScreen() {
               value={entryForm.barcode}
               onChangeText={(value) => handleEntryChange('barcode', value)}
             />
+            <AppButton
+              title={scannerActive ? 'Hide barcode scanner' : 'Scan barcode'}
+              variant="ghost"
+              onPress={scannerActive ? handleCloseScanner : handleOpenScanner}
+            />
+            {scannerActive ? (
+              <View style={styles.scannerPanel}>
+                <View style={styles.scannerWrapper}>
+                  <CameraView
+                    style={styles.scannerCamera}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: SUPPORTED_BARCODE_TYPES }}
+                    onBarcodeScanned={scannerProcessing ? undefined : handleBarcodeDetected}
+                  />
+                  {scannerProcessing ? (
+                    <View style={styles.scannerOverlay}>
+                      <AppText variant="body">Fetching nutrition info...</AppText>
+                    </View>
+                  ) : null}
+                </View>
+                <AppText variant="muted" style={styles.scannerHelper}>
+                  Align a food barcode within the frame and hold still.
+                </AppText>
+              </View>
+            ) : null}
+            {scannerFeedback ? (
+              <AppText variant="muted" style={styles.helperText}>
+                {scannerFeedback}
+              </AppText>
+            ) : null}
             <View style={styles.formRow}>
               <AppInput
                 label="Calories"
@@ -581,15 +730,23 @@ export function NutritionScreen() {
               <AppText variant="body">{entry.name}</AppText>
               <AppText variant="muted">{entry.type} · {entry.calories} kcal</AppText>
               {entry.photoData ? (
-                <View style={styles.entryPhotoWrapper}>
+                <TouchableOpacity
+                  style={styles.entryPhotoWrapper}
+                  onPress={() => handleViewHistoryPhoto(entry)}
+                >
                   <Image
                     source={{ uri: `data:image/jpeg;base64,${entry.photoData}` }}
                     style={styles.entryPhoto}
                   />
-                  <AppText variant="muted" style={styles.photoFlag}>
-                    📷 Photo attached
-                  </AppText>
-                </View>
+                  <View style={styles.photoInfo}>
+                    <AppText variant="muted" style={styles.photoFlag}>
+                      📷 Photo attached
+                    </AppText>
+                    <AppText variant="muted" style={styles.photoHint}>
+                      Tap to view
+                    </AppText>
+                  </View>
+                </TouchableOpacity>
               ) : null}
             </View>
             <AppButton title="Remove" variant="ghost" onPress={() => handleDelete(entry.id)} />
@@ -613,9 +770,41 @@ export function NutritionScreen() {
           <AppText variant="muted">No entries yet.</AppText>
         )}
       </Card>
-    </RefreshableScrollView>
+      </RefreshableScrollView>
+      <Modal
+        visible={Boolean(historyPhoto)}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseHistoryPhoto}
+      >
+        <View style={styles.viewerBackdrop}>
+          <View style={styles.viewerCard}>
+            <AppText variant="heading">{historyPhoto?.name || 'Meal photo'}</AppText>
+            {historyPhoto ? (
+              <Image source={{ uri: historyPhoto.uri }} style={styles.viewerImage} />
+            ) : null}
+            <AppButton title="Close photo" variant="ghost" onPress={handleCloseHistoryPhoto} />
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
+
+const SUPPORTED_BARCODE_TYPES: BarcodeType[] = [
+  'ean13',
+  'ean8',
+  'upc_a',
+  'upc_e',
+  'itf14',
+  'code128',
+  'code39',
+  'code93',
+  'codabar',
+  'datamatrix',
+  'pdf417',
+  'qr',
+];
 
 const styles = StyleSheet.create({
   container: {
@@ -699,8 +888,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  photoInfo: {
+    flex: 1,
+    gap: spacing.xs,
+  },
   photoFlag: {
     color: colors.muted,
+  },
+  photoHint: {
+    color: colors.accent,
   },
   suggestionContainer: {
     marginTop: spacing.sm,
@@ -733,5 +929,57 @@ const styles = StyleSheet.create({
   suggestionButton: {
     height: 40,
     paddingHorizontal: spacing.sm,
+  },
+  scannerPanel: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 16,
+    padding: spacing.sm,
+    gap: spacing.sm,
+    backgroundColor: colors.glass,
+  },
+  scannerWrapper: {
+    height: 220,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  scannerCamera: {
+    flex: 1,
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(1,9,21,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scannerHelper: {
+    textAlign: 'center',
+  },
+  viewerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  viewerCard: {
+    width: '100%',
+    backgroundColor: colors.panel,
+    borderRadius: 20,
+    padding: spacing.lg,
+    gap: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  viewerImage: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
   },
 });

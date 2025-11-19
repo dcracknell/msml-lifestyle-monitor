@@ -34,6 +34,7 @@ export interface MetricTimelineEntry {
   steps: number | null;
   calories: number | null;
   readiness: number | null;
+  sleepHours?: number | null;
 }
 
 export interface MacroTargets {
@@ -348,4 +349,24 @@ export interface NutritionLookupProduct {
 
 export interface NutritionLookupResponse {
   product: NutritionLookupProduct | null;
+}
+
+export interface StreamSample {
+  ts: number;
+  value: number | null;
+}
+
+export interface StreamHistoryResponse {
+  subjectId: number;
+  metric: string;
+  from: number;
+  to: number;
+  total: number;
+  maxPoints: number;
+  points: StreamSample[];
+}
+
+export interface StreamPublishResponse {
+  metric: string;
+  accepted: number;
 }

@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View, Image } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { AppButton, AppInput, AppText, Card } from '../../components';
 import { colors } from '../../theme';
 import { useAuth } from '../../providers/AuthProvider';
+import { useApiConfig } from '../../providers/ApiConfigProvider';
 import * as ImagePicker from 'expo-image-picker';
 
 export type AuthStackParamList = {
@@ -18,6 +19,7 @@ type Mode = 'login' | 'signup';
 
 export function AuthScreen({ navigation }: Props) {
   const { signIn, signUp, isAuthenticating } = useAuth();
+  const { apiBaseUrl, updateBaseUrl, resetBaseUrl } = useApiConfig();
   const [mode, setMode] = useState<Mode>('login');
   const [form, setForm] = useState({
     name: '',
@@ -28,6 +30,14 @@ export function AuthScreen({ navigation }: Props) {
   });
   const [error, setError] = useState<string | null>(null);
   const [photoStatus, setPhotoStatus] = useState<string | null>(null);
+  const [connectionExpanded, setConnectionExpanded] = useState(false);
+  const [apiUrlInput, setApiUrlInput] = useState(apiBaseUrl);
+  const [apiUrlFeedback, setApiUrlFeedback] = useState<string | null>(null);
+  const [apiUrlSaving, setApiUrlSaving] = useState(false);
+
+  useEffect(() => {
+    setApiUrlInput(apiBaseUrl);
+  }, [apiBaseUrl]);
 
   const handleChange = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -49,6 +59,32 @@ export function AuthScreen({ navigation }: Props) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to authenticate.');
+    }
+  };
+
+  const handleApplyApiUrl = async () => {
+    setApiUrlFeedback(null);
+    setApiUrlSaving(true);
+    try {
+      await updateBaseUrl(apiUrlInput);
+      setApiUrlFeedback('API base URL updated.');
+    } catch (err) {
+      setApiUrlFeedback(err instanceof Error ? err.message : 'Unable to update API base URL.');
+    } finally {
+      setApiUrlSaving(false);
+    }
+  };
+
+  const handleResetApiUrl = async () => {
+    setApiUrlFeedback(null);
+    setApiUrlSaving(true);
+    try {
+      await resetBaseUrl();
+      setApiUrlFeedback('Reverted to the default API server.');
+    } catch (err) {
+      setApiUrlFeedback(err instanceof Error ? err.message : 'Unable to reset API base URL.');
+    } finally {
+      setApiUrlSaving(false);
     }
   };
 
@@ -86,7 +122,7 @@ export function AuthScreen({ navigation }: Props) {
         ) : null}
         <AppInput
           label="Email or username"
-          placeholder="avery@example.com"
+          placeholder="coach@example.com"
           autoCapitalize="none"
           keyboardType="email-address"
           value={form.email}
@@ -178,6 +214,42 @@ export function AuthScreen({ navigation }: Props) {
             onPress={() => navigation.navigate('ForgotPassword')}
           />
         ) : null}
+        <View style={styles.connectionBlock}>
+          <AppButton
+            title={connectionExpanded ? 'Hide connection settings' : 'Connection settings'}
+            variant="ghost"
+            onPress={() => setConnectionExpanded((prev) => !prev)}
+          />
+          {!connectionExpanded ? (
+            <AppText variant="muted" style={styles.connectionHint}>
+              Current server: {apiBaseUrl}
+            </AppText>
+          ) : (
+            <>
+              <AppInput
+                label="API base URL"
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={apiUrlInput}
+                onChangeText={setApiUrlInput}
+              />
+              {apiUrlFeedback ? (
+                <AppText variant="muted" style={styles.connectionHint}>
+                  {apiUrlFeedback}
+                </AppText>
+              ) : null}
+              <View style={styles.connectionActions}>
+                <AppButton title="Apply" onPress={handleApplyApiUrl} loading={apiUrlSaving} />
+                <AppButton
+                  title="Reset"
+                  variant="ghost"
+                  onPress={handleResetApiUrl}
+                  disabled={apiUrlSaving}
+                />
+              </View>
+            </>
+          )}
+        </View>
       </Card>
     </ScrollView>
   );
@@ -229,5 +301,16 @@ const styles = StyleSheet.create({
   },
   helper: {
     marginTop: 8,
+  },
+  connectionBlock: {
+    marginTop: 16,
+    gap: 8,
+  },
+  connectionHint: {
+    marginTop: 4,
+  },
+  connectionActions: {
+    flexDirection: 'row',
+    gap: 12,
   },
 });

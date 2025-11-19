@@ -11,7 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="vendor/chart.umd.js" defer></script>
 </head>
 
 <body>
@@ -34,43 +34,63 @@
       </div>
 
       <div class="nav" id="sideNav">
-        <button type="button" class="nav-item active" data-page="overview" aria-pressed="true">
-          Overview
-        </button>
-        <button type="button" class="nav-item" data-page="activity" aria-pressed="false">
-          Activity
-        </button>
-        <button type="button" class="nav-item" data-page="sessions" aria-pressed="false">
-          Sessions
-        </button>
-        <button type="button" class="nav-item" data-page="vitals" aria-pressed="false">
-          Vitals
-        </button>
-        <button type="button" class="nav-item" data-page="nutrition" aria-pressed="false">
-          Nutrition
-        </button>
-        <button type="button" class="nav-item" data-page="weight" aria-pressed="false">
-          Weight
-        </button>
-        <a href="/bluetooth.html" class="nav-item nav-link" id="bluetoothNavLink">
-          Bluetooth capture ↗
-        </a>
-        <div class="settings-block">
-          <button
-            type="button"
-            class="nav-item settings-trigger"
-            id="settingsButton"
-            aria-expanded="false">
-            Settings ▾
+        <div class="nav-group">
+          <button type="button" class="nav-item active" data-page="overview" aria-pressed="true">
+            Overview
           </button>
-          <div class="settings-menu hidden" id="settingsMenu">
-            <button type="button" class="nav-item" data-page="profile" aria-pressed="false">
-              Profile
-            </button>
-            <button type="button" class="nav-item" data-page="sharing" aria-pressed="false">
-              Share access
-            </button>
-          </div>
+        </div>
+
+        <div class="nav-divider" role="presentation"></div>
+
+        <div class="nav-group" aria-label="Training">
+          <button type="button" class="nav-item" data-page="activity" aria-pressed="false">
+            Activity
+          </button>
+          <button type="button" class="nav-item" data-page="roster" aria-pressed="false">
+            Roster
+          </button>
+          <button type="button" class="nav-item" data-page="sessions" aria-pressed="false">
+            Sessions
+          </button>
+        </div>
+
+        <div class="nav-divider" role="presentation"></div>
+
+        <div class="nav-group" aria-label="Recovery">
+          <button type="button" class="nav-item" data-page="sleep" aria-pressed="false">
+            Sleep
+          </button>
+          <button type="button" class="nav-item" data-page="vitals" aria-pressed="false">
+            Vitals
+          </button>
+        </div>
+
+        <div class="nav-divider" role="presentation"></div>
+
+        <div class="nav-group" aria-label="Fuel">
+          <button type="button" class="nav-item" data-page="nutrition" aria-pressed="false">
+            Nutrition
+          </button>
+          <button type="button" class="nav-item" data-page="weight" aria-pressed="false">
+            Weight
+          </button>
+        </div>
+
+        <div class="nav-divider" role="presentation"></div>
+
+        <div class="nav-group" aria-label="Account and Sharing">
+          <button type="button" class="nav-item" data-page="profile" aria-pressed="false">
+            Settings
+          </button>
+          <button type="button" class="nav-item" data-page="sharing" aria-pressed="false">
+            Share
+          </button>
+          <a href="/bluetooth.html" class="nav-item nav-link" id="bluetoothNavLink">
+            Devices ↗
+          </a>
+          <button type="button" class="nav-item" id="logoutButton">
+            Sign out
+          </button>
         </div>
       </div>
 
@@ -99,7 +119,7 @@
           <form id="loginForm" autocomplete="on" method="post">
             <label>
               Email or username
-              <input type="text" name="email" placeholder="avery.hart@example.com or avery" required />
+              <input type="text" name="email" placeholder="coach@example.com or coach" required />
             </label>
             <label>
               Password
@@ -174,14 +194,14 @@
 
           <form id="forgotForm" class="hidden auth-subpanel" method="post">
             <p class="muted small-text">
-              Enter your account email. We’ll send a reset link so you can choose a new password.
+              Enter your account email and we’ll alert the head coach so they can help you reset your password.
             </p>
             <label>
               Email
               <input type="email" id="forgotEmail" placeholder="you@example.com" required />
             </label>
             <div class="auth-subpanel-actions">
-              <button type="submit" class="outline-btn">Send reset link</button>
+              <button type="submit" class="outline-btn">Notify head coach</button>
               <button type="button" class="link-btn" data-auth-back="login">Back to sign in</button>
             </div>
             <p class="form-feedback" id="forgotFeedback"></p>
@@ -219,7 +239,6 @@
           </div>
           <div class="header-actions">
             <div class="status-pill" id="readinessHeadline">Readiness tracking</div>
-            <button type="button" class="outline-btn" id="logoutButton">Log out</button>
           </div>
         </header>
 
@@ -422,6 +441,17 @@
           </div>
         </div>
 
+        <div class="subpage hidden" data-subpage="roster">
+          <section class="glass placeholder-panel">
+            <p class="eyebrow">Team Roster</p>
+            <h3>Manage athletes on mobile</h3>
+            <p class="muted">
+              Roster management is currently optimized for the mobile experience. Use the app to add
+              or remove athletes and monitor shared readiness. A web-first roster view is on the way.
+            </p>
+          </section>
+        </div>
+
         <div class="subpage hidden" data-subpage="sessions">
           <article class="glass session-card">
             <div class="card-header">
@@ -440,6 +470,53 @@
               Build consistency with 3 aerobic sessions and 2 strength touches.
             </p>
           </article>
+        </div>
+
+        <div class="subpage hidden" data-subpage="sleep">
+          <div class="sleep-grid">
+            <article class="glass sleep-hero">
+              <div class="card-header">
+                <p class="eyebrow">Sleep HQ</p>
+                <h3>Overnight recovery</h3>
+              </div>
+              <div class="sleep-hero-metric">
+                <span id="sleepHoursPrimary">—</span>
+                <span>hrs last night</span>
+              </div>
+              <p class="muted small-text" id="sleepGoalCopy">Set a sleep goal to start tracking.</p>
+              <ul class="sleep-hero-list">
+                <li>
+                  <p class="label">Trend</p>
+                  <p id="sleepTrendCopy">Awaiting data</p>
+                </li>
+                <li>
+                  <p class="label">Readiness</p>
+                  <p id="sleepReadinessCopy">—</p>
+                </li>
+              </ul>
+              <p class="muted small-text" id="sleepHeroHint">
+                Sync wearable data to reveal deep, REM, and light balance.
+              </p>
+            </article>
+
+            <article class="glass sleep-stages-card">
+              <div class="card-header">
+                <p class="eyebrow">Stage balance</p>
+                <h3>Where time was spent</h3>
+              </div>
+              <ul class="sleep-stage-list" id="sleepStageBreakdown">
+                <li class="empty-row">No sleep data yet.</li>
+              </ul>
+            </article>
+
+            <article class="glass chart-card span-2">
+              <div class="card-header">
+                <p class="eyebrow">Last 7 nights</p>
+                <h3>Sleep duration trend</h3>
+              </div>
+              <canvas id="sleepTrendChart" height="220"></canvas>
+            </article>
+          </div>
         </div>
 
         <div class="subpage hidden" data-subpage="vitals">

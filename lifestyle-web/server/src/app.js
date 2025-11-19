@@ -20,16 +20,33 @@ const defaultOrigins = [
   'http://localhost:19006',
 ];
 
+function expandOriginsWithSchemes(origins = []) {
+  const expanded = new Set(origins);
+  origins.forEach((origin) => {
+    if (origin === '*' || !/^https?:\/\//.test(origin)) {
+      return;
+    }
+    const alternate = origin.startsWith('https://')
+      ? origin.replace(/^https:\/\//, 'http://')
+      : origin.replace(/^http:\/\//, 'https://');
+    expanded.add(alternate);
+  });
+  return [...expanded];
+}
+
 function resolveAllowedOrigins(override) {
-  const configured = (override || process.env.APP_ORIGIN || defaultOrigins.join(','))
-    .split(',')
+  const configured = [
+    ...defaultOrigins,
+    ...(override || process.env.APP_ORIGIN || '').split(','),
+  ]
     .map(normalizeOrigin)
     .filter(Boolean);
+  const uniqueConfigured = expandOriginsWithSchemes([...new Set(configured)]);
 
-  const allowAllOrigins = configured.includes('*');
+  const allowAllOrigins = uniqueConfigured.includes('*');
   const allowedOrigins = allowAllOrigins
-    ? configured.filter((origin) => origin !== '*')
-    : configured;
+    ? uniqueConfigured.filter((origin) => origin !== '*')
+    : uniqueConfigured;
 
   return {
     allowAllOrigins,
@@ -59,6 +76,47 @@ function createHttpsMiddleware(requireHttps) {
   };
 }
 
+function resolveRequestProtocol(req) {
+  const protoHeader = (req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  if (protoHeader) {
+    return protoHeader;
+  }
+  return (req.protocol || '').toLowerCase();
+}
+
+function resolveRequestOrigin(req) {
+  const host = (req.get('host') || '').trim();
+  if (!host) {
+    return null;
+  }
+  const protocol = resolveRequestProtocol(req) || 'http';
+  return normalizeOrigin(`${protocol}://${host}`);
+}
+
+function resolveRequestHost(req) {
+  return (req.get('host') || '').trim().toLowerCase();
+}
+
+function parseOriginHost(origin) {
+  if (!origin) {
+    return null;
+  }
+  try {
+    return new URL(origin).host.toLowerCase();
+  } catch (error) {
+    return null;
+  }
+}
+
+function isRequestSelfOrigin(req, origin) {
+  const requestHost = resolveRequestHost(req);
+  const originHost = parseOriginHost(origin);
+  if (!requestHost || !originHost) {
+    return false;
+  }
+  return requestHost === originHost;
+}
+
 function createApp(options = {}) {
   const app = express();
   const bodyLimit = options.bodyLimit || process.env.API_BODY_LIMIT || '6mb';
@@ -67,19 +125,20 @@ function createApp(options = {}) {
     options.appOrigin
   );
 
-  const corsOptions = {
-    origin(origin, callback) {
-      if (!origin || allowAllOrigins) {
-        return callback(null, true);
-      }
+  const corsOptionsDelegate = (req, callback) => {
+    const originHeader = req.get('origin');
+    if (!originHeader || allowAllOrigins) {
+      return callback(null, { origin: true });
+    }
 
-      const normalizedOrigin = normalizeOrigin(origin);
-      if (allowedOriginsSet.has(normalizedOrigin)) {
-        return callback(null, true);
-      }
+    const normalizedOrigin = normalizeOrigin(originHeader);
+    if (allowedOriginsSet.has(normalizedOrigin) || isRequestSelfOrigin(req, normalizedOrigin)) {
+      return callback(null, { origin: true });
+    }
 
-      return callback(new Error('Not allowed by CORS'));
-    },
+    const label = normalizedOrigin || originHeader;
+    console.warn(`Rejected CORS origin: ${label}`);
+    return callback(new Error('Not allowed by CORS'));
   };
 
   // Expose CORS config for logging and tests.
@@ -88,6 +147,13 @@ function createApp(options = {}) {
   app.use(
     helmet({
       crossOriginEmbedderPolicy: false,
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          // Allow remote HTTPS avatars plus data URLs generated from uploads.
+          'img-src': ["'self'", 'data:', 'https:'],
+        },
+      },
     })
   );
 
@@ -96,7 +162,7 @@ function createApp(options = {}) {
     app.use(httpsMiddleware);
   }
 
-  app.use(cors(corsOptions));
+  app.use(cors(corsOptionsDelegate));
   app.use(express.json({ limit: bodyLimit }));
   app.use(
     express.urlencoded({

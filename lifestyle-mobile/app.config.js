@@ -29,6 +29,10 @@ export default ({ config }) => ({
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'com.msml.lifestyle',
+    infoPlist: {
+      NSCameraUsageDescription: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
+      NSPhotoLibraryUsageDescription: 'Allow MSML Lifestyle to attach meal photos from your library.',
+    },
   },
   android: {
     adaptiveIcon: {
@@ -36,11 +40,22 @@ export default ({ config }) => ({
       backgroundColor: '#010915',
     },
     package: 'com.msml.lifestyle',
+    permissions: ['android.permission.CAMERA'],
   },
   web: {
     favicon: './assets/icon.png',
   },
-  plugins: ['expo-secure-store', 'expo-font', 'expo-web-browser'],
+  plugins: [
+    'expo-secure-store',
+    'expo-font',
+    'expo-web-browser',
+    [
+      'expo-camera',
+      {
+        cameraPermission: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
+      },
+    ],
+  ],
   extra: {
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:4000',
     webAppOrigin: process.env.EXPO_PUBLIC_WEB_APP_ORIGIN || 'http://localhost:4000',

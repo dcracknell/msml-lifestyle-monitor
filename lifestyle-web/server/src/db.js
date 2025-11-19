@@ -7,9 +7,9 @@ const { hashPassword } = require('./utils/hash-password');
 
 const DATA_ROOT = path.join(__dirname, '..', '..', 'database');
 const seedUserPasswords = [
-  { email: 'avery.hart@example.com', env: 'SEED_AVERY_PASSWORD', fallback: 'athlete123' },
-  { email: 'leo.singh@example.com', env: 'SEED_LEO_PASSWORD', fallback: 'mindful123' },
-  { email: 'david.cracknell@example.com', env: 'HEAD_COACH_SEED_PASSWORD', fallback: 'coach123' },
+  { email: 'head.coach@example.com', env: 'HEAD_COACH_SEED_PASSWORD', fallback: 'Password' },
+  { email: 'coach@example.com', env: 'COACH_SEED_PASSWORD', fallback: 'Password' },
+  { email: 'athlete@example.com', env: 'ATHLETE_SEED_PASSWORD', fallback: 'Password' },
 ];
 
 function resolvePath(input, fallback) {
@@ -638,8 +638,8 @@ function ensureAvatarPhotoColumn() {
 ensureAvatarPhotoColumn();
 
 function ensureHeadCoachAccount() {
-  const email = 'david.cracknell@example.com';
-  const seedPassword = process.env.HEAD_COACH_SEED_PASSWORD || 'coach123';
+  const email = 'head.coach@example.com';
+  const seedPassword = process.env.HEAD_COACH_SEED_PASSWORD || 'Password';
   const role = ROLES.HEAD_COACH;
   const avatarUrl = 'https://images.unsplash.com/photo-1504593811423-6dd665756598?auto=format&fit=crop&w=200&q=80';
   const existing = db
@@ -651,7 +651,7 @@ function ensureHeadCoachAccount() {
     db.prepare(
       `INSERT INTO users (name, email, password_hash, role, avatar_url, avatar_photo, weight_category, goal_steps, goal_calories, goal_sleep, goal_readiness)
        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)`
-    ).run('David Cracknell', email, passwordHash, role, avatarUrl, null, 'Heavyweight');
+    ).run('Pat Head Coach', email, passwordHash, role, avatarUrl, null, 'Heavyweight');
     return;
   }
 

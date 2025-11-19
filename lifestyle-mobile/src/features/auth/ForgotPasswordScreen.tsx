@@ -20,7 +20,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       const response = await forgotPasswordRequest({ email });
       setFeedback(response.message);
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : 'Unable to send reset email.');
+      setFeedback(error instanceof Error ? error.message : 'Unable to notify the head coach.');
     } finally {
       setLoading(false);
     }
@@ -31,7 +31,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
       <Card>
         <AppText variant="heading">Reset access</AppText>
         <AppText variant="muted" style={styles.subtitle}>
-          Enter your account email and we’ll send a reset token.
+          Enter your account email and we’ll alert the head coach to help you reset your password.
         </AppText>
         <AppInput
           label="Email"
@@ -46,9 +46,9 @@ export function ForgotPasswordScreen({ navigation }: Props) {
             {feedback}
           </AppText>
         ) : null}
-        <AppButton title="Send reset link" onPress={handleSubmit} loading={loading} />
+        <AppButton title="Notify head coach" onPress={handleSubmit} loading={loading} />
         <AppButton
-          title="I have a token"
+          title="Enter reset token"
           variant="ghost"
           onPress={() => navigation.navigate('ResetPassword')}
           style={styles.secondary}

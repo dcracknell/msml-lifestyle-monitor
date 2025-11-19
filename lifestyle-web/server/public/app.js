@@ -1,3 +1,20 @@
+const Chart = window.Chart;
+if (!Chart) {
+  console.warn('Chart.js failed to load. Charts will be skipped until the page is reloaded.');
+}
+
+let chartWarningShown = false;
+function createChart(ctx, config) {
+  if (!Chart) {
+    if (!chartWarningShown) {
+      console.warn('Chart.js is unavailable; charts will be skipped.');
+      chartWarningShown = true;
+    }
+    return null;
+  }
+  return new Chart(ctx, config);
+}
+
 const state = {
   token: null,
   user: null,
@@ -292,8 +309,6 @@ const adminPasswordInput = document.getElementById('adminPasswordInput');
 const resetPasswordButton = document.getElementById('resetPasswordButton');
 const deleteButton = document.getElementById('deleteButton');
 const adminFeedback = document.getElementById('adminFeedback');
-const settingsButton = document.getElementById('settingsButton');
-const settingsMenu = document.getElementById('settingsMenu');
 const profileForm = document.getElementById('profileForm');
 const profileNameInput = document.getElementById('profileName');
 const profileWeightCategorySelect = document.getElementById('profileWeightCategory');
@@ -316,12 +331,107 @@ const activityWeeklyDuration = document.getElementById('activityWeeklyDuration')
 const activityAvgPace = document.getElementById('activityAvgPace');
 const activityLongestRun = document.getElementById('activityLongestRun');
 const activityLongestRunLabel = document.getElementById('activityLongestRunLabel');
+const sleepHoursPrimary = document.getElementById('sleepHoursPrimary');
+const sleepGoalCopy = document.getElementById('sleepGoalCopy');
+const sleepTrendCopy = document.getElementById('sleepTrendCopy');
+const sleepReadinessCopy = document.getElementById('sleepReadinessCopy');
+const sleepHeroHint = document.getElementById('sleepHeroHint');
+const sleepStageBreakdown = document.getElementById('sleepStageBreakdown');
+
+function decodeBase64Sample(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const chunkMax = Math.min(trimmed.length, 64);
+  const normalizedLength = chunkMax - (chunkMax % 4) || chunkMax;
+  const sample = trimmed.slice(0, normalizedLength);
+  if (!sample) {
+    return null;
+  }
+  const root = typeof globalThis !== 'undefined' ? globalThis : undefined;
+  const decoder = root && typeof root.atob === 'function' ? root.atob.bind(root) : null;
+  if (decoder) {
+    try {
+      return decoder(sample);
+    } catch (error) {
+      // Ignore and fall back to Buffer when available.
+    }
+  }
+  if (typeof Buffer !== 'undefined') {
+    try {
+      return Buffer.from(sample, 'base64').toString('binary');
+    } catch (error) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function detectBase64ImageMime(photo) {
+  if (!photo || typeof photo !== 'string') {
+    return 'image/jpeg';
+  }
+  const trimmed = photo.trim();
+  if (!trimmed) {
+    return 'image/jpeg';
+  }
+  const prefix = trimmed.slice(0, 10);
+  if (prefix.startsWith('/9j/')) return 'image/jpeg';
+  if (prefix.startsWith('iVBOR')) return 'image/png';
+  if (prefix.startsWith('R0lGOD')) return 'image/gif';
+  if (prefix.startsWith('UklGR')) return 'image/webp';
+  if (prefix.startsWith('Qk')) return 'image/bmp';
+
+  const binary = decodeBase64Sample(trimmed);
+  if (!binary || binary.length < 2) {
+    return 'image/jpeg';
+  }
+
+  const byte0 = binary.charCodeAt(0);
+  const byte1 = binary.charCodeAt(1);
+  const byte2 = binary.charCodeAt(2);
+  const byte3 = binary.charCodeAt(3);
+  if (byte0 === 0x89 && byte1 === 0x50 && byte2 === 0x4e && byte3 === 0x47) {
+    return 'image/png';
+  }
+  if (binary.startsWith('GIF8')) {
+    return 'image/gif';
+  }
+  if (binary.startsWith('BM')) {
+    return 'image/bmp';
+  }
+  if (
+    byte0 === 0x52 &&
+    byte1 === 0x49 &&
+    byte2 === 0x46 &&
+    byte3 === 0x46 &&
+    binary.length >= 12 &&
+    binary.slice(8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  if (byte0 === 0xff && byte1 === 0xd8) {
+    return 'image/jpeg';
+  }
+  return 'image/jpeg';
+}
 
 function resolveAvatarSrc(entity) {
   if (!entity) return null;
   const photo = entity.avatar_photo || entity.avatarPhoto;
   if (photo && typeof photo === 'string') {
-    return photo.startsWith('data:image') ? photo : `data:image/jpeg;base64,${photo}`;
+    const trimmed = photo.trim();
+    if (trimmed) {
+      if (trimmed.startsWith('data:image')) {
+        return trimmed;
+      }
+      const mime = detectBase64ImageMime(trimmed);
+      return `data:${mime};base64,${trimmed}`;
+    }
   }
   const url = entity.avatar_url || entity.avatarUrl;
   return url || null;
@@ -912,7 +1022,7 @@ function renderNutritionTrendChart(days = []) {
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   state.charts.nutritionTrend?.destroy();
-  state.charts.nutritionTrend = new Chart(ctx, {
+  state.charts.nutritionTrend = createChart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -987,7 +1097,7 @@ function renderMacroHistoryChart(days = [], goals = null) {
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   state.charts.nutritionMacroTrend?.destroy();
-  state.charts.nutritionMacroTrend = new Chart(ctx, {
+  state.charts.nutritionMacroTrend = createChart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -1336,7 +1446,7 @@ function renderWeightChart(timeline = [], goalCalories) {
       grid: { drawOnChartArea: false, color: 'rgba(255,255,255,0.05)' },
     };
   }
-  state.charts.weightTrend = new Chart(ctx, {
+  state.charts.weightTrend = createChart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -1559,10 +1669,45 @@ function renderSuggestionBar() {
   });
 }
 
+function highlightNutritionNameInput({ forceFocus = false } = {}) {
+  if (!nutritionNameInput) return;
+  const shouldForceFocus =
+    forceFocus &&
+    typeof document !== 'undefined' &&
+    document.activeElement !== nutritionNameInput &&
+    typeof nutritionNameInput.focus === 'function';
+  if (shouldForceFocus) {
+    try {
+      nutritionNameInput.focus({ preventScroll: true });
+    } catch (error) {
+      nutritionNameInput.focus();
+    }
+  }
+  if (!nutritionNameInput.value) {
+    return;
+  }
+  const selectText = () => {
+    if (!nutritionNameInput || !nutritionNameInput.value) {
+      return;
+    }
+    if (typeof nutritionNameInput.select === 'function') {
+      nutritionNameInput.select();
+    } else if (typeof nutritionNameInput.setSelectionRange === 'function') {
+      nutritionNameInput.setSelectionRange(0, nutritionNameInput.value.length);
+    }
+  };
+  const schedule =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (callback) => setTimeout(callback, 0);
+  schedule(selectText);
+}
+
 function applySuggestion(item) {
   if (!item) return;
   if (nutritionNameInput) {
     nutritionNameInput.value = item.name;
+    highlightNutritionNameInput({ forceFocus: true });
   }
   if (nutritionBarcodeInput && item.barcode) {
     nutritionBarcodeInput.value = item.barcode;
@@ -2173,9 +2318,17 @@ const pageCopy = {
     title: 'Session Planner',
     subtitle: 'Blend intensity and skill work with guardrails from your data.',
   },
+  roster: {
+    title: 'Team Roster',
+    subtitle: 'Manage athlete access from the mobile experience today.',
+  },
   readiness: {
     title: 'Readiness Signals',
     subtitle: 'Monitor stress, sleep, and adaptation trends.',
+  },
+  sleep: {
+    title: 'Sleep Insights',
+    subtitle: 'Preview nightly recovery while the expanded module is built.',
   },
   vitals: {
     title: 'Vitals & Labs',
@@ -3202,10 +3355,6 @@ if (sideNav) {
     const target = event.target.closest('[data-page]');
     if (!target) return;
     setActivePage(target.dataset.page);
-    if (settingsButton && settingsMenu) {
-      settingsButton.setAttribute('aria-expanded', 'false');
-      settingsMenu.classList.add('hidden');
-    }
   });
 }
 
@@ -3433,6 +3582,7 @@ nutritionNameInput?.addEventListener('blur', () => {
 });
 
 nutritionNameInput?.addEventListener('focus', () => {
+  highlightNutritionNameInput();
   const query = nutritionNameInput?.value.trim() || '';
   if (state.suggestions.length) {
     renderSuggestions();
@@ -3689,7 +3839,7 @@ forgotForm?.addEventListener('submit', async (event) => {
     if (forgotFeedback) forgotFeedback.textContent = 'Enter your email address.';
     return;
   }
-  if (forgotFeedback) forgotFeedback.textContent = 'Sending reset link...';
+  if (forgotFeedback) forgotFeedback.textContent = 'Notifying the head coach...';
   try {
     const response = await fetch('/api/password/forgot', {
       method: 'POST',
@@ -3698,10 +3848,10 @@ forgotForm?.addEventListener('submit', async (event) => {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload) {
-      throw new Error(payload?.message || 'Unable to send reset link.');
+      throw new Error(payload?.message || 'Unable to notify the head coach.');
     }
     forgotFeedback.textContent =
-      'If that email exists, a reset link has been sent (see server logs in development).';
+      'If that email exists, the head coach has been notified and will follow up.';
     forgotForm.reset();
   } catch (error) {
     forgotFeedback.textContent = error.message;
@@ -3803,11 +3953,6 @@ profileForm?.addEventListener('submit', async (event) => {
   }
 });
 
-settingsButton?.addEventListener('click', () => {
-  const expanded = settingsButton.getAttribute('aria-expanded') === 'true';
-  settingsButton.setAttribute('aria-expanded', String(!expanded));
-  settingsMenu?.classList.toggle('hidden', expanded);
-});
 
 promoteButton?.addEventListener('click', promoteSelectedUser);
 deleteButton?.addEventListener('click', deleteSelectedUser);
@@ -3983,7 +4128,21 @@ async function loadMetrics(subjectOverrideId) {
   renderSummary(metrics.summary);
   renderHydration(state.hydrationEntries);
   renderHeartRate(metrics.heartRateZones);
-  renderSleep(metrics.sleepStages);
+  renderSleepOverview(metrics.sleepStages);
+  const resolvedGoalSleep =
+    metrics.subject?.goal_sleep ??
+    state.subject?.goal_sleep ??
+    state.viewing?.goal_sleep ??
+    state.user?.goal_sleep ??
+    null;
+  const numericGoalSleep = Number(resolvedGoalSleep);
+  const goalSleepValue = Number.isFinite(numericGoalSleep) ? numericGoalSleep : null;
+  renderSleepDetails({
+    summary: metrics.summary,
+    timeline: metrics.timeline,
+    sleepStages: metrics.sleepStages,
+    goalSleep: goalSleepValue,
+  });
   renderSessions(metrics.timeline);
   renderNutritionDetails(metrics.macros, state.hydrationEntries);
   updateCharts(metrics);
@@ -4620,7 +4779,7 @@ function renderVitalsChart(timeline = []) {
   const glucose = timeline.map((entry) => entry.glucose ?? null);
   const systolic = timeline.map((entry) => entry.systolic ?? null);
   state.charts.vitalsTrend?.destroy();
-  state.charts.vitalsTrend = new Chart(ctx, {
+  state.charts.vitalsTrend = createChart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -4687,17 +4846,216 @@ function renderVitalsChart(timeline = []) {
   });
 }
 
-function renderSleep(sleepStages) {
+function renderSleepOverview(sleepStages) {
   const container = document.getElementById('sleepSummary');
+  if (!container) return;
   container.innerHTML = '';
   if (!sleepStages) {
     container.innerHTML = '<p class="empty-state">No sleep data yet.</p>';
     return;
   }
   ['deep', 'rem', 'light'].forEach((stage) => {
+    const minutes = Number(sleepStages[stage]);
+    const formatted = Number.isFinite(minutes) ? `${minutes} min` : '—';
     const row = document.createElement('div');
-    row.innerHTML = `<span>${stage.toUpperCase()}</span><span>${sleepStages[stage]} min</span>`;
+    row.innerHTML = `<span>${stage.toUpperCase()}</span><span>${formatted}</span>`;
     container.appendChild(row);
+  });
+}
+
+function renderSleepStageBreakdown(sleepStages) {
+  if (!sleepStageBreakdown) return;
+  sleepStageBreakdown.innerHTML = '';
+  if (!sleepStages) {
+    renderListPlaceholder(sleepStageBreakdown, 'No sleep data yet.');
+    return;
+  }
+  const stages = [
+    { key: 'deep', label: 'Deep' },
+    { key: 'rem', label: 'REM' },
+    { key: 'light', label: 'Light' },
+  ];
+  const totalMinutes = stages.reduce((sum, stage) => {
+    const value = Number(sleepStages[stage.key]);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+  if (!totalMinutes) {
+    renderListPlaceholder(sleepStageBreakdown, 'No sleep data yet.');
+    return;
+  }
+  stages.forEach((stage) => {
+    const minutes = Number(sleepStages[stage.key]);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return;
+    }
+    const percent = Math.round((minutes / totalMinutes) * 100);
+    const item = document.createElement('li');
+    item.innerHTML = `
+      <div>
+        <p class="label">${stage.label}</p>
+        <p class="muted small-text">${percent}% of night</p>
+      </div>
+      <p class="sleep-stage-duration">${formatDurationFromMinutes(minutes)}</p>
+    `;
+    sleepStageBreakdown.appendChild(item);
+  });
+}
+
+function describeSleepHint(latestHours, goalSleep, trendAverage) {
+  if (Number.isFinite(latestHours) && Number.isFinite(goalSleep)) {
+    const delta = Math.round((latestHours - goalSleep) * 10) / 10;
+    if (Math.abs(delta) < 0.25) {
+      return 'Right on your target last night.';
+    }
+    return delta > 0
+      ? `Exceeded goal by ${formatDecimal(delta, 1)} hrs.`
+      : `Fell short by ${formatDecimal(Math.abs(delta), 1)} hrs.`;
+  }
+  if (Number.isFinite(trendAverage) && Number.isFinite(goalSleep)) {
+    const delta = Math.round((trendAverage - goalSleep) * 10) / 10;
+    if (Math.abs(delta) < 0.25) {
+      return 'Weekly average is matching your goal.';
+    }
+    return delta > 0
+      ? `Averages ${formatDecimal(delta, 1)} hrs above goal.`
+      : `Trending ${formatDecimal(Math.abs(delta), 1)} hrs below goal.`;
+  }
+  if (Number.isFinite(latestHours)) {
+    return 'Set a sleep goal to benchmark recovery.';
+  }
+  return 'Sync wearable data to reveal deep, REM, and light balance.';
+}
+
+function renderSleepDetails({ summary, timeline, sleepStages, goalSleep }) {
+  const latestHours = Number(summary?.sleepHours);
+  const readinessScore = Number(summary?.readiness);
+  const trendEntries = Array.isArray(timeline)
+    ? timeline.filter((entry) => Number.isFinite(entry.sleepHours))
+    : [];
+  const recent = trendEntries.slice(-7);
+  const trendAverage = recent.length
+    ? recent.reduce((sum, entry) => sum + entry.sleepHours, 0) / recent.length
+    : null;
+  const spanLabel = recent.length
+    ? `last ${recent.length} night${recent.length === 1 ? '' : 's'}`
+    : '';
+
+  if (sleepHoursPrimary) {
+    sleepHoursPrimary.textContent = Number.isFinite(latestHours)
+      ? formatDecimal(latestHours, 1)
+      : '—';
+  }
+  if (sleepGoalCopy) {
+    sleepGoalCopy.textContent = Number.isFinite(goalSleep)
+      ? `Goal: ${formatDecimal(goalSleep, 1)} hrs`
+      : 'Set a sleep goal to start tracking.';
+  }
+  if (sleepTrendCopy) {
+    if (Number.isFinite(trendAverage) && recent.length) {
+      let text = `Avg ${formatDecimal(trendAverage, 1)} hrs`;
+      if (spanLabel) {
+        text += ` • ${spanLabel}`;
+      }
+      if (Number.isFinite(goalSleep)) {
+        const delta = Math.round((trendAverage - goalSleep) * 10) / 10;
+        if (Math.abs(delta) >= 0.25) {
+          text += delta > 0 ? ' • Above goal' : ' • Below goal';
+        } else {
+          text += ' • On target';
+        }
+      }
+      sleepTrendCopy.textContent = text;
+    } else {
+      sleepTrendCopy.textContent = 'Awaiting sleep history.';
+    }
+  }
+  if (sleepReadinessCopy) {
+    sleepReadinessCopy.textContent = Number.isFinite(readinessScore)
+      ? `${Math.round(readinessScore)}%`
+      : '—';
+  }
+  if (sleepHeroHint) {
+    sleepHeroHint.textContent = describeSleepHint(latestHours, goalSleep, trendAverage);
+  }
+
+  renderSleepStageBreakdown(sleepStages);
+  renderSleepTrendChart(trendEntries, goalSleep);
+}
+
+function renderSleepTrendChart(timeline = [], goalSleep) {
+  const canvasId = 'sleepTrendChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  if (!timeline.length) {
+    state.charts.sleepTrend?.destroy();
+    state.charts.sleepTrend = null;
+    showChartMessage(canvasId, 'No sleep history yet.');
+    return;
+  }
+  const recent = timeline.slice(-7);
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  const labels = recent.map((entry) => formatDate(entry.date));
+  const hours = recent.map((entry) => Math.round(entry.sleepHours * 10) / 10);
+  const datasets = [
+    {
+      label: 'Sleep hours',
+      data: hours,
+      borderColor: '#5f6bff',
+      backgroundColor: 'rgba(95, 107, 255, 0.2)',
+      tension: 0.4,
+      fill: true,
+      pointRadius: 4,
+      pointBackgroundColor: '#5f6bff',
+    },
+  ];
+  if (Number.isFinite(goalSleep)) {
+    datasets.push({
+      label: 'Goal',
+      data: Array(hours.length).fill(Math.round(goalSleep * 10) / 10),
+      borderColor: 'rgba(255, 255, 255, 0.35)',
+      borderDash: [6, 4],
+      pointRadius: 0,
+    });
+  }
+
+  state.charts.sleepTrend?.destroy();
+  state.charts.sleepTrend = createChart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      plugins: {
+        legend: {
+          labels: { color: '#dfe6ff' },
+        },
+        tooltip: {
+          callbacks: {
+            label(context) {
+              const value = Number(context.parsed.y);
+              if (!Number.isFinite(value)) return context.dataset.label;
+              return `${context.dataset.label}: ${formatDecimal(value, 1)} hrs`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        },
+        y: {
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) {
+              return `${value}h`;
+            },
+          },
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          suggestedMin: 4,
+          suggestedMax: Number.isFinite(goalSleep) ? Math.max(goalSleep + 1, 9) : 9,
+        },
+      },
+    },
   });
 }
 
@@ -4722,7 +5080,7 @@ function renderActivityChart(timeline = []) {
   const calories = timeline.map((entry) => entry.calories);
 
   state.charts.activity?.destroy();
-  state.charts.activity = new Chart(ctx, {
+  state.charts.activity = createChart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -4766,7 +5124,7 @@ function renderMacroChart(macros) {
   const { canvas: activeCanvas } = hideChartMessage('macroChart') || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   state.charts.macros?.destroy();
-  state.charts.macros = new Chart(ctx, {
+  state.charts.macros = createChart(ctx, {
     type: 'doughnut',
     data: {
       labels: ['Protein', 'Carbs', 'Fats'],
@@ -5089,7 +5447,7 @@ function renderActivityMileageChart(trend = []) {
   const distances = trend.map((entry) => Number(entry.distanceKm) || 0);
   const durations = trend.map((entry) => Number(entry.movingMinutes) || 0);
   state.charts.activityMileage?.destroy();
-  state.charts.activityMileage = new Chart(ctx, {
+  state.charts.activityMileage = createChart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -5142,7 +5500,7 @@ function renderActivityPaceChart(points = []) {
     return;
   }
   state.charts.activityPace?.destroy();
-  state.charts.activityPace = new Chart(ctx, {
+  state.charts.activityPace = createChart(ctx, {
     type: 'scatter',
     data: {
       datasets: [

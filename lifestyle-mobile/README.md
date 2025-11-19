@@ -32,6 +32,7 @@ The mobile app implements the same major surfaces as the web UI:
 - **Weight** logging and trends with offline queue via `/api/weight`.
 - **Roster + Sharing** for coaches using `/api/athletes` and `/api/share`.
 - **Profile + Admin** for updating account details and managing roles via `/api/profile` and `/api/admin`.
+- **Devices (Bluetooth bridge)** scans for BLE peripherals, subscribes to sensor characteristics, streams samples to `/api/streams`, and exposes manual command/sample testing tools.
 - **Navigation + auth** mirrors the responsive web dashboard with a visible drawer toggle and logout action so switching pages/accounts works the same way.
 - **Profile photos** snap a picture during signup or from Profile, syncing the avatar (or URL) directly to the shared user record.
 
@@ -60,6 +61,33 @@ src/
   providers/           # Auth, subject, connectivity, sync contexts
   theme/               # Color + spacing tokens ported from styles.css
 ```
+
+## Bluetooth sensor bridge
+
+The **Devices** drawer screen lets you bridge any BLE sensor directly into the lifestyle server:
+
+1. Enter the service + characteristic UUIDs that your peripheral exposes (defaults match the original Swift prototype: FFF0 / FFF1) and set the metric name the samples should live under (e.g. `sensor.glucose`).
+2. Tap **Scan for devices**, pick the peripheral, and the app subscribes to notifications on the configured characteristic.
+3. Incoming payloads are decoded to UTF‑8, parsed (JSON arrays/objects or raw numeric strings), and pushed to `/api/streams`. Uploads go through the existing `SyncProvider`, so readings queue offline and flush later if you lose connectivity.
+4. Use the manual **Device command** input to send plain‑text commands (encoded to base64) back to the peripheral, or **Manual sample** to push arbitrary readings to the server for testing.
+5. The screen visualizes both live samples (straight from Bluetooth) and the historical stream returned by `GET /api/streams?metric=...` so you can verify everything the server stored.
+
+### Native build requirements
+
+`react-native-ble-plx` is a native BLE module and cannot run inside the Expo Go sandbox. Use a development build so the module is compiled into your binary:
+
+```bash
+# Once per platform/project
+npx expo prebuild
+
+# iOS simulator / device
+npx expo run:ios
+
+# Android emulator / device
+npx expo run:android
+```
+
+On Android 12+ the app requests the `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION` permissions the first time you start a scan. Make sure Bluetooth is enabled and grant those prompts so discovery succeeds.
 
 ## Running on devices
 

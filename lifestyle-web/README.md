@@ -80,6 +80,16 @@ The server reads environment variables from `.env` (see `.env.example`). By defa
 3. Open the chosen TCP port in your firewall/router and forward it to this machine. When deploying behind HTTPS, point your reverse proxy at `http://127.0.0.1:PORT` and include the final HTTPS origin in `APP_ORIGIN`.
 4. Restart the server (`npm run start` or your process manager) and verify an external request works with `curl http://<your-public-host>:PORT/api/health`.
 
+### Resetting the Seed Database
+If you change `database/sql/lifestyle_metrics.sql` (or you want to blow away local test data), run:
+
+```bash
+cd lifestyle-web/server
+npm run reset-db
+```
+
+This deletes `database/storage/lifestyle_monitor.db*`, replays the SQL seed, and reapplies the runtime migrations defined in `src/db.js` so the next `npm run dev` starts with a clean dataset.
+
 ### Environment Variables
 | Name | Description | Default |
 | --- | --- | --- |
@@ -96,9 +106,9 @@ The server reads environment variables from `.env` (see `.env.example`). By defa
 | `PASSWORD_ENCRYPTION_KEY` | Secret used to derive the AES-256-GCM key that encrypts stored password digests | `msml-lifestyle-monitor-passwords` |
 | `DB_STORAGE_DIR` | Optional override for writable SQLite directory | `./database/storage` |
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
-| `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach demo password | `coach123` |
-| `SEED_AVERY_PASSWORD` | Optional override for Avery's demo password | `athlete123` |
-| `SEED_LEO_PASSWORD` | Optional override for Leo's demo password | `mindful123` |
+| `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach demo password | `Password` |
+| `COACH_SEED_PASSWORD` | Optional override for the coach demo password | `Password` |
+| `ATHLETE_SEED_PASSWORD` | Optional override for the athlete demo password | `Password` |
 | `STRAVA_CLIENT_ID` | OAuth client ID from https://www.strava.com/settings/api | — |
 | `STRAVA_CLIENT_SECRET` | OAuth client secret from Strava | — |
 | `STRAVA_REDIRECT_URI` | HTTPS URL that Strava should redirect back to (must end with `/api/activity/strava/callback`) | — |
@@ -146,9 +156,9 @@ If `include` is omitted or invalid, the endpoint behaves exactly as before and r
 ## Demo Accounts
 | Email | Password | Role |
 | --- | --- | --- |
-| `avery.hart@example.com` | `athlete123` | Coach |
-| `leo.singh@example.com` | `mindful123` | Athlete |
-| `david.cracknell@example.com` | `coach123` | Head Coach (full visibility) |
+| `coach@example.com` | `Password` | Coach |
+| `athlete@example.com` | `Password` | Athlete |
+| `head.coach@example.com` | `Password` | Head Coach (full visibility) |
 
 > The hashed credentials live inside the SQL seed so both the website and the native app can tap into the same auth + analytics pipeline. Prefer to create your own login? Use the "Create account" tab on the landing page or POST to `/api/signup`.
 

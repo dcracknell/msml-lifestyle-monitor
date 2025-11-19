@@ -9,6 +9,8 @@ import {
   NutritionLookupResponse,
   SessionPayload,
   ShareCoachesResponse,
+  StreamHistoryResponse,
+  StreamPublishResponse,
   StravaConnectResponse,
   StravaSyncResponse,
   VitalsResponse,
@@ -128,6 +130,7 @@ export const updateProfileRequest = (payload: {
   stravaRedirectUri?: string;
   avatar?: string | null;
   avatarPhoto?: string | null;
+  goalSleep?: number | null;
 }) => apiClient.put<SessionPayload>('/api/profile', payload);
 
 export const forgotPasswordRequest = (payload: { email: string }) =>
@@ -141,3 +144,27 @@ export const connectStravaRequest = () => apiClient.post<StravaConnectResponse>(
 export const disconnectStravaRequest = () => apiClient.post<MessageResponse>('/api/activity/strava/disconnect');
 
 export const syncStravaRequest = () => apiClient.post<StravaSyncResponse>('/api/activity/strava/sync');
+
+export const publishStreamSamplesRequest = (payload: {
+  metric: string;
+  samples: { ts: number; value: number | null }[];
+}) => apiClient.post<StreamPublishResponse>('/api/streams', payload);
+
+export const streamHistoryRequest = (params: {
+  metric: string;
+  athleteId?: number;
+  from?: number;
+  to?: number;
+  windowMs?: number;
+  maxPoints?: number;
+}) =>
+  apiClient.get<StreamHistoryResponse>(
+    `/api/streams${buildQuery({
+      metric: params.metric,
+      athleteId: params.athleteId,
+      from: params.from,
+      to: params.to,
+      windowMs: params.windowMs,
+      maxPoints: params.maxPoints,
+    })}`
+  );

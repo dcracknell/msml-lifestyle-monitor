@@ -1,10 +1,8 @@
 const express = require('express');
-const crypto = require('crypto');
 const db = require('../db');
 const { hashPassword } = require('../utils/hash-password');
 
 const router = express.Router();
-const RESET_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 router.post('/forgot', (req, res) => {
   const { email } = req.body || {};
@@ -19,19 +17,30 @@ router.post('/forgot', (req, res) => {
     .get(normalizedEmail);
 
   if (user) {
-    const token = crypto.randomBytes(48).toString('hex');
-    const expiresAt = new Date(Date.now() + RESET_WINDOW_MS).toISOString();
+    const headCoach = db
+      .prepare(
+        `SELECT id, email, name
+         FROM users
+         WHERE LOWER(role) LIKE '%head coach%'
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .get();
 
-    db.prepare(
-      `INSERT INTO password_reset_tokens (user_id, token, expires_at, used, created_at)
-       VALUES (?, ?, ?, 0, ?)`
-    ).run(user.id, token, expiresAt, new Date().toISOString());
-
-    const resetLink = `${process.env.APP_ORIGIN || 'http://localhost:4000'}/reset?token=${token}`;
-    console.log(`Password reset link for ${user.email}: ${resetLink}`);
+    if (headCoach) {
+      console.log(
+        `[Password reset request] Notify head coach ${headCoach.email} that ${user.email} needs assistance resetting their password.`
+      );
+    } else {
+      console.log(
+        `[Password reset request] ${user.email} requested assistance, but no head coach account is available to notify.`
+      );
+    }
   }
 
-  return res.json({ message: 'If that email exists, a reset link has been sent.' });
+  return res.json({
+    message: 'If that email exists, your head coach has been notified to help reset your password.',
+  });
 });
 
 router.post('/reset', (req, res) => {

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View, Image } from 'react-native';
 import { updateProfileRequest } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
+import { useApiConfig } from '../../providers/ApiConfigProvider';
 import {
   AppButton,
   AppInput,
@@ -15,6 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 export function ProfileScreen() {
   const { user, setSessionFromPayload } = useAuth();
+  const { apiBaseUrl, updateBaseUrl, resetBaseUrl } = useApiConfig();
   const [form, setForm] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -30,13 +32,27 @@ export function ProfileScreen() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [photoStatus, setPhotoStatus] = useState<string | null>(null);
+  const [apiUrlInput, setApiUrlInput] = useState(apiBaseUrl);
+  const [apiUrlFeedback, setApiUrlFeedback] = useState<string | null>(null);
+  const [apiUrlSaving, setApiUrlSaving] = useState(false);
+
+  useEffect(() => {
+    setApiUrlInput(apiBaseUrl);
+  }, [apiBaseUrl]);
 
   const handleChange = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const previewUri = form.avatarPhoto
-    ? `data:image/jpeg;base64,${form.avatarPhoto}`
+  const derivedAvatarPhoto =
+    typeof form.avatarPhoto === 'string' && form.avatarPhoto.length > 0
+      ? form.avatarPhoto
+      : form.avatarPhoto === null
+      ? null
+      : user?.avatar_photo || null;
+
+  const previewUri = derivedAvatarPhoto
+    ? `data:image/jpeg;base64,${derivedAvatarPhoto}`
     : form.avatarUrl || user?.avatar_url || null;
 
   const handleTakePhoto = async () => {
@@ -123,6 +139,32 @@ export function ProfileScreen() {
     }
   };
 
+  const handleApplyApiUrl = async () => {
+    setApiUrlFeedback(null);
+    setApiUrlSaving(true);
+    try {
+      await updateBaseUrl(apiUrlInput);
+      setApiUrlFeedback('API base URL updated. New requests will use this server.');
+    } catch (error) {
+      setApiUrlFeedback(error instanceof Error ? error.message : 'Unable to update API base URL.');
+    } finally {
+      setApiUrlSaving(false);
+    }
+  };
+
+  const handleResetApiUrl = async () => {
+    setApiUrlFeedback(null);
+    setApiUrlSaving(true);
+    try {
+      await resetBaseUrl();
+      setApiUrlFeedback('Reverted to the default API server.');
+    } catch (error) {
+      setApiUrlFeedback(error instanceof Error ? error.message : 'Unable to reset API base URL.');
+    } finally {
+      setApiUrlSaving(false);
+    }
+  };
+
   return (
     <RefreshableScrollView
       contentContainerStyle={styles.container}
@@ -173,12 +215,6 @@ export function ProfileScreen() {
           value={form.password}
           onChangeText={(value) => handleChange('password', value)}
         />
-        <AppInput
-          label="Current password (required)"
-          secureTextEntry
-          value={form.currentPassword}
-          onChangeText={(value) => handleChange('currentPassword', value)}
-        />
       </Card>
       <Card>
         <SectionHeader title="Strava API" subtitle="Personal client keys" />
@@ -200,6 +236,43 @@ export function ProfileScreen() {
           value={form.stravaRedirectUri}
           onChangeText={(value) => handleChange('stravaRedirectUri', value)}
         />
+      </Card>
+      <Card>
+        <SectionHeader title="Confirm changes" subtitle="Enter your current password to save" />
+        <AppText variant="muted" style={styles.helperText}>
+          For security, you must confirm any updates with your current password. This protects profile,
+          Strava, and photo changes.
+        </AppText>
+        <AppInput
+          label="Current password"
+          secureTextEntry
+          value={form.currentPassword}
+          onChangeText={(value) => handleChange('currentPassword', value)}
+        />
+      </Card>
+      <Card>
+        <SectionHeader title="Connection" subtitle="Configure the backend server for this app" />
+        <AppInput
+          label="API base URL"
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={apiUrlInput}
+          onChangeText={setApiUrlInput}
+        />
+        {apiUrlFeedback ? (
+          <AppText variant="muted" style={styles.helperText}>
+            {apiUrlFeedback}
+          </AppText>
+        ) : null}
+        <View style={styles.connectionRow}>
+          <AppButton title="Apply" onPress={handleApplyApiUrl} loading={apiUrlSaving} />
+          <AppButton
+            title="Reset to default"
+            variant="ghost"
+            onPress={handleResetApiUrl}
+            disabled={apiUrlSaving}
+          />
+        </View>
       </Card>
       {feedback ? (
         <AppText variant="muted" style={styles.feedback}>
@@ -243,5 +316,11 @@ const styles = StyleSheet.create({
   },
   helperText: {
     marginTop: spacing.sm,
+  },
+  connectionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    flexWrap: 'wrap',
   },
 });

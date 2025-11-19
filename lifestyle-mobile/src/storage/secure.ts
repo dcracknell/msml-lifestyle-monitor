@@ -4,9 +4,22 @@ import * as SecureStore from 'expo-secure-store';
 
 const canUseSecureStore = Platform.OS !== 'web';
 
+const SECURE_WARNING_THRESHOLD = 2048;
+
 async function setSecureItem(key: string, value: string | null) {
   if (value === null) {
     await deleteSecureItem(key);
+    return;
+  }
+
+  if (value.length > SECURE_WARNING_THRESHOLD) {
+    console.warn(
+      `SecureStore: Value for ${key} exceeds ${SECURE_WARNING_THRESHOLD} bytes, storing via AsyncStorage fallback.`
+    );
+    await AsyncStorage.setItem(key, value);
+    if (canUseSecureStore && (await SecureStore.isAvailableAsync())) {
+      await SecureStore.deleteItemAsync(key);
+    }
     return;
   }
 
@@ -18,13 +31,17 @@ async function setSecureItem(key: string, value: string | null) {
 }
 
 async function getSecureItem(key: string) {
+  const asyncValue = await AsyncStorage.getItem(key);
+  if (asyncValue !== null) {
+    return asyncValue;
+  }
   if (canUseSecureStore && (await SecureStore.isAvailableAsync())) {
     const value = await SecureStore.getItemAsync(key);
     if (value !== null) {
       return value;
     }
   }
-  return AsyncStorage.getItem(key);
+  return null;
 }
 
 async function deleteSecureItem(key: string) {

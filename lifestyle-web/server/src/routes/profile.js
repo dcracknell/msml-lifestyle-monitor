@@ -54,6 +54,7 @@ router.put('/', (req, res) => {
     stravaRedirectUri,
     avatar,
     avatarPhoto,
+    goalSleep,
   } = req.body || {};
   const trimmedName = typeof name === 'string' ? name.trim() : '';
   const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
@@ -123,6 +124,7 @@ router.put('/', (req, res) => {
     strava_redirect_uri: user.strava_redirect_uri || null,
     avatar_url: user.avatar_url || null,
     avatar_photo: user.avatar_photo || null,
+    goal_sleep: user.goal_sleep ?? null,
   };
 
   if (wantsNameChange) {
@@ -212,6 +214,21 @@ router.put('/', (req, res) => {
     updates.avatar_photo = normalizedPhoto;
   }
 
+  if (goalSleep !== undefined) {
+    if (goalSleep === null || goalSleep === '') {
+      updates.goal_sleep = null;
+    } else {
+      const numericGoal = Number(goalSleep);
+      if (!Number.isFinite(numericGoal)) {
+        return res.status(400).json({ message: 'Sleep goal must be a number of hours.' });
+      }
+      if (numericGoal < 3 || numericGoal > 12) {
+        return res.status(400).json({ message: 'Sleep goal must be between 3 and 12 hours.' });
+      }
+      updates.goal_sleep = Math.round(numericGoal * 10) / 10;
+    }
+  }
+
   db.prepare(
     `UPDATE users
         SET name = ?,
@@ -222,7 +239,8 @@ router.put('/', (req, res) => {
             strava_client_secret = ?,
             strava_redirect_uri = ?,
             avatar_url = ?,
-            avatar_photo = ?
+            avatar_photo = ?,
+            goal_sleep = ?
       WHERE id = ?`
   ).run(
     updates.name,
@@ -234,6 +252,7 @@ router.put('/', (req, res) => {
     updates.strava_redirect_uri,
     updates.avatar_url,
     updates.avatar_photo,
+    updates.goal_sleep,
     req.user.id
   );
 
@@ -261,7 +280,7 @@ router.put('/', (req, res) => {
     weight_category: refreshed.weight_category,
     goal_steps: user.goal_steps,
     goal_calories: user.goal_calories,
-    goal_sleep: user.goal_sleep,
+    goal_sleep: updates.goal_sleep,
     goal_readiness: user.goal_readiness,
     strava_client_id: updates.strava_client_id,
     strava_client_secret: updates.strava_client_secret,

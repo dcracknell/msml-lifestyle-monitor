@@ -7,10 +7,12 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "jest"
+    "test": "jest",
+    "reset-db": "node scripts/reset-db.js"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",
+    "chart.js": "^4.5.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.1",
     "express": "^4.19.2",

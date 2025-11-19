@@ -40,16 +40,19 @@ function resolveBaseUrl() {
   }
 
   const lanHost = getExpoLanHost();
-  if (!lanHost) {
+  const platformFallbackHost = Platform.OS === 'android' ? '10.0.2.2' : Platform.OS === 'ios' ? '127.0.0.1' : null;
+
+  const replacementHost = lanHost || platformFallbackHost;
+  if (!replacementHost) {
     return candidate;
   }
 
   try {
     const url = new URL(candidate);
-    url.hostname = lanHost;
+    url.hostname = replacementHost;
     return url.toString();
   } catch (error) {
-    return candidate.replace(/localhost|127\.0\.0\.1/gi, lanHost);
+    return candidate.replace(/localhost|127\.0\.0\.1/gi, replacementHost);
   }
 }
 

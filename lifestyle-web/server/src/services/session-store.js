@@ -23,7 +23,15 @@ function sanitizeSessionPayload(user = {}) {
     ...rest
   } = user;
 
-  return rest;
+  const sanitized = { ...rest };
+  const normalizedAvatarPhoto =
+    avatar_photo !== undefined ? avatar_photo : avatarPhoto;
+
+  if (normalizedAvatarPhoto !== undefined) {
+    sanitized.avatar_photo = normalizedAvatarPhoto;
+  }
+
+  return sanitized;
 }
 
 function hashToken(token) {

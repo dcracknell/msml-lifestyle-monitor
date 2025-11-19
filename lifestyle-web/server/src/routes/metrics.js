@@ -80,6 +80,7 @@ const timelineStatement = db.prepare(
   `SELECT date,
           steps,
           calories,
+          sleep_hours     AS sleepHours,
           readiness_score AS readiness
      FROM daily_metrics
     WHERE user_id = ?
