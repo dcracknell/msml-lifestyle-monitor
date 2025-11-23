@@ -29,7 +29,7 @@
         <div class="avatar shimmer"></div>
         <div>
           <p class="label">Signed out</p>
-          <p class="muted">Use demo credentials to explore the dashboard.</p>
+          <p class="muted">Sign in to access your personalized dashboard.</p>
         </div>
       </div>
 
@@ -106,7 +106,7 @@
           <p class="eyebrow">Welcome</p>
           <h2>Sync your day</h2>
           <p class="muted">
-            Use a demo login from the README or create your own account to explore the dashboard.
+            Sign in with your credentials or create a new account to start tracking performance.
           </p>
         </div>
 
@@ -205,26 +205,6 @@
               <button type="button" class="link-btn" data-auth-back="login">Back to sign in</button>
             </div>
             <p class="form-feedback" id="forgotFeedback"></p>
-            <button type="button" class="link-btn" id="openResetButton">Already have a token?</button>
-          </form>
-
-          <form id="resetForm" class="hidden auth-subpanel" method="post">
-            <p class="muted small-text">
-              Paste the reset token from your email and choose a new password.
-            </p>
-            <label>
-              Reset token
-              <input type="text" id="resetToken" placeholder="Paste token" required />
-            </label>
-            <label>
-              New password
-              <input type="password" id="resetPassword" minlength="8" placeholder="Minimum 8 characters" required />
-            </label>
-            <div class="auth-subpanel-actions">
-              <button type="submit" class="outline-btn">Update password</button>
-              <button type="button" class="link-btn" data-auth-back="login">Back to sign in</button>
-            </div>
-            <p class="form-feedback" id="resetFeedback"></p>
           </form>
         </div>
       </section>
@@ -600,8 +580,42 @@
                   <p class="eyebrow">Daily Intake</p>
                   <h3>Goal Progress</h3>
                 </div>
-                <div class="summary-meta">
-                  <p id="nutritionDateLabel">Today</p>
+                <div class="summary-meta nutrition-date-toolbar">
+                  <div class="nutrition-date-controls" aria-label="Change nutrition day">
+                    <button
+                      type="button"
+                      class="date-nav-button"
+                      id="nutritionPrevDay"
+                      aria-label="View previous day"
+                    >
+                      ⟵ Previous
+                    </button>
+                    <div class="nutrition-date-display">
+                      <p class="date-display-eyebrow">Viewing log</p>
+                      <button type="button" class="date-display" id="nutritionDateLabel">
+                        <span class="date-display-primary" id="nutritionDatePrimary">Today</span>
+                        <span class="date-display-subtitle" id="nutritionDateSubtitle">Wed, Mar 20</span>
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      class="date-nav-button"
+                      id="nutritionNextDay"
+                      aria-label="View next day"
+                    >
+                      Next ⟶
+                    </button>
+                    <button type="button" class="link-btn tiny jump-today-btn" id="nutritionTodayButton">
+                      Jump to today
+                    </button>
+                    <input
+                      type="date"
+                      id="nutritionDateInput"
+                      class="nutrition-date-input"
+                      aria-hidden="true"
+                      tabindex="-1"
+                    />
+                  </div>
                   <p class="muted small-text" id="nutritionEntryCount">No items logged yet</p>
                 </div>
               </div>
@@ -664,8 +678,9 @@
           <div class="nutrition-grid">
             <article class="glass nutrition-log-card">
               <div class="card-header">
-                <p class="eyebrow">Today’s Log</p>
+                <p class="eyebrow">Food Log</p>
                 <h3>Food & Fluids</h3>
+                <p class="muted tiny-text" id="nutritionLogDateLabel">Viewing today</p>
               </div>
               <div class="nutrition-log-controls">
                 <div
@@ -867,6 +882,53 @@
                 <h3>Weight vs calories</h3>
               </div>
               <canvas id="weightTrendChart" height="260"></canvas>
+            </article>
+
+            <article class="glass weight-bmi-card">
+              <div class="card-header split">
+                <div>
+                  <p class="eyebrow">Body metrics</p>
+                  <h3>BMI tracker</h3>
+                </div>
+                <button type="button" class="outline-btn small" id="weightHeightEditToggle">Adjust height</button>
+              </div>
+              <div class="weight-bmi-content">
+                <div class="weight-bmi-value-block">
+                  <p class="label">BMI</p>
+                  <p class="weight-bmi-value" id="weightBmiValue">—</p>
+                  <p class="weight-bmi-badge neutral" id="weightBmiLabel">Log weight to unlock BMI insights.</p>
+                </div>
+                <div class="weight-bmi-details">
+                  <p class="label">Latest weight</p>
+                  <p class="weight-bmi-latest" id="weightBmiLatest">—</p>
+                  <p class="muted small-text" id="weightBmiUpdated">Awaiting latest measurement.</p>
+                </div>
+              </div>
+              <div class="weight-height-display" id="weightHeightDisplay">
+                <p class="label">Height</p>
+                <p class="weight-height-value" id="weightHeightValue">—</p>
+              </div>
+              <form class="weight-height-form hidden" id="weightHeightForm">
+                <label>
+                  Height (cm)
+                  <input
+                    type="number"
+                    id="weightHeightInput"
+                    name="heightCm"
+                    min="120"
+                    max="240"
+                    step="1"
+                    inputmode="numeric"
+                    required />
+                </label>
+                <div class="weight-height-actions">
+                  <button type="submit">Save height</button>
+                  <button type="button" class="outline-btn small secondary" id="weightHeightCancelButton">
+                    Cancel
+                  </button>
+                </div>
+                <p class="form-feedback" id="weightHeightFeedback"></p>
+              </form>
             </article>
           </div>
 
