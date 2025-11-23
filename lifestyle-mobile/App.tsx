@@ -37,7 +37,6 @@ export default function App() {
       config: {
         screens: {
           ForgotPassword: 'forgot',
-          ResetPassword: 'reset',
         },
       },
     }),

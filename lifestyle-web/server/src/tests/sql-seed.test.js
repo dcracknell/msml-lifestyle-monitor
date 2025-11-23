@@ -9,7 +9,7 @@ function getSqlSeedPath() {
 }
 
 describe('Lifestyle SQL seed', () => {
-  it('executes without errors and seeds demo data', () => {
+  it('executes without errors and seeds the baseline data set', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lifestyle-sql-'));
     const dbPath = path.join(tempDir, 'seed.db');
     const db = new Database(dbPath);

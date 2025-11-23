@@ -17,7 +17,7 @@ npm install                     # installs Expo + React Native deps
 npm run start                   # launches Expo dev server
 ```
 
-The default `.env.example` assumes the API is available at `http://localhost:4000`. When deploying, point `EXPO_PUBLIC_API_BASE_URL` to the public URL of the lifestyle server and `EXPO_PUBLIC_WEB_APP_ORIGIN` to the web dashboard (used for deep links).
+The default `.env.example` points the app at `https://www.msmls.org`. If you’re testing against a local server, override `EXPO_PUBLIC_API_BASE_URL` (and `EXPO_PUBLIC_WEB_APP_ORIGIN`) with your LAN URL.
 
 ## Feature parity
 

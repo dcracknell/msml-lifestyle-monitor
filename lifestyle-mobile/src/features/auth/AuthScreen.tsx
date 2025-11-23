@@ -10,7 +10,6 @@ import * as ImagePicker from 'expo-image-picker';
 export type AuthStackParamList = {
   AuthLanding: undefined;
   ForgotPassword: undefined;
-  ResetPassword: undefined;
 };
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'AuthLanding'>;
@@ -95,7 +94,7 @@ export function AuthScreen({ navigation }: Props) {
         <View>
           <AppText variant="eyebrow">MSML</AppText>
           <AppText variant="heading">Lifestyle Monitor</AppText>
-          <AppText variant="muted">Sync your day anywhere.</AppText>
+          <AppText variant="muted">Performance intelligence at your fingertips.</AppText>
         </View>
       </View>
       <Card>

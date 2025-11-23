@@ -7,10 +7,23 @@ const { coerceRole, isHeadCoach } = require('../utils/role');
 const router = express.Router();
 const UPC_LOOKUP_URL = 'https://world.openfoodfacts.org/api/v2';
 const SEARCH_URL = 'https://world.openfoodfacts.org/cgi/search.pl';
+const REMOTE_SEARCH_CACHE_TTL_MS = 1000 * 60 * 5; // 5 minutes
+const REMOTE_SEARCH_CACHE_LIMIT = 50;
+const REMOTE_SEARCH_TIMEOUT_MS = 400;
+const BARCODE_LOOKUP_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+const BARCODE_LOOKUP_CACHE_LIMIT = 250;
+const keepAliveAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 1000 * 15,
+  maxSockets: 8,
+  timeout: 1000 * 30,
+});
+const remoteSuggestionCache = new Map();
+const barcodeLookupCache = new Map();
 
 function fetchJson(targetUrl) {
   return new Promise((resolve, reject) => {
-    const request = https.get(targetUrl, (response) => {
+    const request = https.get(targetUrl, { agent: keepAliveAgent }, (response) => {
       const { statusCode } = response;
       if (statusCode && statusCode >= 400) {
         response.resume();
@@ -33,6 +46,9 @@ function fetchJson(targetUrl) {
     });
     request.on('error', (error) => {
       reject(new Error(`Lookup failed: ${error.message}`));
+    });
+    request.setTimeout(5000, () => {
+      request.destroy(new Error('Lookup timed out.'));
     });
   });
 }
@@ -162,6 +178,25 @@ const localSuggestionStatement = db.prepare(
       AND item_name LIKE ? ESCAPE '\\'
     ORDER BY datetime(created_at) DESC, id DESC
     LIMIT 40`
+);
+
+const entryByBarcodeStatement = db.prepare(
+  `SELECT item_name     AS name,
+          item_type     AS type,
+          barcode,
+          calories,
+          protein_grams AS protein,
+          carbs_grams   AS carbs,
+          fats_grams    AS fats,
+          weight_amount AS weightAmount,
+          weight_unit   AS weightUnit
+     FROM nutrition_entries
+    WHERE user_id = ?
+      AND barcode = ?
+      AND barcode IS NOT NULL
+      AND barcode != ''
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT 1`
 );
 
 const QUICK_ADD_ITEMS = [
@@ -1279,9 +1314,24 @@ function parseNutritionFromProduct(product = {}) {
   };
 }
 
-async function lookupByBarcode(barcode) {
+async function lookupByBarcode(barcode, options = {}) {
+  const normalizedBarcode = normalizeBarcodeValue(barcode);
+  if (!normalizedBarcode) {
+    return null;
+  }
+  const cached = getCachedBarcodeResult(normalizedBarcode);
+  if (cached) {
+    return cached;
+  }
+  if (options.userId) {
+    const localProduct = lookupLocalProductByBarcode(options.userId, normalizedBarcode);
+    if (localProduct) {
+      setCachedBarcodeResult(normalizedBarcode, localProduct);
+      return localProduct;
+    }
+  }
   const productUrl = new URL(
-    `/product/${encodeURIComponent(barcode)}.json`,
+    `/product/${encodeURIComponent(normalizedBarcode)}.json`,
     UPC_LOOKUP_URL
   );
   productUrl.searchParams.set('fields', 'code,product_name,generic_name,brands,nutriments');
@@ -1290,7 +1340,11 @@ async function lookupByBarcode(barcode) {
   if (!data?.product) {
     return null;
   }
-  return parseNutritionFromProduct(data.product);
+  const parsed = parseNutritionFromProduct(data.product);
+  if (parsed) {
+    setCachedBarcodeResult(normalizedBarcode, parsed);
+  }
+  return parsed;
 }
 
 async function lookupByQuery(query) {
@@ -1310,9 +1364,9 @@ async function lookupByQuery(query) {
   return parseNutritionFromProduct(firstHit);
 }
 
-async function lookupProduct({ barcode, query }) {
+async function lookupProduct({ barcode, query, userId }) {
   if (barcode) {
-    const result = await lookupByBarcode(barcode);
+    const result = await lookupByBarcode(barcode, { userId });
     if (result) return result;
   }
   if (query) {
@@ -1327,6 +1381,89 @@ function escapeLikePattern(value = '') {
 
 function normalizeText(value = '') {
   return value.toString().trim().toLowerCase();
+}
+
+function normalizeBarcodeValue(value = '') {
+  return value ? value.toString().trim() : '';
+}
+
+function parseNullableNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function trimBarcodeLookupCache(limit = BARCODE_LOOKUP_CACHE_LIMIT) {
+  if (!limit || limit <= 0) {
+    return;
+  }
+  while (barcodeLookupCache.size > limit) {
+    const oldestKey = barcodeLookupCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    barcodeLookupCache.delete(oldestKey);
+  }
+}
+
+function setCachedBarcodeResult(barcode, product) {
+  const normalized = normalizeBarcodeValue(barcode);
+  if (!normalized || !product) {
+    return;
+  }
+  barcodeLookupCache.set(normalized, {
+    data: product,
+    expiresAt: Date.now() + BARCODE_LOOKUP_CACHE_TTL_MS,
+  });
+  trimBarcodeLookupCache();
+}
+
+function getCachedBarcodeResult(barcode) {
+  const normalized = normalizeBarcodeValue(barcode);
+  if (!normalized) {
+    return null;
+  }
+  const entry = barcodeLookupCache.get(normalized);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expiresAt <= Date.now()) {
+    barcodeLookupCache.delete(normalized);
+    return null;
+  }
+  return entry.data;
+}
+
+function mapEntryToProduct(row) {
+  if (!row) return null;
+  const weightAmount = parseNullableNumber(row.weightAmount);
+  return {
+    name: row.name || 'Logged item',
+    barcode: row.barcode || null,
+    calories: parseNullableNumber(row.calories),
+    protein: parseNullableNumber(row.protein),
+    carbs: parseNullableNumber(row.carbs),
+    fats: parseNullableNumber(row.fats),
+    weightAmount: weightAmount ?? null,
+    weightUnit: row.weightUnit || null,
+    weightGramsEquivalent: null,
+    weightMlEquivalent: null,
+  };
+}
+
+function lookupLocalProductByBarcode(userId, barcode) {
+  const normalized = normalizeBarcodeValue(barcode);
+  if (!normalized) {
+    return null;
+  }
+  const numericId = Number(userId);
+  if (!Number.isFinite(numericId)) {
+    return null;
+  }
+  const row = entryByBarcodeStatement.get(numericId, normalized);
+  if (!row) {
+    return null;
+  }
+  return mapEntryToProduct(row);
 }
 
 function levenshteinDistance(a = '', b = '') {
@@ -1590,6 +1727,113 @@ async function searchProducts(query) {
     .slice(0, 5);
 }
 
+function trimRemoteSuggestionCache(limit = REMOTE_SEARCH_CACHE_LIMIT) {
+  if (!limit || limit <= 0) {
+    return;
+  }
+  while (remoteSuggestionCache.size > limit) {
+    const oldestKey = remoteSuggestionCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    remoteSuggestionCache.delete(oldestKey);
+  }
+}
+
+function startRemoteSuggestionFetch(key, query, searchFn, ttlMs, existingEntry = null) {
+  const entry =
+    existingEntry ||
+    {
+      data: null,
+      expiresAt: Date.now() + ttlMs,
+      inflight: null,
+    };
+  entry.inflight = Promise.resolve()
+    .then(() => searchFn(query))
+    .then((results) => {
+      entry.data = Array.isArray(results) ? results : [];
+      entry.expiresAt = Date.now() + ttlMs;
+      entry.inflight = null;
+      return entry.data;
+    })
+    .catch((error) => {
+      entry.inflight = null;
+      if (!entry.data || !entry.data.length) {
+        remoteSuggestionCache.delete(key);
+      }
+      throw error;
+    });
+  remoteSuggestionCache.set(key, entry);
+  trimRemoteSuggestionCache();
+  return entry;
+}
+
+function raceWithTimeout(promise, timeoutMs) {
+  if (!promise) {
+    return Promise.resolve({ value: null });
+  }
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise
+      .then((value) => ({ value }))
+      .catch((error) => ({ error }));
+  }
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+  });
+  return Promise.race([
+    promise
+      .then((value) => ({ value }))
+      .catch((error) => ({ error })),
+    timeoutPromise,
+  ]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
+async function getRemoteSuggestions(query, options = {}) {
+  const normalizedKey = normalizeText(query);
+  if (!normalizedKey) {
+    return [];
+  }
+  const now = Date.now();
+  const searchFn = typeof options.searchFn === 'function' ? options.searchFn : searchProducts;
+  const timeoutMs =
+    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : REMOTE_SEARCH_TIMEOUT_MS;
+  const ttlMs =
+    Number.isFinite(options.ttlMs) && options.ttlMs > 0
+      ? options.ttlMs
+      : REMOTE_SEARCH_CACHE_TTL_MS;
+  let entry = remoteSuggestionCache.get(normalizedKey);
+  if (!entry) {
+    entry = startRemoteSuggestionFetch(normalizedKey, query, searchFn, ttlMs);
+  } else if (entry.expiresAt <= now && !entry.inflight) {
+    entry = startRemoteSuggestionFetch(normalizedKey, query, searchFn, ttlMs, entry);
+  }
+  if (entry.data && entry.expiresAt > now) {
+    return entry.data;
+  }
+  if (entry.data && entry.inflight) {
+    return entry.data;
+  }
+  if (!entry.inflight) {
+    return entry.data || [];
+  }
+  const outcome = await raceWithTimeout(entry.inflight, timeoutMs);
+  if (outcome && Array.isArray(outcome.value)) {
+    return outcome.value;
+  }
+  return [];
+}
+
+function clearRemoteSuggestionCache() {
+  remoteSuggestionCache.clear();
+}
+
 router.get('/', authenticate, (req, res) => {
   const viewerId = req.user.id;
   const viewerRole = coerceRole(req.user.role);
@@ -1736,7 +1980,11 @@ router.post('/', authenticate, async (req, res) => {
 
   if (needsLookup) {
     try {
-      productData = await lookupProduct({ barcode: trimmedBarcode, query: trimmedName });
+      productData = await lookupProduct({
+        barcode: trimmedBarcode,
+        query: trimmedName,
+        userId: req.user.id,
+      });
     } catch (error) {
       return res.status(502).json({ message: error.message || 'Nutrition lookup failed.' });
     }
@@ -1842,7 +2090,7 @@ router.get('/lookup', authenticate, async (req, res) => {
   }
 
   try {
-    const product = await lookupProduct({ barcode, query });
+    const product = await lookupProduct({ barcode, query, userId: req.user.id });
     if (!product) {
       return res.status(404).json({ message: 'No nutrition data found for that item.' });
     }
@@ -1865,12 +2113,7 @@ router.get('/search', authenticate, async (req, res) => {
   }
   const localSuggestions = searchLocalEntries(req.user.id, query);
   const quickSuggestions = searchQuickAddSuggestions(query);
-  let remoteSuggestions = [];
-  try {
-    remoteSuggestions = await searchProducts(query);
-  } catch (error) {
-    remoteSuggestions = [];
-  }
+  const remoteSuggestions = await getRemoteSuggestions(query);
   const combined = [];
   const seen = new Set();
   const normalizedQuery = normalizeText(query);
@@ -1933,5 +2176,11 @@ router.get('/search', authenticate, async (req, res) => {
   const sorted = filtered.slice(0, 10).map(({ score, tokenCoverage, ...rest }) => rest);
   return res.json({ suggestions: sorted });
 });
+
+router.__private__ = {
+  getRemoteSuggestions,
+  clearRemoteSuggestionCache,
+  REMOTE_SEARCH_TIMEOUT_MS,
+};
 
 module.exports = router;

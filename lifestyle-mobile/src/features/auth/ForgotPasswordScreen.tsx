@@ -48,9 +48,9 @@ export function ForgotPasswordScreen({ navigation }: Props) {
         ) : null}
         <AppButton title="Notify head coach" onPress={handleSubmit} loading={loading} />
         <AppButton
-          title="Enter reset token"
+          title="Back to sign in"
           variant="ghost"
-          onPress={() => navigation.navigate('ResetPassword')}
+          onPress={() => navigation.goBack()}
           style={styles.secondary}
         />
       </Card>

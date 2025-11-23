@@ -136,9 +136,6 @@ export const updateProfileRequest = (payload: {
 export const forgotPasswordRequest = (payload: { email: string }) =>
   apiClient.post<MessageResponse>('/api/password/forgot', payload);
 
-export const resetPasswordRequest = (payload: { token: string; password: string }) =>
-  apiClient.post<MessageResponse>('/api/password/reset', payload);
-
 export const connectStravaRequest = () => apiClient.post<StravaConnectResponse>('/api/activity/strava/connect');
 
 export const disconnectStravaRequest = () => apiClient.post<MessageResponse>('/api/activity/strava/disconnect');

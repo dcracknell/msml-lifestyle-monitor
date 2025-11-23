@@ -100,15 +100,15 @@ describe('Sensor stream ingestion', () => {
 
 describe('CORS configuration', () => {
   it('always includes default localhost origins even when custom origins are set', () => {
-    const customApp = createApp({ appOrigin: 'https://msmllifestyle.duckdns.org' });
+    const customApp = createApp({ appOrigin: 'https://msmls.org' });
     const { allowedOrigins = [] } = customApp.locals.cors || {};
 
     expect(Array.isArray(allowedOrigins)).toBe(true);
     expect(allowedOrigins).toEqual(
       expect.arrayContaining([
         'http://localhost:4000',
-        'https://msmllifestyle.duckdns.org',
-        'http://msmllifestyle.duckdns.org',
+        'https://msmls.org',
+        'http://msmls.org',
       ])
     );
   });

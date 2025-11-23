@@ -15,6 +15,10 @@ function createChart(ctx, config) {
   return new Chart(ctx, config);
 }
 
+const DEFAULT_HEIGHT_CM = 175;
+const WEIGHT_HEIGHT_STORAGE_KEY = 'msml.weight.height';
+let weightHeightSettings = loadWeightHeightSettings();
+
 const state = {
   token: null,
   user: null,
@@ -63,6 +67,7 @@ const state = {
     latest: null,
     stats: null,
     goalCalories: null,
+    heightCm: resolveStoredHeight(null),
   },
 };
 
@@ -251,7 +256,14 @@ const nutritionGoalList = document.getElementById('nutritionGoalList');
 const nutritionEntriesList = document.getElementById('nutritionEntriesList');
 const nutritionMonthList = document.getElementById('nutritionMonthList');
 const nutritionDateLabel = document.getElementById('nutritionDateLabel');
+const nutritionDatePrimary = document.getElementById('nutritionDatePrimary');
+const nutritionDateSubtitle = document.getElementById('nutritionDateSubtitle');
+const nutritionLogDateLabel = document.getElementById('nutritionLogDateLabel');
 const nutritionEntryCount = document.getElementById('nutritionEntryCount');
+const nutritionPrevDayButton = document.getElementById('nutritionPrevDay');
+const nutritionNextDayButton = document.getElementById('nutritionNextDay');
+const nutritionTodayButton = document.getElementById('nutritionTodayButton');
+const nutritionDateInput = document.getElementById('nutritionDateInput');
 const nutritionLogSummary = document.getElementById('nutritionLogSummary');
 const nutritionEntryFilters = document.getElementById('nutritionEntryFilters');
 const nutritionForm = document.getElementById('nutritionForm');
@@ -292,14 +304,9 @@ const nutritionInsightSummary = document.getElementById('nutritionInsightSummary
 const nutritionInsightFlag = document.getElementById('nutritionInsightFlag');
 const defaultScanStatusMessage = nutritionScanStatus?.textContent || '';
 const forgotForm = document.getElementById('forgotForm');
-const resetForm = document.getElementById('resetForm');
 const forgotEmailInput = document.getElementById('forgotEmail');
 const forgotFeedback = document.getElementById('forgotFeedback');
-const resetTokenInput = document.getElementById('resetToken');
-const resetPasswordInput = document.getElementById('resetPassword');
-const resetFeedback = document.getElementById('resetFeedback');
 const forgotPasswordButton = document.getElementById('forgotPasswordButton');
-const openResetButton = document.getElementById('openResetButton');
 const backToLoginButtons = document.querySelectorAll('[data-auth-back]');
 const adminPanel = document.getElementById('adminPanel');
 const adminUserSelect = document.getElementById('adminUserSelect');
@@ -499,12 +506,28 @@ const weightUnitSelect = document.getElementById('weightUnit');
 const weightDateInput = document.getElementById('weightDate');
 const weightFeedback = document.getElementById('weightFeedback');
 const weightFormHint = document.getElementById('weightFormHint');
+const weightBmiValue = document.getElementById('weightBmiValue');
+const weightBmiLabel = document.getElementById('weightBmiLabel');
+const weightBmiLatest = document.getElementById('weightBmiLatest');
+const weightBmiUpdated = document.getElementById('weightBmiUpdated');
+const weightHeightValue = document.getElementById('weightHeightValue');
+const weightHeightDisplay = document.getElementById('weightHeightDisplay');
+const weightHeightEditToggle = document.getElementById('weightHeightEditToggle');
+const weightHeightForm = document.getElementById('weightHeightForm');
+const weightHeightInput = document.getElementById('weightHeightInput');
+const weightHeightFeedback = document.getElementById('weightHeightFeedback');
+const weightHeightCancelButton = document.getElementById('weightHeightCancelButton');
+let weightHeightEditing = false;
 
 const formatNumber = (value) => Intl.NumberFormat().format(value);
 const formatDecimal = (value, fractionDigits = 1) =>
   new Intl.NumberFormat(undefined, { maximumFractionDigits: fractionDigits }).format(value);
 const formatDate = (value) =>
   new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(value));
+const formatFullDate = (value) =>
+  new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(
+    new Date(value)
+  );
 const formatSignedValue = (value, suffix = '') => {
   if (!Number.isFinite(value)) return null;
   const rounded = Math.round(value * 10) / 10;
@@ -537,6 +560,141 @@ const formatDistance = (meters) => {
   return `${Math.round(meters)} m`;
 };
 
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function formatIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseIsoDateString(value) {
+  if (typeof value !== 'string' || !ISO_DATE_PATTERN.test(value)) return null;
+  const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(12, 0, 0, 0);
+  return date;
+}
+
+function getTodayIsoDate() {
+  return formatIsoDate(new Date());
+}
+
+function normalizeIsoDate(value) {
+  const parsed = parseIsoDateString(value);
+  if (!parsed) return null;
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  if (parsed.getTime() > today.getTime()) {
+    return formatIsoDate(today);
+  }
+  return formatIsoDate(parsed);
+}
+
+function shiftIsoDate(dateString, deltaDays) {
+  const base = parseIsoDateString(dateString) || new Date();
+  base.setDate(base.getDate() + deltaDays);
+  return normalizeIsoDate(formatIsoDate(base));
+}
+
+function formatFeetInches(heightCm) {
+  if (!Number.isFinite(heightCm) || heightCm <= 0) return '—';
+  const totalInches = heightCm / 2.54;
+  const feet = Math.floor(totalInches / 12);
+  const inches = Math.round(totalInches - feet * 12);
+  return `${feet}'${inches}"`;
+}
+
+function computeBmi(weightKg, heightCm) {
+  if (!Number.isFinite(weightKg) || !Number.isFinite(heightCm) || heightCm <= 0) return null;
+  const heightMeters = heightCm / 100;
+  const bmi = weightKg / (heightMeters * heightMeters);
+  if (!Number.isFinite(bmi) || bmi <= 0) return null;
+  return Math.round(bmi * 10) / 10;
+}
+
+function classifyBmi(bmi) {
+  if (!Number.isFinite(bmi)) {
+    return { label: 'Awaiting BMI data', className: 'neutral' };
+  }
+  if (bmi < 18.5) {
+    return { label: 'Underweight range', className: 'warning' };
+  }
+  if (bmi < 25) {
+    return { label: 'Optimal range', className: 'success' };
+  }
+  if (bmi < 30) {
+    return { label: 'Overweight range', className: 'warning' };
+  }
+  return { label: 'Obese range', className: 'danger' };
+}
+
+function loadWeightHeightSettings() {
+  try {
+    const raw = window.localStorage.getItem(WEIGHT_HEIGHT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.warn('Unable to load height preferences.', error);
+    return {};
+  }
+}
+
+function persistWeightHeightSettings() {
+  try {
+    window.localStorage.setItem(WEIGHT_HEIGHT_STORAGE_KEY, JSON.stringify(weightHeightSettings));
+  } catch (error) {
+    console.warn('Unable to save height preference.', error);
+  }
+}
+
+function sanitizeHeight(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric < 120 || numeric > 240) return null;
+  return Math.round(numeric);
+}
+
+function resolveStoredHeight(subjectId) {
+  const key = Number.isFinite(Number(subjectId)) ? String(Number(subjectId)) : null;
+  if (key && sanitizeHeight(weightHeightSettings[key])) {
+    return sanitizeHeight(weightHeightSettings[key]);
+  }
+  if (sanitizeHeight(weightHeightSettings.default)) {
+    return sanitizeHeight(weightHeightSettings.default);
+  }
+  return DEFAULT_HEIGHT_CM;
+}
+
+function updateStoredHeight(subjectId, heightCm) {
+  const normalized = sanitizeHeight(heightCm);
+  if (!normalized) return;
+  const key = Number.isFinite(Number(subjectId)) ? String(Number(subjectId)) : 'default';
+  weightHeightSettings[key] = normalized;
+  persistWeightHeightSettings();
+}
+
+function getActiveSubjectId() {
+  if (state.viewing?.id) {
+    return state.viewing.id;
+  }
+  if (state.subject?.id) {
+    return state.subject.id;
+  }
+  return state.user?.id ?? null;
+}
+
+function refreshWeightHeightContext() {
+  const resolved = resolveStoredHeight(getActiveSubjectId());
+  state.weight.heightCm = resolved;
+  setWeightHeightEditing(false);
+  renderWeightBodyMetrics(state.weight.latest, resolved);
+}
+
 const viewingOwnProfile = () => state.user && state.viewing && state.user.id === state.viewing.id;
 const NUTRITION_METRICS = {
   calories: { key: 'calories', label: 'Calories', unit: 'kcal' },
@@ -560,6 +718,7 @@ const barcodeScanState = {
   frameId: null,
   active: false,
 };
+let barcodeDetectorWarmupPromise = null;
 
 function showEmptyState(container, message) {
   if (!container) return;
@@ -1235,15 +1394,77 @@ function syncMacroTargetFields(goals = {}) {
   });
 }
 
-function renderNutritionDashboard(data = {}) {
-  if (nutritionDateLabel) {
-    nutritionDateLabel.textContent = data.date ? formatDate(data.date) : 'Today';
+function getActiveNutritionDate() {
+  return state.nutrition?.date || getTodayIsoDate();
+}
+
+function syncNutritionDateControls(dateValue) {
+  const todayIso = getTodayIsoDate();
+  const normalized = normalizeIsoDate(dateValue) || todayIso;
+  if (nutritionDatePrimary) {
+    nutritionDatePrimary.textContent = normalized === todayIso ? 'Today' : formatDate(normalized);
   }
+  if (nutritionDateSubtitle) {
+    nutritionDateSubtitle.textContent = formatFullDate(normalized);
+  }
+  if (nutritionDateInput) {
+    nutritionDateInput.value = normalized;
+    nutritionDateInput.max = todayIso;
+  }
+  if (nutritionNextDayButton) {
+    nutritionNextDayButton.disabled = normalized >= todayIso;
+  }
+  if (nutritionTodayButton) {
+    nutritionTodayButton.disabled = normalized === todayIso;
+  }
+}
+
+function requestNutritionDate(targetDate) {
+  const normalized = normalizeIsoDate(targetDate) || getTodayIsoDate();
+  if (state.nutrition) {
+    if (state.nutrition.date === normalized) {
+      syncNutritionDateControls(normalized);
+      return;
+    }
+    state.nutrition.date = normalized;
+  }
+  syncNutritionDateControls(normalized);
+  loadNutrition(getActiveSubjectId(), { date: normalized });
+}
+
+function openNutritionDatePicker() {
+  const todayIso = getTodayIsoDate();
+  const active = getActiveNutritionDate();
+  if (nutritionDateInput && typeof nutritionDateInput.showPicker === 'function') {
+    nutritionDateInput.value = active;
+    nutritionDateInput.max = todayIso;
+    nutritionDateInput.showPicker();
+    return;
+  }
+  const fallback = window.prompt('Enter a date (YYYY-MM-DD)', active);
+  if (!fallback) return;
+  const normalized = normalizeIsoDate(fallback);
+  if (!normalized) {
+    window.alert('Please enter a valid date in YYYY-MM-DD format.');
+    return;
+  }
+  requestNutritionDate(normalized);
+}
+
+function renderNutritionDashboard(data = {}) {
+  const activeDate = normalizeIsoDate(data.date) || getActiveNutritionDate();
+  syncNutritionDateControls(activeDate);
   if (nutritionEntryCount) {
     const count = data.dailyTotals?.count || 0;
     nutritionEntryCount.textContent = count
       ? `${count} item${count === 1 ? '' : 's'} logged`
       : 'No items logged yet';
+  }
+  if (nutritionLogDateLabel) {
+    const todayIso = getTodayIsoDate();
+    const descriptor =
+      activeDate === todayIso ? 'Viewing today' : `Viewing ${formatFullDate(activeDate)}`;
+    nutritionLogDateLabel.textContent = descriptor;
   }
   renderNutritionGoals(data.goals, data.dailyTotals);
   renderNutritionEntries(data.entries);
@@ -1259,7 +1480,13 @@ function renderWeightDashboard(data = {}) {
   const timeline = Array.isArray(data.timeline) ? data.timeline.slice() : [];
   const recent = Array.isArray(data.recent) ? data.recent.slice() : [];
   const latest = data.latest || (timeline.length ? timeline[timeline.length - 1] : null);
+  const activeHeight =
+    Number.isFinite(state.weight?.heightCm) && state.weight.heightCm > 0
+      ? state.weight.heightCm
+      : resolveStoredHeight(getActiveSubjectId());
+  state.weight.heightCm = activeHeight;
   renderWeightSummary(latest, data.stats || null, data.goalCalories ?? null);
+  renderWeightBodyMetrics(latest, activeHeight);
   const rows = recent.length ? recent : timeline.slice(-10).reverse();
   renderWeightLog(rows);
   renderWeightChart(timeline, data.goalCalories ?? null);
@@ -1313,6 +1540,42 @@ function renderWeightSummary(latest, stats, goalCalories) {
       insight = `Avg intake ${formatNumber(stats.caloriesAvg)} kcal${targetLabel}${deltaText}`;
     }
     weightCaloriesInsight.textContent = insight;
+  }
+}
+
+function renderWeightBodyMetrics(latest, heightCm = DEFAULT_HEIGHT_CM) {
+  const weightKg = Number.isFinite(latest?.weightKg) ? latest.weightKg : null;
+  const weightLbs = Number.isFinite(latest?.weightLbs) ? latest.weightLbs : null;
+  const bmi = computeBmi(weightKg, heightCm);
+  const descriptor = classifyBmi(bmi);
+  if (weightBmiValue) {
+    weightBmiValue.textContent = Number.isFinite(bmi) ? bmi.toFixed(1) : '—';
+  }
+  if (weightBmiLabel) {
+    weightBmiLabel.textContent = descriptor.label;
+    weightBmiLabel.classList.remove('neutral', 'success', 'warning', 'danger');
+    weightBmiLabel.classList.add(descriptor.className);
+  }
+  if (weightBmiLatest) {
+    if (weightKg || weightLbs) {
+      const parts = [];
+      if (weightKg) parts.push(`${formatDecimal(weightKg)} kg`);
+      if (weightLbs) parts.push(`${formatDecimal(weightLbs)} lb`);
+      weightBmiLatest.textContent = parts.join(' · ');
+    } else {
+      weightBmiLatest.textContent = '—';
+    }
+  }
+  if (weightBmiUpdated) {
+    weightBmiUpdated.textContent = latest?.date
+      ? `Updated ${formatDate(latest.date)}`
+      : 'Log weight to unlock BMI insights.';
+  }
+  if (weightHeightValue) {
+    weightHeightValue.textContent = `${heightCm} cm · ${formatFeetInches(heightCm)}`;
+  }
+  if (weightHeightInput && !weightHeightEditing) {
+    weightHeightInput.value = String(heightCm);
   }
 }
 
@@ -1467,6 +1730,47 @@ function setWeightDateDefault(dateString) {
   weightDateInput.value = target.toISOString().slice(0, 10);
 }
 
+function setWeightHeightEditing(editing) {
+  weightHeightEditing = Boolean(editing);
+  if (weightHeightForm) {
+    weightHeightForm.classList.toggle('hidden', !weightHeightEditing);
+  }
+  if (weightHeightDisplay) {
+    weightHeightDisplay.classList.toggle('hidden', weightHeightEditing);
+  }
+  if (weightHeightEditToggle) {
+    weightHeightEditToggle.textContent = weightHeightEditing ? 'Close height editor' : 'Adjust height';
+  }
+  if (weightHeightFeedback && !weightHeightEditing) {
+    weightHeightFeedback.textContent = '';
+  }
+  if (weightHeightEditing && weightHeightInput) {
+    weightHeightInput.value = String(state.weight.heightCm || DEFAULT_HEIGHT_CM);
+    weightHeightInput.focus();
+    weightHeightInput.select();
+  }
+}
+
+function handleWeightHeightSubmit(event) {
+  event.preventDefault();
+  if (!weightHeightInput) return;
+  const normalized = sanitizeHeight(weightHeightInput.value);
+  if (!normalized) {
+    if (weightHeightFeedback) {
+      weightHeightFeedback.textContent = 'Enter height in centimeters (120-240).';
+    }
+    return;
+  }
+  const subjectId = getActiveSubjectId();
+  updateStoredHeight(subjectId, normalized);
+  state.weight.heightCm = normalized;
+  renderWeightDashboard(state.weight);
+  if (weightHeightFeedback) {
+    weightHeightFeedback.textContent = 'Height saved for BMI calculations.';
+  }
+  setWeightHeightEditing(false);
+}
+
 function updateWeightFormVisibility() {
   if (!weightForm) return;
   const ownsProfile = viewingOwnProfile();
@@ -1485,12 +1789,17 @@ function updateWeightFormVisibility() {
 }
 
 function resetWeightState() {
+  const preservedHeight =
+    state.weight?.heightCm && Number.isFinite(state.weight.heightCm)
+      ? state.weight.heightCm
+      : resolveStoredHeight(getActiveSubjectId());
   state.weight = {
     timeline: [],
     recent: [],
     latest: null,
     stats: null,
     goalCalories: null,
+    heightCm: preservedHeight,
   };
   renderWeightDashboard(state.weight);
 }
@@ -2024,6 +2333,18 @@ async function ensureBarcodeDetector() {
   return barcodeScanState.detector;
 }
 
+function warmupBarcodeDetector() {
+  if (!isBarcodeScannerSupported()) {
+    return;
+  }
+  if (barcodeDetectorWarmupPromise) {
+    return;
+  }
+  barcodeDetectorWarmupPromise = ensureBarcodeDetector().catch(() => {}).finally(() => {
+    barcodeDetectorWarmupPromise = null;
+  });
+}
+
 function stopBarcodeScan(options = {}) {
   const { message, isError = false, resetToDefault = true } = options;
   if (barcodeScanState.frameId) {
@@ -2092,6 +2413,7 @@ function processBarcodeFrame(detector) {
 
 async function startBarcodeScan() {
   if (!nutritionScanButton || barcodeScanState.active) return;
+  warmupBarcodeDetector();
   if (!isBarcodeScannerSupported()) {
     setScanStatus('Barcode scanning is not supported in this browser.', { isError: true });
     return;
@@ -2101,7 +2423,12 @@ async function startBarcodeScan() {
   try {
     const detector = await ensureBarcodeDetector();
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 640, max: 1280 },
+        height: { ideal: 480, max: 720 },
+        frameRate: { ideal: 24, max: 30 },
+      },
       audio: false,
     });
     barcodeScanState.stream = stream;
@@ -2138,6 +2465,11 @@ function initializeBarcodeScanner() {
     return;
   }
   setScanStatus(defaultScanStatusMessage);
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(warmupBarcodeDetector, { timeout: 1000 });
+  } else {
+    setTimeout(warmupBarcodeDetector, 0);
+  }
 }
 
 function fillAmountForUnit(unit) {
@@ -2466,7 +2798,6 @@ function setAuthMode(mode = 'login') {
     login: loginForm,
     signup: signupForm,
     forgot: forgotForm,
-    reset: resetForm,
   };
   Object.entries(views).forEach(([key, form]) => {
     form?.classList.toggle('hidden', key !== mode);
@@ -2479,7 +2810,6 @@ function setAuthMode(mode = 'login') {
   if (loginFeedback) loginFeedback.textContent = '';
   if (signupFeedback) signupFeedback.textContent = '';
   if (forgotFeedback) forgotFeedback.textContent = '';
-  if (resetFeedback) resetFeedback.textContent = '';
 }
 
 async function lookupNutritionFromApi() {
@@ -2818,6 +3148,7 @@ function updateSubjectContext(subject) {
   updateViewingChip(subject);
   updateNutritionFormVisibility();
   updateWeightFormVisibility();
+  refreshWeightHeightContext();
 }
 
 function updateSharePanelVisibility(user) {
@@ -3217,11 +3548,12 @@ function handleAthleteSelection(selection) {
     state.viewing = state.user;
     updateSubjectContext(state.user);
     highlightRanking(null);
+    state.nutrition.date = null;
     if (athleteSwitcher) {
       athleteSwitcher.value = 'self';
     }
     loadMetrics();
-    loadNutrition();
+    loadNutrition(undefined, { resetDate: true });
     loadActivity();
     loadVitals();
     loadWeight();
@@ -3235,11 +3567,12 @@ function handleAthleteSelection(selection) {
   state.viewing = athlete;
   updateSubjectContext(athlete);
   highlightRanking(athlete.id);
+  state.nutrition.date = null;
   if (athleteSwitcher) {
     athleteSwitcher.value = String(athlete.id);
   }
   loadMetrics(athlete.id);
-  loadNutrition(athlete.id);
+  loadNutrition(athlete.id, { resetDate: true });
   loadActivity(athlete.id);
   loadVitals(athlete.id);
   loadWeight(athlete.id);
@@ -3392,8 +3725,28 @@ profileAvatarUrlInput?.addEventListener('input', handleProfileAvatarUrlInput);
 athleteSwitcher?.addEventListener('change', (event) =>
   handleAthleteSelection(event.target.value)
 );
+const shiftNutritionDate = (delta) => {
+  const current = getActiveNutritionDate();
+  const next = shiftIsoDate(current, delta);
+  if (next) {
+    requestNutritionDate(next);
+  }
+};
+nutritionPrevDayButton?.addEventListener('click', () => shiftNutritionDate(-1));
+nutritionNextDayButton?.addEventListener('click', () => shiftNutritionDate(1));
+nutritionTodayButton?.addEventListener('click', () => requestNutritionDate(getTodayIsoDate()));
+nutritionDateLabel?.addEventListener('click', openNutritionDatePicker);
+nutritionDateInput?.addEventListener('change', (event) => {
+  const value = event.target?.value;
+  if (!value) return;
+  const normalized = normalizeIsoDate(value);
+  if (normalized) {
+    requestNutritionDate(normalized);
+  } else {
+    event.target.value = getActiveNutritionDate();
+  }
+});
 forgotPasswordButton?.addEventListener('click', () => setAuthMode('forgot'));
-openResetButton?.addEventListener('click', () => setAuthMode('reset'));
 backToLoginButtons.forEach((button) => {
   button.addEventListener('click', () => setAuthMode(button.dataset.authBack || 'login'));
 });
@@ -3490,6 +3843,8 @@ shareForm?.addEventListener('submit', async (event) => {
 });
 
 initializeBarcodeScanner();
+nutritionScanButton?.addEventListener('mouseenter', warmupBarcodeDetector);
+nutritionScanButton?.addEventListener('focus', warmupBarcodeDetector);
 nutritionScanButton?.addEventListener('click', () => {
   if (barcodeScanState.active) {
     stopBarcodeScan();
@@ -3658,6 +4013,10 @@ nutritionForm?.addEventListener('submit', async (event) => {
     barcode,
     type,
   };
+  const activeDate = getActiveNutritionDate();
+  if (activeDate) {
+    payload.date = activeDate;
+  }
   if (Number.isFinite(caloriesValue) && caloriesValue >= 0) {
     payload.calories = caloriesValue;
   }
@@ -3824,6 +4183,13 @@ macroTargetForm?.addEventListener('submit', async (event) => {
 
 nutritionInsightSelect?.addEventListener('change', () => renderNutritionInsights(state.nutrition));
 weightForm?.addEventListener('submit', handleWeightSubmit);
+weightHeightEditToggle?.addEventListener('click', () => {
+  setWeightHeightEditing(!weightHeightEditing);
+});
+weightHeightCancelButton?.addEventListener('click', () => {
+  setWeightHeightEditing(false);
+});
+weightHeightForm?.addEventListener('submit', handleWeightHeightSubmit);
 weightLogList?.addEventListener('click', (event) => {
   const target = event.target.closest('[data-weight-delete]');
   if (!target) return;
@@ -3855,37 +4221,6 @@ forgotForm?.addEventListener('submit', async (event) => {
     forgotForm.reset();
   } catch (error) {
     forgotFeedback.textContent = error.message;
-  }
-});
-
-resetForm?.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const token = resetTokenInput?.value.trim();
-  const password = resetPasswordInput?.value || '';
-  if (!token || !password) {
-    resetFeedback.textContent = 'Provide both the reset token and a new password.';
-    return;
-  }
-  if (password.length < 8) {
-    resetFeedback.textContent = 'Password must be at least 8 characters.';
-    return;
-  }
-  resetFeedback.textContent = 'Updating password...';
-  try {
-    const response = await fetch('/api/password/reset', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, password }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !payload) {
-      throw new Error(payload?.message || 'Unable to reset password.');
-    }
-    resetFeedback.textContent = 'Password updated. You can sign in with the new password.';
-    resetForm.reset();
-    setAuthMode('login');
-  } catch (error) {
-    resetFeedback.textContent = error.message;
   }
 });
 
@@ -4148,12 +4483,24 @@ async function loadMetrics(subjectOverrideId) {
   updateCharts(metrics);
 }
 
-async function loadNutrition(subjectOverrideId) {
+async function loadNutrition(subjectOverrideId, options = {}) {
   if (!state.user || !state.token) return;
   const targetId = subjectOverrideId ?? state.viewing?.id ?? state.user.id;
   const isSelfView = !targetId || targetId === state.user.id;
-  const query =
-    targetId && targetId !== state.user.id ? `?athleteId=${encodeURIComponent(targetId)}` : '';
+  const params = new URLSearchParams();
+  if (targetId && targetId !== state.user.id) {
+    params.set('athleteId', String(targetId));
+  }
+  let requestedDate = null;
+  if (options.date) {
+    requestedDate = normalizeIsoDate(options.date);
+  } else if (!options.resetDate && state.nutrition?.date) {
+    requestedDate = normalizeIsoDate(state.nutrition.date);
+  }
+  if (requestedDate) {
+    params.set('date', requestedDate);
+  }
+  const query = params.toString() ? `?${params.toString()}` : '';
 
   try {
     const response = await fetch(`/api/nutrition${query}`, {
@@ -4184,7 +4531,7 @@ async function loadNutrition(subjectOverrideId) {
 
     const payload = await response.json();
     const fallbackDate =
-      payload.date || state.nutrition.date || new Date().toISOString().slice(0, 10);
+      normalizeIsoDate(payload.date) || requestedDate || getTodayIsoDate();
     state.nutrition = {
       date: fallbackDate,
       goals: payload.goals || null,
@@ -4192,6 +4539,7 @@ async function loadNutrition(subjectOverrideId) {
       entries: payload.entries || [],
       monthTrend: payload.monthTrend || [],
     };
+    syncNutritionDateControls(fallbackDate);
     state.nutritionDeletingEntries.clear();
     state.nutritionLogShouldScrollToTop = true;
     renderNutritionDashboard(state.nutrition);

@@ -42,7 +42,9 @@ import {
   BarcodeScanningResult,
   BarcodeType,
 } from 'expo-camera';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { NutritionEntry, NutritionLookupProduct, NutritionSuggestion } from '../../api/types';
+import { fetchSuggestionsWithCache, readSuggestionCache } from './suggestionCache';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -92,6 +94,8 @@ export function NutritionScreen() {
   const [scannerProcessing, setScannerProcessing] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [historyPhoto, setHistoryPhoto] = useState<{ uri: string; name: string } | null>(null);
+  const [iosPickerVisible, setIosPickerVisible] = useState(false);
+  const [iosPickerDate, setIosPickerDate] = useState(dayjs().toDate());
   const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeSuggestionRequest = useRef<symbol | null>(null);
   const mountedRef = useRef(true);
@@ -106,12 +110,23 @@ export function NutritionScreen() {
   }, []);
 
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
+  const todayIso = dayjs().format('YYYY-MM-DD');
+  const subjectKey = requestSubject || user?.id;
+
+  useEffect(() => {
+    setSelectedDate(dayjs().format('YYYY-MM-DD'));
+  }, [subjectKey]);
+
+  useEffect(() => {
+    setIosPickerDate(dayjs(selectedDate).toDate());
+  }, [selectedDate]);
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ['nutrition', requestSubject || user?.id, selectedDate],
     queryFn: () => nutritionRequest({ athleteId: requestSubject, date: selectedDate }),
     enabled: Boolean(user?.id),
   });
+  const isToday = selectedDate === todayIso;
 
   if (isLoading || !data) {
     return <LoadingView />;
@@ -120,6 +135,11 @@ export function NutritionScreen() {
   if (isError) {
     return <ErrorView message="Unable to load nutrition" onRetry={refetch} />;
   }
+
+  const resolveSuggestionMessage = (items: NutritionSuggestion[]) =>
+    items.length
+      ? 'Tap a suggestion below to auto-fill the form.'
+      : 'No matches yet. Try refining the name or scan a barcode.';
 
   const handleEntryChange = <K extends keyof EntryFormState>(key: K, value: EntryFormState[K]) => {
     setEntryForm((prev) => ({ ...prev, [key]: value }));
@@ -178,27 +198,52 @@ export function NutritionScreen() {
       suggestionTimerRef.current = null;
       const requestToken = Symbol('suggestions');
       activeSuggestionRequest.current = requestToken;
+      const cached = readSuggestionCache(trimmed);
+      if (cached) {
+        setSuggestions(cached.suggestions);
+        setSuggestionStatus(
+          cached.isStale
+            ? cached.suggestions.length
+              ? 'Refreshing suggestions...'
+              : 'Searching for suggestions...'
+            : resolveSuggestionMessage(cached.suggestions)
+        );
+      } else {
+        setSuggestions([]);
+        setSuggestionStatus('Searching for suggestions...');
+      }
       setSuggestionLoading(true);
+      const fetcher = () =>
+        searchNutritionRequest(trimmed).then((payload) => payload?.suggestions || []);
       (async () => {
         try {
-          const payload = await searchNutritionRequest(trimmed);
+          const results = await fetchSuggestionsWithCache(trimmed, fetcher, {
+            forceRefresh: true,
+          });
           if (!mountedRef.current || activeSuggestionRequest.current !== requestToken) {
             return;
           }
-          const results = payload?.suggestions || [];
-          setSuggestions(results);
-          setSuggestionStatus(
-            results.length
-              ? 'Tap a suggestion below to auto-fill the form.'
-              : 'No matches yet. Try refining the name or scan a barcode.'
-          );
+          if (Array.isArray(results)) {
+            setSuggestions(results);
+            setSuggestionStatus(resolveSuggestionMessage(results));
+          } else if (cached) {
+            setSuggestionStatus('Network is slow. Showing recent results for now.');
+          } else {
+            setSuggestionStatus('Still searching... this is taking longer than expected.');
+          }
         } catch (error) {
           if (!mountedRef.current || activeSuggestionRequest.current !== requestToken) {
             return;
           }
-          setSuggestions([]);
+          if (!cached) {
+            setSuggestions([]);
+          }
           setSuggestionStatus(
-            error instanceof Error ? error.message : 'Unable to fetch suggestions right now.'
+            cached
+              ? 'Unable to refresh suggestions. Showing recent results.'
+              : error instanceof Error
+                ? error.message
+                : 'Unable to fetch suggestions right now.'
           );
         } finally {
           if (mountedRef.current && activeSuggestionRequest.current === requestToken) {
@@ -342,7 +387,45 @@ export function NutritionScreen() {
   };
 
   const adjustDate = (delta: number) => {
-    setSelectedDate((prev) => dayjs(prev).add(delta, 'day').format('YYYY-MM-DD'));
+    setSelectedDate((prev) => {
+      const next = dayjs(prev).add(delta, 'day');
+      const today = dayjs();
+      const target = next.isAfter(today, 'day') ? today : next;
+      return target.format('YYYY-MM-DD');
+    });
+  };
+
+  const handleJumpToToday = () => {
+    setSelectedDate(todayIso);
+  };
+
+  const handleOpenDatePicker = () => {
+    const baseDate = dayjs(selectedDate).toDate();
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: baseDate,
+        mode: 'date',
+        maximumDate: new Date(),
+        onChange: (event, date) => {
+          if (event.type !== 'set' || !date) {
+            return;
+          }
+          const formatted = dayjs(date).format('YYYY-MM-DD');
+          const clamped = dayjs(formatted).isAfter(dayjs(), 'day') ? todayIso : formatted;
+          setSelectedDate(clamped);
+        },
+      });
+      return;
+    }
+    setIosPickerDate(baseDate);
+    setIosPickerVisible(true);
+  };
+
+  const handleConfirmIosPicker = () => {
+    setIosPickerVisible(false);
+    const formatted = dayjs(iosPickerDate).format('YYYY-MM-DD');
+    const clamped = dayjs(formatted).isAfter(dayjs(), 'day') ? todayIso : formatted;
+    setSelectedDate(clamped);
   };
 
   const toggleSection = (setter: Dispatch<SetStateAction<boolean>>) => {
@@ -483,9 +566,26 @@ export function NutritionScreen() {
       <SectionHeader title="Daily nutrition" subtitle={formatDate(selectedDate)} />
       <View style={styles.dateRow}>
         <AppButton title="Prev" variant="ghost" onPress={() => adjustDate(-1)} />
-        <AppText variant="heading">{formatDate(selectedDate)}</AppText>
-        <AppButton title="Next" variant="ghost" onPress={() => adjustDate(1)} />
+        <TouchableOpacity
+          style={styles.dateDisplay}
+          onPress={handleOpenDatePicker}
+          accessibilityRole="button"
+          accessibilityLabel="Select a date"
+        >
+          <AppText variant="heading">{formatDate(selectedDate)}</AppText>
+          <AppText variant="muted" style={styles.dateHint}>
+            Tap to choose a day
+          </AppText>
+        </TouchableOpacity>
+        <AppButton title="Next" variant="ghost" onPress={() => adjustDate(1)} disabled={isToday} />
       </View>
+      <AppButton
+        title="Jump to today"
+        variant="ghost"
+        onPress={handleJumpToToday}
+        disabled={isToday}
+        style={styles.todayButton}
+      />
       <Card>
         <SectionHeader
           title="Log entry"
@@ -771,6 +871,31 @@ export function NutritionScreen() {
         )}
       </Card>
       </RefreshableScrollView>
+      {Platform.OS === 'ios' ? (
+        <Modal
+          visible={iosPickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setIosPickerVisible(false)}
+        >
+          <View style={styles.viewerBackdrop}>
+            <View style={styles.viewerCard}>
+              <AppText variant="heading">Select a date</AppText>
+              <DateTimePicker
+                mode="date"
+                display="spinner"
+                value={iosPickerDate}
+                maximumDate={new Date()}
+                onChange={(_, date) => date && setIosPickerDate(date)}
+              />
+              <View style={styles.modalActions}>
+                <AppButton title="Cancel" variant="ghost" onPress={() => setIosPickerVisible(false)} />
+                <AppButton title="Use date" onPress={handleConfirmIosPicker} />
+              </View>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
       <Modal
         visible={Boolean(historyPhoto)}
         transparent
@@ -815,6 +940,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  dateDisplay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  dateHint: {
+    marginTop: spacing.xs * 0.5,
+    color: colors.muted,
+  },
+  todayButton: {
+    alignSelf: 'flex-end',
     marginBottom: spacing.md,
   },
   typeRow: {
@@ -973,6 +1113,11 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
   },
   viewerImage: {
     width: '100%',

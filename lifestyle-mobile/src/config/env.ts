@@ -11,7 +11,7 @@ const runtimeExtra: Extra =
   (Constants.manifest?.extra as Extra | undefined) ||
   {};
 
-const fallbackBaseUrl = 'http://localhost:4000';
+const fallbackBaseUrl = 'https://www.msmls.org';
 
 function getExpoLanHost() {
   const debuggerHost =

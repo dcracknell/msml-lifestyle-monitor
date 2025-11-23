@@ -4,14 +4,14 @@ A Fitbit-inspired lifestyle monitoring experience that complements the MSML proj
 The stack combines an Express.js backend, a lightweight SQLite data layer seeded from an SQL file, and a responsive front-end served from the same server.
 
 ## Features
-- Email + password login plus inline sign-up (seeded demo accounts included). You can enter the full email, the full name, the first name, or the email handle (text before `@`) when signing in.
+- Email + password login plus inline sign-up. You can enter the full email, the full name, the first name, or the email handle (text before `@`) when signing in.
 - Avatar picker during sign-up so every athlete can choose an icon or drop in their own PNG/WebP link.
 - Coach leaderboard + athlete switching so trainers can review multiple shared dashboards from one login.
 - Athletes can share access with a coach by entering their email (also exposed via `/api/share`).
 - Newly created accounts start empty; cards and charts explain that telemetry hasn’t synced yet.
 - Data isolation is enforced at the API layer—only the owner, linked coaches, or head coaches can view a dashboard (`/api/athletes` + `/api/metrics`).
 - Dedicated profile screen lets users change their display name, email, or password after re-entering their current password (via `/api/profile`), with uniqueness enforced.
-- Forgot-password flow generates a reset token and logs the email link to the server console in development (via `/api/password/forgot` + `/api/password/reset`).
+- Forgot-password flow simply alerts the head coach via `/api/password/forgot` so they can assist with resets.
 - Head coaches can promote/demote members between coach and athlete roles, reset passwords (either to `Password` or a coach-defined temporary value), or delete inactive accounts via the `/api/admin` endpoints.
 - Token-based auth middleware that web and mobile clients can share.
 - SQLite database seeded from `database/sql/lifestyle_metrics.sql`, keeping health, activity, and nutrition data versionable.
@@ -38,7 +38,7 @@ lifestyle-web/
 ├── README.md
 ├── database
 │   ├── sql
-│   │   └── lifestyle_metrics.sql   # Schema + sample data ingested on boot
+│   │   └── lifestyle_metrics.sql   # Schema + baseline data ingested on boot
 │   └── storage/                    # SQLite DB file is created here at runtime
 └── server
     ├── public                      # Vanilla JS + Chart.js powered UI
@@ -76,7 +76,7 @@ The server reads environment variables from `.env` (see `.env.example`). By defa
 
 ### Serving Beyond Localhost
 1. Copy `.env.example` to `.env` and set `HOST=0.0.0.0` (or the specific interface to bind) plus the port you want to expose.
-2. Update `APP_ORIGIN` with every public URL you expect browsers to load the dashboard from (comma-separated). Set `APP_ORIGIN=*` only if you explicitly want to allow any origin.
+2. Update `APP_ORIGIN` with every public URL you expect browsers to load the dashboard from (comma-separated). If you front the site with both apex and `www` domains (e.g., `https://msmls.org` and `https://www.msmls.org`), include both. Set `APP_ORIGIN=*` only if you explicitly want to allow any origin.
 3. Open the chosen TCP port in your firewall/router and forward it to this machine. When deploying behind HTTPS, point your reverse proxy at `http://127.0.0.1:PORT` and include the final HTTPS origin in `APP_ORIGIN`.
 4. Restart the server (`npm run start` or your process manager) and verify an external request works with `curl http://<your-public-host>:PORT/api/health`.
 
@@ -106,9 +106,9 @@ This deletes `database/storage/lifestyle_monitor.db*`, replays the SQL seed, and
 | `PASSWORD_ENCRYPTION_KEY` | Secret used to derive the AES-256-GCM key that encrypts stored password digests | `msml-lifestyle-monitor-passwords` |
 | `DB_STORAGE_DIR` | Optional override for writable SQLite directory | `./database/storage` |
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
-| `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach demo password | `Password` |
-| `COACH_SEED_PASSWORD` | Optional override for the coach demo password | `Password` |
-| `ATHLETE_SEED_PASSWORD` | Optional override for the athlete demo password | `Password` |
+| `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach password baked into the SQL seed | `Password` |
+| `COACH_SEED_PASSWORD` | Optional override for the coach password baked into the SQL seed | `Password` |
+| `ATHLETE_SEED_PASSWORD` | Optional override for the athlete password baked into the SQL seed | `Password` |
 | `STRAVA_CLIENT_ID` | OAuth client ID from https://www.strava.com/settings/api | — |
 | `STRAVA_CLIENT_SECRET` | OAuth client secret from Strava | — |
 | `STRAVA_REDIRECT_URI` | HTTPS URL that Strava should redirect back to (must end with `/api/activity/strava/callback`) | — |
@@ -151,17 +151,6 @@ If `include` is omitted or invalid, the endpoint behaves exactly as before and r
 ### Password Storage
 - Passwords are converted to a SHA-256 digest and then encrypted with AES-256-GCM using the `PASSWORD_ENCRYPTION_KEY`. The resulting value (`iv:authTag:ciphertext`) is what gets persisted in SQLite.
 - Because the encryption is keyed, changing `PASSWORD_ENCRYPTION_KEY` after users exist invalidates their hashes. Rotate the key only when you plan to reset everyone’s password or replace the SQLite file.
-- The three demo accounts (below) are automatically re-encrypted at startup using the configured seed password env vars so you can override them without editing SQL.
-
-## Demo Accounts
-| Email | Password | Role |
-| --- | --- | --- |
-| `coach@example.com` | `Password` | Coach |
-| `athlete@example.com` | `Password` | Athlete |
-| `head.coach@example.com` | `Password` | Head Coach (full visibility) |
-
-> The hashed credentials live inside the SQL seed so both the website and the native app can tap into the same auth + analytics pipeline. Prefer to create your own login? Use the "Create account" tab on the landing page or POST to `/api/signup`.
-
 ## Next Steps
 - Hook the `ios/` app (or any other client) to the `/api/login`, `/api/signup`, `/api/athletes`, `/api/share`, `/api/admin`, `/api/profile`, `/api/password/*`, and `/api/metrics` endpoints.
 - Replace the seed SQL file with a production database or telemetry ingestion pipeline.

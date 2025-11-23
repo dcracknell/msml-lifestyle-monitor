@@ -57,7 +57,7 @@ export default ({ config }) => ({
     ],
   ],
   extra: {
-    apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:4000',
-    webAppOrigin: process.env.EXPO_PUBLIC_WEB_APP_ORIGIN || 'http://localhost:4000',
+    apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || 'https://www.msmls.org',
+    webAppOrigin: process.env.EXPO_PUBLIC_WEB_APP_ORIGIN || 'https://www.msmls.org',
   },
 });

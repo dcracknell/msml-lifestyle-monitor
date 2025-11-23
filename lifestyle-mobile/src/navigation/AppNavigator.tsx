@@ -5,7 +5,6 @@ import { createDrawerNavigator, DrawerContentScrollView, DrawerItem } from '@rea
 import { useMemo } from 'react';
 import { AuthScreen, AuthStackParamList } from '../features/auth/AuthScreen';
 import { ForgotPasswordScreen } from '../features/auth/ForgotPasswordScreen';
-import { ResetPasswordScreen } from '../features/auth/ResetPasswordScreen';
 import { AppText, LoadingView } from '../components';
 import { useAuth } from '../providers/AuthProvider';
 import { colors, fonts } from '../theme';
@@ -74,7 +73,6 @@ function AuthNavigator() {
     >
       <AuthStack.Screen name="AuthLanding" component={AuthScreen} />
       <AuthStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-      <AuthStack.Screen name="ResetPassword" component={ResetPasswordScreen} />
     </AuthStack.Navigator>
   );
 }
@@ -89,7 +87,7 @@ function DrawerNavigator() {
       useLegacyImplementation={false}
       initialRouteName="Overview"
       drawerContent={(props) => <CustomDrawerContent {...props} />}
-      screenOptions={{
+      screenOptions={({ navigation }) => ({
         headerShown: true,
         drawerType: 'front',
         drawerStyle: { backgroundColor: colors.background },
@@ -103,6 +101,18 @@ function DrawerNavigator() {
           fontFamily: fonts.display,
           fontSize: 20,
         },
+        headerLeft: () => (
+          <TouchableOpacity
+            style={styles.headerMenuButton}
+            onPress={() => navigation.toggleDrawer()}
+            accessibilityLabel="Open navigation menu"
+            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+          >
+            <AppText variant="label" style={styles.headerActionText}>
+              Menu
+            </AppText>
+          </TouchableOpacity>
+        ),
         headerRight: () => (
           <TouchableOpacity style={styles.headerAction} onPress={signOut}>
             <AppText variant="label" style={styles.headerActionText}>
@@ -110,7 +120,7 @@ function DrawerNavigator() {
             </AppText>
           </TouchableOpacity>
         ),
-      }}
+      })}
     >
       <Drawer.Screen name="Overview" component={OverviewScreen} />
       <Drawer.Screen name="Exercise" component={ExerciseScreen} />
@@ -279,6 +289,14 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     paddingTop: 12,
+  },
+  headerMenuButton: {
+    marginLeft: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   headerAction: {
     marginRight: 12,

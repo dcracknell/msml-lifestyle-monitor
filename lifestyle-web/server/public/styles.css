@@ -804,10 +804,118 @@ button:hover {
 
 .summary-meta {
   text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
 }
 
 .summary-meta p {
   margin: 0;
+}
+
+.nutrition-date-toolbar {
+  gap: 0.25rem;
+}
+
+.nutrition-date-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.4rem;
+  position: relative;
+}
+
+.date-nav-button {
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.date-nav-button:hover:not(:disabled),
+.date-nav-button:focus-visible:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.date-nav-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.date-display {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  align-items: center;
+  min-width: 160px;
+}
+
+.date-display-primary {
+  font-size: 1.1rem;
+}
+
+.date-display:focus-visible {
+  outline: 2px solid rgba(77, 245, 255, 0.4);
+  outline-offset: 2px;
+}
+
+.nutrition-date-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  text-align: center;
+}
+
+.date-display-eyebrow {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 0;
+}
+
+.date-display-subtitle {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.nutrition-date-controls .jump-today-btn {
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.85rem;
+}
+
+.nutrition-date-controls .jump-today-btn:hover {
+  background: rgba(77, 245, 255, 0.15);
+  border-color: rgba(77, 245, 255, 0.4);
+}
+
+.nutrition-date-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 }
 
 .nutrition-grid {
@@ -877,6 +985,89 @@ button:hover {
 
 .weight-chart-card {
   min-height: 320px;
+}
+
+.weight-bmi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.weight-bmi-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.weight-bmi-value-block,
+.weight-bmi-details {
+  flex: 1;
+  min-width: 200px;
+}
+
+.weight-bmi-value {
+  font-size: 2.4rem;
+  font-weight: 600;
+  margin: 0.2rem 0;
+}
+
+.weight-bmi-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f7ff;
+  margin: 0;
+}
+
+.weight-bmi-badge.success {
+  background: rgba(91, 214, 162, 0.2);
+  color: #d7ffee;
+}
+
+.weight-bmi-badge.warning {
+  background: rgba(244, 199, 111, 0.2);
+  color: #ffe9c0;
+}
+
+.weight-bmi-badge.danger {
+  background: rgba(255, 107, 129, 0.2);
+  color: #ffccd5;
+}
+
+.weight-bmi-latest {
+  font-size: 1.15rem;
+  margin: 0.2rem 0;
+}
+
+.weight-height-display {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.weight-height-value {
+  font-size: 1.25rem;
+  margin: 0.3rem 0 0;
+  font-weight: 600;
+}
+
+.weight-height-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.weight-height-form.hidden {
+  display: none;
+}
+
+.weight-height-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .weight-log-list {
