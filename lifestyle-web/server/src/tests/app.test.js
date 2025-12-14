@@ -1,5 +1,6 @@
 const request = require('supertest');
 const createApp = require('../app');
+const { NAME_LIMITS, PASSWORD_LIMITS } = require('../utils/validation');
 
 jest.setTimeout(20000);
 
@@ -43,6 +44,38 @@ describe('Authentication flow', () => {
       name: 'Casey Coach',
       role: 'Coach',
     });
+  });
+});
+
+describe('Signup validation', () => {
+  it('rejects names that exceed the configured word limit', async () => {
+    const excessiveName = Array(NAME_LIMITS.maxWords + 2)
+      .fill('Word')
+      .join(' ');
+    const response = await request(app).post('/api/signup').send({
+      name: excessiveName,
+      email: `limit-name-${Date.now()}@example.com`,
+      password: 'Password123',
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toHaveProperty('message');
+    expect(response.body.message).toContain('Name must');
+  });
+
+  it('rejects passwords that exceed the configured limits', async () => {
+    const longPassword = `${Array(PASSWORD_LIMITS.maxWords + 1)
+      .fill('word')
+      .join(' ')}`.padEnd(PASSWORD_LIMITS.maxLength + 10, 'x');
+    const response = await request(app).post('/api/signup').send({
+      name: 'Limit Tester',
+      email: `limit-pass-${Date.now()}@example.com`,
+      password: longPassword,
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toHaveProperty('message');
+    expect(response.body.message).toContain('Password must');
   });
 });
 

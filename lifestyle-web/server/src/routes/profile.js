@@ -3,6 +3,7 @@ const db = require('../db');
 const { authenticate, createSession } = require('../services/session-store');
 const { hashPassword, verifyPassword } = require('../utils/hash-password');
 const { coerceRole, ROLES } = require('../utils/role');
+const { NAME_LIMITS, PASSWORD_LIMITS, violatesLimits } = require('../utils/validation');
 
 const router = express.Router();
 
@@ -131,6 +132,11 @@ router.put('/', (req, res) => {
     if (trimmedName.length < 2) {
       return res.status(400).json({ message: 'Name must be at least 2 characters.' });
     }
+    if (violatesLimits(trimmedName, NAME_LIMITS)) {
+      return res.status(400).json({
+        message: `Name must be ${NAME_LIMITS.maxWords} words and ${NAME_LIMITS.maxLength} characters or fewer.`,
+      });
+    }
     const existingName = db
       .prepare('SELECT id FROM users WHERE LOWER(name) = ? AND id != ?')
       .get(trimmedName.toLowerCase(), req.user.id);
@@ -169,6 +175,11 @@ router.put('/', (req, res) => {
     }
     if (newPassword.length < 8) {
       return res.status(400).json({ message: 'New password must be at least 8 characters.' });
+    }
+    if (violatesLimits(newPassword, PASSWORD_LIMITS)) {
+      return res.status(400).json({
+        message: `Password must be ${PASSWORD_LIMITS.maxWords} words and ${PASSWORD_LIMITS.maxLength} characters or fewer.`,
+      });
     }
     updates.password_hash = hashPassword(newPassword);
   }

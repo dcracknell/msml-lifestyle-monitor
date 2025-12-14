@@ -3,6 +3,7 @@ const db = require('../db');
 const { createSession } = require('../services/session-store');
 const { hashPassword } = require('../utils/hash-password');
 const { isHeadCoach, ROLES } = require('../utils/role');
+const { NAME_LIMITS, PASSWORD_LIMITS, violatesLimits } = require('../utils/validation');
 
 const router = express.Router();
 
@@ -89,12 +90,24 @@ router.post('/', (req, res) => {
     return res.status(400).json({ message: 'Name, email, and password are required.' });
   }
 
+  if (violatesLimits(trimmedName, NAME_LIMITS)) {
+    return res.status(400).json({
+      message: `Name must be ${NAME_LIMITS.maxWords} words and ${NAME_LIMITS.maxLength} characters or fewer.`,
+    });
+  }
+
   if (!normalizedEmail.includes('@') || !normalizedEmail.includes('.')) {
     return res.status(400).json({ message: 'Provide a valid email address.' });
   }
 
   if (cleanPassword.length < 8) {
     return res.status(400).json({ message: 'Password must be at least 8 characters.' });
+  }
+
+  if (violatesLimits(cleanPassword, PASSWORD_LIMITS)) {
+    return res.status(400).json({
+      message: `Password must be ${PASSWORD_LIMITS.maxWords} words and ${PASSWORD_LIMITS.maxLength} characters or fewer.`,
+    });
   }
 
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);

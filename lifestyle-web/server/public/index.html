@@ -46,9 +46,6 @@
           <button type="button" class="nav-item" data-page="activity" aria-pressed="false">
             Activity
           </button>
-          <button type="button" class="nav-item" data-page="roster" aria-pressed="false">
-            Roster
-          </button>
           <button type="button" class="nav-item" data-page="sessions" aria-pressed="false">
             Sessions
           </button>
@@ -213,8 +210,8 @@
         <header class="dashboard-header">
           <div>
             <p class="eyebrow" id="greeting">Dashboard</p>
-            <h2 id="pageTitle">Daily Readiness + Fuel</h2>
-            <p class="muted" id="pageSubtitle">Live snapshot of movement, fuel, and recovery.</p>
+            <h2 id="pageTitle">Daily Dashboard</h2>
+            <p class="muted" id="pageSubtitle">Live snapshot of readiness, movement, and fuel.</p>
             <p class="muted viewing-chip" id="viewingChip">Viewing your own performance</p>
           </div>
           <div class="header-actions">
@@ -239,78 +236,155 @@
         </section>
 
         <div class="subpage" data-subpage="overview">
-          <div class="summary-grid" id="summaryGrid">
-            <article class="metric-card">
-              <p class="label">Steps</p>
-              <h3 id="stepsValue">—</h3>
-              <p class="trend" id="stepsTrend">Awaiting data</p>
+          <section class="overview-sync-row">
+            <article class="glass sync-status-card">
+              <div class="card-header">
+                <p class="eyebrow">Today's sync</p>
+                <h3>Telemetry recap</h3>
+              </div>
+              <p class="muted" id="overviewSyncCopy">
+                Sync your wearable, meals, and sleep to populate today's recap.
+              </p>
+              <ul class="sync-metric-list">
+                <li>
+                  <div>
+                    <p class="label">Readiness</p>
+                    <p class="muted small-text" id="overviewSyncReadinessNote">Awaiting data.</p>
+                  </div>
+                  <strong id="overviewSyncReadiness">—</strong>
+                </li>
+                <li>
+                  <div>
+                    <p class="label">Steps</p>
+                    <p class="muted small-text" id="overviewSyncStepsNote">Awaiting data.</p>
+                  </div>
+                  <strong id="overviewSyncSteps">—</strong>
+                </li>
+                <li>
+                  <div>
+                    <p class="label">Calories</p>
+                    <p class="muted small-text" id="overviewSyncCaloriesNote">Awaiting data.</p>
+                  </div>
+                  <strong id="overviewSyncCalories">—</strong>
+                </li>
+                <li>
+                  <div>
+                    <p class="label">Sleep</p>
+                    <p class="muted small-text" id="overviewSyncSleepNote">Awaiting data.</p>
+                  </div>
+                  <strong id="overviewSyncSleep">—</strong>
+                </li>
+              </ul>
             </article>
-            <article class="metric-card">
-              <p class="label">Calories</p>
-              <h3 id="caloriesValue">—</h3>
-              <p class="trend" id="caloriesTrend">Awaiting data</p>
-            </article>
-            <article class="metric-card">
-              <p class="label">Sleep</p>
-              <h3 id="sleepValue">—</h3>
-              <p class="trend" id="sleepTrend">Awaiting data</p>
-            </article>
-            <article class="metric-card">
-              <p class="label">Readiness</p>
-              <h3 id="readinessValue">—</h3>
-              <p class="trend" id="readinessTrend">Awaiting data</p>
-            </article>
-          </div>
 
-          <div class="chart-grid">
-            <article class="glass chart-card">
+            <article class="glass coach-signal-card">
               <div class="card-header">
-                <p class="eyebrow">Movement Load</p>
-                <h3>Steps vs Calories</h3>
+                <p class="eyebrow">Coaching cue</p>
+                <h3 id="overviewMomentumTitle">Waiting for sync</h3>
               </div>
-              <canvas id="activityChart" height="220"></canvas>
+              <p class="muted" id="overviewMomentumCopy">
+                We’ll translate readiness, steps, and sleep into a daily action plan as soon as telemetry
+                appears.
+              </p>
+              <div class="highlight-foot">
+                <p class="label">Next check-in</p>
+                <p id="overviewMomentumFoot">Share a quick sync note after your wearable uploads.</p>
+              </div>
+            </article>
+          </section>
+
+          <section class="overview-highlights">
+            <article class="glass highlight-card">
+              <div>
+                <p class="eyebrow">Goal Tracking</p>
+                <h3>Where you're pacing</h3>
+              </div>
+              <ul class="goal-progress-list" id="overviewGoalList"></ul>
             </article>
 
-            <article class="glass chart-card">
-              <div class="card-header">
-                <p class="eyebrow">Fuel Split</p>
-                <h3>Macro Balance</h3>
+            <article class="glass highlight-card">
+              <div>
+                <p class="eyebrow">Data Coverage</p>
+                <h3>Last 7 days</h3>
               </div>
-              <canvas id="macroChart" height="220"></canvas>
+              <p class="muted" id="overviewCoverageCopy">
+                Sync your wearable + meals to reveal how many days reported data.
+              </p>
+              <div class="coverage-grid" id="overviewCoverageGrid"></div>
             </article>
+          </section>
 
-            <article class="glass chart-card span-2">
-              <div class="card-header">
-                <p class="eyebrow">Readiness arc</p>
-                <h3>Stress vs Recovery</h3>
+          <section class="overview-charts">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Trend boards</p>
+                <h3>Movement, fuel, and recovery curves</h3>
               </div>
-              <canvas id="readinessChart" height="240"></canvas>
-            </article>
-          </div>
+              <p class="muted small-text">
+                Charts refresh each time telemetry, macros, or Strava sessions sync.
+              </p>
+            </div>
+            <div class="chart-grid">
+              <article class="glass chart-card">
+                <div class="card-header">
+                  <p class="eyebrow">Movement Load</p>
+                  <h3>Steps vs Calories</h3>
+                </div>
+                <canvas id="activityChart" height="220"></canvas>
+              </article>
 
-          <div class="insight-grid">
-            <article class="glass insight-card">
-              <div class="card-header">
-                <p class="eyebrow">Hydration</p>
-                <h3>Fluid Rhythm</h3>
+              <article class="glass chart-card">
+                <div class="card-header">
+                  <p class="eyebrow">Fuel Split</p>
+                  <h3>Macro Balance</h3>
+                </div>
+                <canvas id="macroChart" height="220"></canvas>
+              </article>
+
+            </div>
+          </section>
+
+          <section class="overview-insights">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Signals table</p>
+                <h3>Hydration, heart rate, and sleep stagings</h3>
               </div>
-              <ul id="hydrationList"></ul>
-            </article>
-            <article class="glass insight-card">
-              <div class="card-header">
-                <p class="eyebrow">Heart Rate</p>
-                <h3>Zone Minutes</h3>
-              </div>
-              <ul id="heartRateList"></ul>
-            </article>
-            <article class="glass insight-card">
-              <div class="card-header">
-                <p class="eyebrow">Sleep</p>
-                <h3>Stage Composition</h3>
-              </div>
-              <div id="sleepSummary"></div>
-            </article>
-          </div>
+              <p class="muted small-text">Entries stay scoped to the athlete you’re viewing.</p>
+            </div>
+            <div class="insight-grid">
+              <article class="glass insight-card">
+                <div class="card-header">
+                  <p class="eyebrow">Hydration</p>
+                  <h3>Fluid Rhythm</h3>
+                </div>
+                <ul id="hydrationList"></ul>
+              </article>
+              <article class="glass insight-card">
+                <div class="card-header">
+                  <p class="eyebrow">Heart Rate</p>
+                  <h3>Zone Minutes</h3>
+                </div>
+                <ul id="heartRateList"></ul>
+              </article>
+              <article class="glass insight-card">
+                <div class="card-header">
+                  <p class="eyebrow">Sleep</p>
+                  <h3>Stage Composition</h3>
+                </div>
+                <div id="sleepSummary"></div>
+              </article>
+              <article class="glass insight-card overview-focus-card">
+                <div class="card-header">
+                  <p class="eyebrow">Focus Cue</p>
+                  <h3 id="overviewFocusTitle">Sync to plan</h3>
+                </div>
+                <p class="muted" id="overviewFocusCopy">
+                  Once sleep, steps, or macros land we’ll highlight the biggest opportunity for today.
+                </p>
+              </article>
+            </div>
+          </section>
         </div>
 
         <div class="subpage hidden" data-subpage="activity">
@@ -421,17 +495,6 @@
           </div>
         </div>
 
-        <div class="subpage hidden" data-subpage="roster">
-          <section class="glass placeholder-panel">
-            <p class="eyebrow">Team Roster</p>
-            <h3>Manage athletes on mobile</h3>
-            <p class="muted">
-              Roster management is currently optimized for the mobile experience. Use the app to add
-              or remove athletes and monitor shared readiness. A web-first roster view is on the way.
-            </p>
-          </section>
-        </div>
-
         <div class="subpage hidden" data-subpage="sessions">
           <article class="glass session-card">
             <div class="card-header">
@@ -464,6 +527,19 @@
                 <span>hrs last night</span>
               </div>
               <p class="muted small-text" id="sleepGoalCopy">Set a sleep goal to start tracking.</p>
+              <div class="sleep-goal-input">
+                <label for="sleepGoalInput" class="muted small-text">
+                  Daily goal (hrs)
+                  <input
+                    type="number"
+                    id="sleepGoalInput"
+                    min="4"
+                    max="12"
+                    step="0.1"
+                    value="8" />
+                </label>
+                <p class="muted tiny-text">Defaults to 8 hrs when no goal is set.</p>
+              </div>
               <ul class="sleep-hero-list">
                 <li>
                   <p class="label">Trend</p>
@@ -666,13 +742,6 @@
               </div>
             </article>
 
-            <article class="glass hydration-card">
-              <div class="card-header">
-                <p class="eyebrow">Hydration</p>
-                <h3>Fluid Status</h3>
-              </div>
-              <div class="hydration-stats" id="hydrationStats"></div>
-            </article>
           </div>
 
           <div class="nutrition-grid">

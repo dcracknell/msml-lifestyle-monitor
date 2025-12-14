@@ -242,10 +242,14 @@ const replaceSplitsTransaction = db.transaction((sessionId, splits) => {
 });
 
 function getSplitsForSessions(sessionIds) {
-  if (!sessionIds.length) {
+  const normalizedIds = (sessionIds || [])
+    .map((value) => Number.parseInt(value, 10))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  if (!normalizedIds.length) {
     return {};
   }
-  const placeholders = sessionIds.map(() => '?').join(',');
+  const placeholders = normalizedIds.map(() => '?').join(',');
   const rows = db
     .prepare(
       `SELECT session_id AS sessionId,
@@ -259,7 +263,7 @@ function getSplitsForSessions(sessionIds) {
         WHERE session_id IN (${placeholders})
         ORDER BY session_id ASC, split_index ASC`
     )
-    .all(...sessionIds);
+    .all(...normalizedIds);
 
   return rows.reduce((acc, row) => {
     if (!acc[row.sessionId]) {

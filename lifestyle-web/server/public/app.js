@@ -69,7 +69,144 @@ const state = {
     goalCalories: null,
     heightCm: resolveStoredHeight(null),
   },
+  overview: {
+    summary: null,
+    timeline: [],
+    sleepStages: null,
+    goals: {
+      steps: null,
+      calories: null,
+      sleep: 8,
+    },
+  },
 };
+
+const DEMO_ACTIVITY = {
+  summary: {
+    weeklyDistanceKm: 52.4,
+    weeklyDurationMin: 392,
+    avgPaceSeconds: 298,
+    longestRunKm: 21.1,
+    longestRunName: 'Long progression',
+    trainingLoad: 325,
+    vo2maxEstimate: 56.3,
+  },
+  sessions: [
+    {
+      id: 9101,
+      startTime: '2024-03-18T07:10:00Z',
+      sportType: 'Run',
+      name: 'Tempo pyramid',
+      distance: 14000,
+      averagePace: 280,
+      averageHr: 162,
+      trainingLoad: 85,
+    },
+    {
+      id: 9102,
+      startTime: '2024-03-17T18:00:00Z',
+      sportType: 'Run',
+      name: 'Mobility shakeout',
+      distance: 6000,
+      averagePace: 325,
+      averageHr: 144,
+      trainingLoad: 38,
+    },
+    {
+      id: 9103,
+      startTime: '2024-03-16T08:30:00Z',
+      sportType: 'Run',
+      name: 'Long progression',
+      distance: 24000,
+      averagePace: 300,
+      averageHr: 153,
+      trainingLoad: 118,
+    },
+  ],
+  splits: {
+    9101: [
+      { splitIndex: 1, distance: 2000, pace: 280, heartRate: 158, elevation: 8 },
+      { splitIndex: 2, distance: 3000, pace: 272, heartRate: 164, elevation: 16 },
+      { splitIndex: 3, distance: 4000, pace: 268, heartRate: 168, elevation: 22 },
+    ],
+    9103: [
+      { splitIndex: 1, distance: 5000, pace: 310, heartRate: 146, elevation: 18 },
+      { splitIndex: 2, distance: 5000, pace: 305, heartRate: 149, elevation: 22 },
+      { splitIndex: 3, distance: 5000, pace: 295, heartRate: 152, elevation: 30 },
+      { splitIndex: 4, distance: 4500, pace: 285, heartRate: 156, elevation: 28 },
+      { splitIndex: 5, distance: 4500, pace: 278, heartRate: 160, elevation: 35 },
+    ],
+  },
+  bestEfforts: [
+    { label: '5K benchmark', distance: 5000, paceSeconds: 260, startTime: '2024-03-10T09:00:00Z' },
+    { label: 'Half marathon', distance: 21097, paceSeconds: 295, startTime: '2024-03-02T07:30:00Z' },
+  ],
+  charts: {
+    mileageTrend: [
+      { startTime: '2024-03-12T00:00:00Z', distanceKm: 7.2, movingMinutes: 38 },
+      { startTime: '2024-03-13T00:00:00Z', distanceKm: 9.8, movingMinutes: 49 },
+      { startTime: '2024-03-14T00:00:00Z', distanceKm: 11.4, movingMinutes: 55 },
+      { startTime: '2024-03-15T00:00:00Z', distanceKm: 8.6, movingMinutes: 43 },
+      { startTime: '2024-03-16T00:00:00Z', distanceKm: 24, movingMinutes: 118 },
+      { startTime: '2024-03-17T00:00:00Z', distanceKm: 6, movingMinutes: 32 },
+      { startTime: '2024-03-18T00:00:00Z', distanceKm: 14, movingMinutes: 68 },
+    ],
+    heartRatePace: [
+      { label: 'Steady state', paceSeconds: 300, heartRate: 150 },
+      { label: 'Tempo', paceSeconds: 278, heartRate: 164 },
+      { label: 'Intervals', paceSeconds: 255, heartRate: 172 },
+      { label: 'Long run', paceSeconds: 315, heartRate: 142 },
+    ],
+  },
+  strava: {
+    connected: false,
+    enabled: true,
+    configured: true,
+    requiresSetup: false,
+    usingServerDefaults: true,
+    canManage: false,
+  },
+};
+
+const DEMO_VITALS = {
+  latest: {
+    restingHr: 48,
+    hrvScore: 108,
+    spo2: 98,
+    stressScore: 23,
+    systolic: 118,
+    diastolic: 70,
+    glucose: 92,
+  },
+  timeline: [
+    { date: '2024-03-12', restingHr: 51, hrvScore: 102, spo2: 97, stressScore: 24 },
+    { date: '2024-03-13', restingHr: 50, hrvScore: 104, spo2: 98, stressScore: 23 },
+    { date: '2024-03-14', restingHr: 49, hrvScore: 106, spo2: 97, stressScore: 22 },
+    { date: '2024-03-15', restingHr: 48, hrvScore: 109, spo2: 98, stressScore: 21 },
+    { date: '2024-03-16', restingHr: 47, hrvScore: 111, spo2: 99, stressScore: 22 },
+  ],
+  stats: {
+    window: 7,
+    restingHrDelta: -2,
+    restingHrAvg: 50,
+    hrvAvg: 105,
+    spo2Avg: 97,
+    stressAvg: 24,
+    systolicAvg: 119,
+    diastolicAvg: 71,
+    glucoseAvg: 94,
+  },
+};
+
+const DEMO_SESSIONS = [
+  { date: '2024-03-18', steps: 13540, calories: 2375 },
+  { date: '2024-03-17', steps: 11820, calories: 2104 },
+  { date: '2024-03-16', steps: 20110, calories: 2986 },
+  { date: '2024-03-15', steps: 10240, calories: 1840 },
+  { date: '2024-03-14', steps: 8900, calories: 1720 },
+];
+
+const cloneDemoData = (value) => JSON.parse(JSON.stringify(value));
 
 const QUICK_SUGGESTIONS = [
   {
@@ -340,10 +477,20 @@ const activityLongestRun = document.getElementById('activityLongestRun');
 const activityLongestRunLabel = document.getElementById('activityLongestRunLabel');
 const sleepHoursPrimary = document.getElementById('sleepHoursPrimary');
 const sleepGoalCopy = document.getElementById('sleepGoalCopy');
+const sleepGoalInput = document.getElementById('sleepGoalInput');
 const sleepTrendCopy = document.getElementById('sleepTrendCopy');
 const sleepReadinessCopy = document.getElementById('sleepReadinessCopy');
 const sleepHeroHint = document.getElementById('sleepHeroHint');
 const sleepStageBreakdown = document.getElementById('sleepStageBreakdown');
+const overviewSyncCopy = document.getElementById('overviewSyncCopy');
+const overviewSyncReadiness = document.getElementById('overviewSyncReadiness');
+const overviewSyncReadinessNote = document.getElementById('overviewSyncReadinessNote');
+const overviewSyncSteps = document.getElementById('overviewSyncSteps');
+const overviewSyncStepsNote = document.getElementById('overviewSyncStepsNote');
+const overviewSyncCalories = document.getElementById('overviewSyncCalories');
+const overviewSyncCaloriesNote = document.getElementById('overviewSyncCaloriesNote');
+const overviewSyncSleep = document.getElementById('overviewSyncSleep');
+const overviewSyncSleepNote = document.getElementById('overviewSyncSleepNote');
 
 function decodeBase64Sample(value) {
   if (!value || typeof value !== 'string') {
@@ -743,6 +890,39 @@ function hideEmptyState(container) {
 function renderListPlaceholder(listElement, message) {
   if (!listElement) return;
   listElement.innerHTML = `<li class="empty-row">${message}</li>`;
+  enforceScrollableList(listElement);
+}
+
+const DEFAULT_LIST_LIMIT = 5;
+
+function enforceScrollableList(listElement, options = {}) {
+  if (!listElement) return;
+  const limit =
+    Number.isFinite(options.limit) && options.limit > 0 ? Math.floor(options.limit) : DEFAULT_LIST_LIMIT;
+  const items = Array.from(listElement.children);
+  if (items.length <= limit) {
+    listElement.classList.remove('list-scrollable');
+    listElement.style.removeProperty('--list-scroll-max-height');
+    return;
+  }
+
+  const applyClamp = () => {
+    const sample = Array.from(listElement.children).slice(0, limit);
+    const totalHeight = sample.reduce((sum, item) => sum + item.getBoundingClientRect().height, 0);
+    const hasWindow = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function';
+    const computed = hasWindow ? window.getComputedStyle(listElement) : null;
+    const gapValue = computed ? Number.parseFloat(computed.rowGap || computed.gap || 0) : 0;
+    const gapTotal = gapValue > 0 ? gapValue * Math.max(sample.length - 1, 0) : 0;
+    const maxHeight = Math.max(totalHeight + gapTotal, 1);
+    listElement.style.setProperty('--list-scroll-max-height', `${maxHeight}px`);
+    listElement.classList.add('list-scrollable');
+  };
+
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(applyClamp);
+  } else {
+    setTimeout(applyClamp, 0);
+  }
 }
 
 function showChartMessage(canvasId, message) {
@@ -961,10 +1141,15 @@ function updateNutritionLogSummary(allEntries = [], filteredEntries = []) {
         ? 'Foods'
         : 'All intake';
   const countLabel = `${filteredEntries.length} item${filteredEntries.length === 1 ? '' : 's'}`;
-  const macroLabel = `${totals.protein}g P / ${totals.carbs}g C / ${totals.fats}g F`;
-  nutritionLogSummary.textContent = `${label}: ${countLabel} • ${formatNumber(
-    totals.calories
-  )} kcal • ${macroLabel}`;
+  const segments = [`${label}: ${countLabel}`, `${formatNumber(totals.calories)} kcal`];
+  const macrosAvailable = totals.protein > 0 || totals.carbs > 0 || totals.fats > 0;
+  if (macrosAvailable) {
+    const macroLabel = `${Math.round(totals.protein)}g P / ${Math.round(totals.carbs)}g C / ${Math.round(
+      totals.fats
+    )}g F`;
+    segments.push(macroLabel);
+  }
+  nutritionLogSummary.textContent = segments.join(' • ');
 }
 
 function renderNutritionEntries(entries = []) {
@@ -1067,6 +1252,7 @@ function renderNutritionEntries(entries = []) {
   });
 
   nutritionEntriesList.appendChild(fragment);
+  enforceScrollableList(nutritionEntriesList, { limit: DEFAULT_LIST_LIMIT });
   updateNutritionLogSummary(entries, filteredEntries);
 
   const shouldScrollToTop = state.nutritionLogShouldScrollToTop;
@@ -1115,9 +1301,11 @@ function renderNutritionTrend(days = []) {
   if (!days.length) {
     nutritionMonthList.innerHTML =
       '<li class="empty-row">No intake logged in the last 30 days.</li>';
+    enforceScrollableList(nutritionMonthList);
     return;
   }
-  days.slice(0, 14).forEach((day) => {
+  const chronological = getChronologicalTrend(days).reverse();
+  chronological.forEach((day) => {
     const percentLabel =
       typeof day.percent === 'number' ? `${day.percent}% of goal` : 'Goal not set';
     const targetLabel = day.targetCalories ? ` / ${formatNumber(day.targetCalories)} kcal` : '';
@@ -1133,6 +1321,7 @@ function renderNutritionTrend(days = []) {
     `;
     nutritionMonthList.appendChild(li);
   });
+  enforceScrollableList(nutritionMonthList);
 }
 
 function renderNutritionTrendChart(days = []) {
@@ -1474,6 +1663,7 @@ function renderNutritionDashboard(data = {}) {
   renderNutritionInsights(data);
   syncMacroTargetFields(data.goals);
   updateNutritionPreview();
+  rerenderOverviewFromState();
 }
 
 function renderWeightDashboard(data = {}) {
@@ -1627,6 +1817,7 @@ function renderWeightLog(entries = []) {
     `;
     weightLogList.appendChild(li);
   });
+  enforceScrollableList(weightLogList);
 }
 
 function renderWeightChart(timeline = [], goalCalories) {
@@ -2639,8 +2830,8 @@ function handleAmountInputChange() {
 
 const pageCopy = {
   overview: {
-    title: 'Daily Readiness + Fuel',
-    subtitle: 'Live snapshot of movement, fuel, and recovery.',
+    title: 'Daily Dashboard',
+    subtitle: 'Live snapshot of readiness, movement, and fuel.',
   },
   activity: {
     title: 'Activity Tracking',
@@ -2649,10 +2840,6 @@ const pageCopy = {
   sessions: {
     title: 'Session Planner',
     subtitle: 'Blend intensity and skill work with guardrails from your data.',
-  },
-  roster: {
-    title: 'Team Roster',
-    subtitle: 'Manage athlete access from the mobile experience today.',
   },
   readiness: {
     title: 'Readiness Signals',
@@ -3487,6 +3674,7 @@ function renderCoachPanel() {
     `;
     coachRanking.appendChild(li);
   });
+  enforceScrollableList(coachRanking);
 }
 
 async function fetchRoster() {
@@ -3507,6 +3695,7 @@ async function fetchRoster() {
       coachPanel.classList.add('hidden');
       if (coachRanking) {
         coachRanking.innerHTML = '';
+        enforceScrollableList(coachRanking);
       }
       if (athleteSwitcher) {
         athleteSwitcher.innerHTML = '<option value="self">My dashboard</option>';
@@ -3659,6 +3848,7 @@ function resetToAuth(message = '') {
   }
   if (coachRanking) {
     coachRanking.innerHTML = '';
+    enforceScrollableList(coachRanking);
   }
   if (athleteSwitcher) {
     athleteSwitcher.innerHTML = '<option value="self">My dashboard</option>';
@@ -3755,6 +3945,7 @@ stravaConnectButton?.addEventListener('click', handleStravaConnect);
 stravaSyncButton?.addEventListener('click', handleStravaSync);
 stravaDisconnectButton?.addEventListener('click', handleStravaDisconnect);
 window.addEventListener('message', handleStravaMessage);
+sleepGoalInput?.addEventListener('change', handleSleepGoalInputChange);
 const handleRankingSelection = (target) => {
   if (!target) return;
   const selectedId = target.dataset.athleteId;
@@ -4460,10 +4651,6 @@ async function loadMetrics(subjectOverrideId) {
     updateSubjectContext(state.viewing);
   }
   state.hydrationEntries = Array.isArray(metrics.hydration) ? metrics.hydration.slice() : [];
-  renderSummary(metrics.summary);
-  renderHydration(state.hydrationEntries);
-  renderHeartRate(metrics.heartRateZones);
-  renderSleepOverview(metrics.sleepStages);
   const resolvedGoalSleep =
     metrics.subject?.goal_sleep ??
     state.subject?.goal_sleep ??
@@ -4471,12 +4658,51 @@ async function loadMetrics(subjectOverrideId) {
     state.user?.goal_sleep ??
     null;
   const numericGoalSleep = Number(resolvedGoalSleep);
-  const goalSleepValue = Number.isFinite(numericGoalSleep) ? numericGoalSleep : null;
+  const activeSleepGoal = Number.isFinite(numericGoalSleep) ? numericGoalSleep : 8;
+  if (sleepGoalInput) {
+    sleepGoalInput.value = activeSleepGoal.toFixed(1);
+  }
+  const resolvedGoalSteps =
+    metrics.subject?.goal_steps ??
+    state.subject?.goal_steps ??
+    state.viewing?.goal_steps ??
+    state.user?.goal_steps ??
+    null;
+  const resolvedGoalCalories =
+    metrics.subject?.goal_calories ??
+    state.subject?.goal_calories ??
+    state.viewing?.goal_calories ??
+    state.user?.goal_calories ??
+    null;
+  const goalStepsValue = Number.isFinite(Number(resolvedGoalSteps))
+    ? Number(resolvedGoalSteps)
+    : null;
+  const goalCaloriesValue = Number.isFinite(Number(resolvedGoalCalories))
+    ? Number(resolvedGoalCalories)
+    : null;
+
+  state.overview.summary = metrics.summary || null;
+  state.overview.timeline = Array.isArray(metrics.timeline) ? metrics.timeline : [];
+  state.overview.sleepStages = metrics.sleepStages || null;
+  state.overview.goals = {
+    steps: goalStepsValue,
+    calories: goalCaloriesValue,
+    sleep: activeSleepGoal,
+  };
+
+  renderSummary(state.overview.summary, {
+    goalSteps: goalStepsValue,
+    goalCalories: goalCaloriesValue,
+    goalSleep: activeSleepGoal,
+  });
+  renderHydration(state.hydrationEntries);
+  renderHeartRate(metrics.heartRateZones);
+  renderSleepOverview(metrics.sleepStages);
   renderSleepDetails({
-    summary: metrics.summary,
-    timeline: metrics.timeline,
-    sleepStages: metrics.sleepStages,
-    goalSleep: goalSleepValue,
+    summary: state.overview.summary,
+    timeline: state.overview.timeline,
+    sleepStages: state.overview.sleepStages,
+    goalSleep: activeSleepGoal,
   });
   renderSessions(metrics.timeline);
   renderNutritionDetails(metrics.macros, state.hydrationEntries);
@@ -4550,6 +4776,40 @@ async function loadNutrition(subjectOverrideId, options = {}) {
   }
 }
 
+function applyDemoActivityData(feedbackMessage) {
+  const demo = cloneDemoData(DEMO_ACTIVITY);
+  state.activity.summary = demo.summary || null;
+  state.activity.sessions = Array.isArray(demo.sessions) ? demo.sessions.slice() : [];
+  state.activity.splits = demo.splits || {};
+  state.activity.bestEfforts = Array.isArray(demo.bestEfforts) ? demo.bestEfforts.slice() : [];
+  state.activity.strava = {
+    ...(state.activity.strava || {}),
+    ...(demo.strava || {}),
+  };
+  state.activity.subjectId = state.viewing?.id ?? state.user?.id ?? null;
+  state.activity.selectedSessionId = state.activity.sessions[0]?.id || null;
+  renderActivitySummary(state.activity.summary);
+  renderActivitySessions(state.activity.sessions);
+  renderActivitySplits();
+  renderActivityBestEfforts(state.activity.bestEfforts);
+  renderActivityCharts(demo.charts || {});
+  renderStravaPanel(state.activity.strava || {});
+  if (feedbackMessage && stravaFeedback) {
+    stravaFeedback.textContent = feedbackMessage;
+  }
+}
+
+function applyDemoVitalsData(feedbackMessage) {
+  const demo = cloneDemoData(DEMO_VITALS);
+  state.vitals.latest = demo.latest || null;
+  state.vitals.timeline = Array.isArray(demo.timeline) ? demo.timeline.slice() : [];
+  state.vitals.stats = demo.stats || null;
+  renderVitalsDashboard(state.vitals);
+  if (feedbackMessage && vitalsFeedback) {
+    vitalsFeedback.textContent = feedbackMessage;
+  }
+}
+
 async function loadActivity(subjectOverrideId) {
   if (!state.user || !state.token) return;
   const targetId = subjectOverrideId ?? state.viewing?.id ?? state.user.id;
@@ -4575,7 +4835,9 @@ async function loadActivity(subjectOverrideId) {
               ? 'Access revoked for that athlete.'
               : 'That athlete is no longer available.';
         }
-      } else if (stravaFeedback && isSelfView) {
+      } else if (isSelfView) {
+        applyDemoActivityData('Showing demo activity data while your tracker syncs.');
+      } else if (stravaFeedback) {
         stravaFeedback.textContent = 'Unable to load activity data right now.';
       }
       return;
@@ -4596,14 +4858,26 @@ async function loadActivity(subjectOverrideId) {
     if (!hasSelection) {
       state.activity.selectedSessionId = state.activity.sessions[0]?.id || null;
     }
+    const charts = payload.charts || {};
+    const hasActivityData =
+      Boolean(state.activity.summary) ||
+      state.activity.sessions.length > 0 ||
+      (Array.isArray(charts.mileageTrend) && charts.mileageTrend.length > 0) ||
+      (Array.isArray(charts.heartRatePace) && charts.heartRatePace.length > 0);
+    if (!hasActivityData && isSelfView) {
+      applyDemoActivityData('Showing demo activity data while your tracker syncs.');
+      return;
+    }
     renderActivitySummary(state.activity.summary);
     renderActivitySessions(state.activity.sessions);
     renderActivitySplits();
     renderActivityBestEfforts(state.activity.bestEfforts);
-    renderActivityCharts(payload.charts || {});
+    renderActivityCharts(charts);
     renderStravaPanel(state.activity.strava || {});
   } catch (error) {
-    if (stravaFeedback && isSelfView) {
+    if (isSelfView) {
+      applyDemoActivityData('Showing demo activity data while your tracker syncs.');
+    } else if (stravaFeedback) {
       stravaFeedback.textContent = 'Unable to load activity data right now.';
     }
   }
@@ -4634,7 +4908,9 @@ async function loadVitals(subjectOverrideId) {
               ? 'Access revoked for that athlete.'
               : 'That athlete is no longer available.';
         }
-      } else if (vitalsFeedback && isSelfView) {
+      } else if (isSelfView) {
+        applyDemoVitalsData('Showing demo vitals data while wearables sync.');
+      } else if (vitalsFeedback) {
         vitalsFeedback.textContent = 'Unable to load vitals right now.';
       }
       return;
@@ -4644,12 +4920,22 @@ async function loadVitals(subjectOverrideId) {
     state.vitals.latest = payload.latest || null;
     state.vitals.timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
     state.vitals.stats = payload.stats || null;
+    const hasVitalsData =
+      Boolean(state.vitals.latest) ||
+      (Array.isArray(state.vitals.timeline) && state.vitals.timeline.length > 0) ||
+      Boolean(state.vitals.stats);
+    if (!hasVitalsData && isSelfView) {
+      applyDemoVitalsData('Showing demo vitals data while wearables sync.');
+      return;
+    }
     renderVitalsDashboard(state.vitals);
     if (vitalsFeedback) {
       vitalsFeedback.textContent = '';
     }
   } catch (error) {
-    if (vitalsFeedback && isSelfView) {
+    if (isSelfView) {
+      applyDemoVitalsData('Showing demo vitals data while wearables sync.');
+    } else if (vitalsFeedback) {
       vitalsFeedback.textContent = 'Unable to load vitals right now.';
     }
   }
@@ -4931,39 +5217,493 @@ function personalizeDashboard(user) {
   profileCard.appendChild(info);
 }
 
-function renderSummary(summary) {
-  const summaryGrid = document.getElementById('summaryGrid');
-  if (!summary) {
-    document.getElementById('stepsValue').textContent = '—';
-    document.getElementById('caloriesValue').textContent = '—';
-    document.getElementById('sleepValue').textContent = '—';
-    document.getElementById('readinessValue').textContent = '—';
+function renderSummary(summary, options = {}) {
+  const timeline = Array.isArray(state.overview?.timeline) ? state.overview.timeline : [];
+  const syncCopyEl = overviewSyncCopy;
+  const syncReadinessEl = overviewSyncReadiness;
+  const syncReadinessNoteEl = overviewSyncReadinessNote;
+  const syncStepsEl = overviewSyncSteps;
+  const syncStepsNoteEl = overviewSyncStepsNote;
+  const syncCaloriesEl = overviewSyncCalories;
+  const syncCaloriesNoteEl = overviewSyncCaloriesNote;
+  const syncSleepEl = overviewSyncSleep;
+  const syncSleepNoteEl = overviewSyncSleepNote;
+  const momentumTitleEl = document.getElementById('overviewMomentumTitle');
+  const momentumCopyEl = document.getElementById('overviewMomentumCopy');
+  const momentumFootEl = document.getElementById('overviewMomentumFoot');
+  const focusTitleEl = document.getElementById('overviewFocusTitle');
+  const focusCopyEl = document.getElementById('overviewFocusCopy');
+  const goalSteps = Number.isFinite(options.goalSteps) ? options.goalSteps : null;
+  const goalCalories = Number.isFinite(options.goalCalories) ? options.goalCalories : null;
+  const goalSleep = Number.isFinite(options.goalSleep) ? options.goalSleep : null;
 
-    document.getElementById('stepsTrend').textContent = 'No data yet';
-    document.getElementById('caloriesTrend').textContent = 'No data yet';
-    document.getElementById('sleepTrend').textContent = 'No data yet';
-    document.getElementById('readinessTrend').textContent = 'No data yet';
-    showEmptyState(summaryGrid, 'Daily summary will appear once data syncs.');
+  const setText = (el, text) => {
+    if (el) {
+      el.textContent = text;
+    }
+  };
+
+  if (!summary) {
+    updateOverviewGoalList(null);
+    renderOverviewCoverage(timeline);
+
+    setText(
+      syncCopyEl,
+      'Sync your wearable or log nutrition + sleep to unlock personalized coaching.'
+    );
+    setText(syncReadinessEl, '—');
+    setText(syncReadinessNoteEl, 'Awaiting readiness data.');
+    setText(syncStepsEl, '—');
+    setText(
+      syncStepsNoteEl,
+      goalSteps ? 'No steps logged yet.' : 'Set a steps goal to unlock pacing tips.'
+    );
+    setText(syncCaloriesEl, '—');
+    setText(
+      syncCaloriesNoteEl,
+      goalCalories ? 'No calories logged yet.' : 'Set a calorie goal to track fuel gaps.'
+    );
+    setText(syncSleepEl, '—');
+    setText(
+      syncSleepNoteEl,
+      goalSleep ? 'No sleep logged yet.' : 'Set a sleep target to coach recovery rhythm.'
+    );
+
+    if (momentumTitleEl) {
+      momentumTitleEl.textContent = 'Waiting for your next sync';
+    }
+    if (momentumCopyEl) {
+      momentumCopyEl.textContent =
+        'Once your day syncs we translate readiness, steps, and sleep into a single focus signal.';
+    }
+    if (momentumFootEl) {
+      momentumFootEl.textContent =
+        'Tip: Link Strava or keep the wearable app open so new sessions land faster.';
+    }
+    if (focusTitleEl) {
+      focusTitleEl.textContent = 'Sync to plan';
+    }
+    if (focusCopyEl) {
+      focusCopyEl.textContent = 'Log sleep, steps, and fuel to surface the biggest opportunity.';
+    }
     return;
   }
 
-  hideEmptyState(summaryGrid);
-  document.getElementById('stepsValue').textContent = `${formatNumber(summary.steps)} steps`;
-  document.getElementById('caloriesValue').textContent = `${formatNumber(summary.calories)} kcal`;
-  document.getElementById('sleepValue').textContent = `${summary.sleepHours.toFixed(1)} hrs`;
-  document.getElementById('readinessValue').textContent = `${summary.readiness}%`;
+  const stepsValue = Number.isFinite(summary.steps) ? summary.steps : null;
+  const readiness = Number.isFinite(summary.readiness) ? summary.readiness : null;
+  const sleepValue = Number.isFinite(summary.sleepHours) ? summary.sleepHours : null;
+  const nutritionTotals = state.nutrition?.dailyTotals || null;
+  const nutritionGoalCaloriesRaw = Number(state.nutrition?.goals?.calories);
+  const nutritionGoalCalories = Number.isFinite(nutritionGoalCaloriesRaw)
+    ? nutritionGoalCaloriesRaw
+    : null;
+  const caloriesGoalValue = Number.isFinite(nutritionGoalCalories)
+    ? nutritionGoalCalories
+    : goalCalories;
+  const activeCaloriesGoal = Number.isFinite(caloriesGoalValue) ? caloriesGoalValue : null;
+  const nutritionCaloriesRaw = Number(nutritionTotals?.calories);
+  const caloriesValue = Number.isFinite(nutritionCaloriesRaw)
+    ? nutritionCaloriesRaw
+    : Number.isFinite(summary.calories)
+      ? summary.calories
+      : null;
+  const activeCaloriesValue = Number.isFinite(caloriesValue) ? caloriesValue : null;
 
-  document.getElementById('stepsTrend').textContent = 'Pacing above goal';
-  document.getElementById('caloriesTrend').textContent = 'Fuel match optimal';
-  document.getElementById('sleepTrend').textContent = 'Sleep rhythm steady';
-  document.getElementById('readinessTrend').textContent = 'Recovery trending up';
+  const stepsDiff =
+    Number.isFinite(goalSteps) && Number.isFinite(stepsValue) ? stepsValue - goalSteps : null;
+  const sleepDiff =
+    Number.isFinite(goalSleep) && Number.isFinite(sleepValue) ? sleepValue - goalSleep : null;
+  const caloriesDiff =
+    Number.isFinite(activeCaloriesGoal) && Number.isFinite(activeCaloriesValue)
+      ? activeCaloriesValue - activeCaloriesGoal
+      : null;
+
+  const stepsTrendText =
+    stepsDiff === null
+      ? 'Log steps to compare vs. goal.'
+      : stepsDiff >= 0
+        ? `Ahead of ${formatNumber(goalSteps)} goal`
+        : `${formatNumber(Math.abs(stepsDiff))} steps below target`;
+  const caloriesTrendText =
+    caloriesDiff === null
+      ? 'Log meals to compare vs. goal.'
+      : Math.abs(caloriesDiff) <= activeCaloriesGoal * 0.05
+        ? 'Fuel on target.'
+        : caloriesDiff > 0
+          ? `${formatNumber(caloriesDiff)} kcal above target`
+          : `${formatNumber(Math.abs(caloriesDiff))} kcal under target`;
+  const sleepTrendText =
+    sleepDiff === null
+      ? 'Log sleep to compare vs. goal.'
+      : sleepDiff >= 0
+        ? `${sleepDiff.toFixed(1)} hrs above target`
+        : `${Math.abs(sleepDiff).toFixed(1)} hrs below target`;
+  const readinessTrendText =
+    readiness !== null
+      ? readiness >= 85
+        ? 'Recovery trending up.'
+        : readiness >= 70
+          ? 'Holding steady.'
+          : 'Recovery dip detected.'
+      : 'Awaiting readiness data.';
+
+  updateOverviewGoalList({
+    steps: { value: stepsValue, goal: goalSteps, diff: stepsDiff },
+    calories: { value: activeCaloriesValue, goal: activeCaloriesGoal, diff: caloriesDiff },
+    sleep: { value: sleepValue, goal: goalSleep, diff: sleepDiff },
+  });
+
+  const syncSegments = [];
+  if (readiness !== null) {
+    syncSegments.push(`Readiness ${readiness}%`);
+  }
+  if (Number.isFinite(stepsValue)) {
+    syncSegments.push(`${formatNumber(stepsValue)} steps`);
+  }
+  if (Number.isFinite(activeCaloriesValue)) {
+    syncSegments.push(`${formatNumber(activeCaloriesValue)} kcal`);
+  }
+  if (Number.isFinite(sleepValue)) {
+    syncSegments.push(`${sleepValue.toFixed(1)} hrs sleep`);
+  }
+
+  const syncHint = (() => {
+    if (Number.isFinite(goalSteps) && Number.isFinite(stepsValue) && stepsValue < goalSteps) {
+      return `${formatNumber(goalSteps - stepsValue)} steps remaining today.`;
+    }
+    if (
+      Number.isFinite(activeCaloriesGoal) &&
+      Number.isFinite(activeCaloriesValue) &&
+      activeCaloriesValue < activeCaloriesGoal
+    ) {
+      return `${formatNumber(activeCaloriesGoal - activeCaloriesValue)} kcal left to fuel.`;
+    }
+    if (Number.isFinite(goalSleep) && Number.isFinite(sleepValue) && sleepValue < goalSleep) {
+      return `${Math.max(goalSleep - sleepValue, 0).toFixed(1)} hrs to bedtime goal.`;
+    }
+    if (readiness !== null) {
+      return readiness >= 85
+        ? 'Green day — layer in intensity.'
+        : readiness >= 70
+          ? 'Hold steady and protect fueling.'
+          : 'Recovery flag — prioritize sleep + hydration.';
+    }
+    return 'Sync steps, macros, and sleep to build trends.';
+  })();
+
+  if (syncCopyEl) {
+    syncCopyEl.textContent =
+      syncHint || syncSegments.join(' • ') || 'Daily metrics update in real time as data syncs.';
+  }
+  setText(syncReadinessEl, readiness !== null ? `${readiness}%` : '—');
+  setText(syncReadinessNoteEl, readinessTrendText);
+  setText(
+    syncStepsEl,
+    Number.isFinite(stepsValue) ? `${formatNumber(stepsValue)} steps` : '—'
+  );
+  setText(syncStepsNoteEl, stepsTrendText);
+  setText(
+    syncCaloriesEl,
+    Number.isFinite(activeCaloriesValue) ? `${formatNumber(activeCaloriesValue)} kcal` : '—'
+  );
+  setText(syncCaloriesNoteEl, caloriesTrendText);
+  setText(
+    syncSleepEl,
+    Number.isFinite(sleepValue) ? `${sleepValue.toFixed(1)} hrs` : '—'
+  );
+  setText(syncSleepNoteEl, sleepTrendText);
+
+  if (momentumTitleEl || momentumCopyEl || momentumFootEl) {
+    let momentumTitle = 'Daily pulse';
+    let momentumCopy =
+      'Keep blending steps, sleep, and fueling — we’ll highlight trends as they land.';
+    let momentumFoot = 'Share a short sync note once new data arrives.';
+    if (readiness !== null) {
+      if (readiness >= 85) {
+        momentumTitle = 'Peak day signal';
+        momentumCopy =
+          'Systems aligned for intensity. Warm thoroughly, then attack the main set with intent.';
+        momentumFoot = "Log how the effort felt so tomorrow's load can be dialed in.";
+      } else if (readiness >= 70) {
+        momentumTitle = 'Maintain + refine';
+        momentumCopy =
+          'You’re balanced. Keep macros tight and sprinkle mobility so fatigue stays low.';
+        momentumFoot = 'Plan a steady aerobic block, then review hydration trend.';
+      } else {
+        momentumTitle = 'Recovery priority';
+        momentumCopy =
+          'Readiness dip detected. Dial down intensity, elevate sleep hygiene, and monitor HRV.';
+        momentumFoot = 'Share how you’re trending so coaches can adjust tomorrow’s load.';
+      }
+    }
+    if (momentumTitleEl) momentumTitleEl.textContent = momentumTitle;
+    if (momentumCopyEl) momentumCopyEl.textContent = momentumCopy;
+    if (momentumFootEl) momentumFootEl.textContent = momentumFoot;
+  }
+
+  if (focusTitleEl || focusCopyEl) {
+    const sleepGoalLabel = Number.isFinite(goalSleep)
+      ? Number.isInteger(goalSleep)
+        ? goalSleep
+        : Number(goalSleep).toFixed(1)
+      : null;
+    const deficits = [];
+    if (Number.isFinite(goalSteps) && Number.isFinite(stepsValue)) {
+      deficits.push({ type: 'steps', delta: goalSteps - stepsValue });
+    }
+    if (Number.isFinite(activeCaloriesGoal) && Number.isFinite(activeCaloriesValue)) {
+      deficits.push({ type: 'calories', delta: activeCaloriesGoal - activeCaloriesValue });
+    }
+    if (Number.isFinite(goalSleep) && Number.isFinite(sleepValue)) {
+      deficits.push({ type: 'sleep', delta: goalSleep - sleepValue });
+    }
+    const primaryGap = deficits
+      .filter((item) => Number.isFinite(item.delta) && item.delta > 0)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
+
+    let focusTitle = 'Keep momentum';
+    let focusCopy =
+      'All systems trending well. Stay consistent with hydration and micro mobility work.';
+
+    if (primaryGap) {
+      if (primaryGap.type === 'steps') {
+        focusTitle = 'Movement boost';
+        focusCopy = `${formatNumber(primaryGap.delta)} steps remain to hit ${formatNumber(
+          goalSteps
+        )}. Add a walk, easy ride, or light circuit tonight.`;
+      } else if (primaryGap.type === 'calories') {
+        focusTitle = 'Fuel gap';
+        focusCopy = `${formatNumber(primaryGap.delta)} kcal under target. Prioritize carbs + lean protein in the next meal.`;
+      } else if (primaryGap.type === 'sleep') {
+        focusTitle = 'Recovery window';
+        focusCopy = `${Math.abs(primaryGap.delta).toFixed(
+          1
+        )} hrs shy of the ${sleepGoalLabel ?? goalSleep} hr goal. Guard bedtime and wind down early.`;
+      }
+    } else if (readiness !== null && readiness < 70) {
+      focusTitle = 'Reset rhythm';
+      focusCopy =
+        'Let today be restorative: low intensity movement, consistent meals, and early lights out.';
+    } else if (readiness !== null && readiness >= 85) {
+      focusTitle = 'Press advantage';
+      focusCopy = 'Capitalize on the green light with a key session and then log how it felt.';
+    }
+
+    if (focusTitleEl) focusTitleEl.textContent = focusTitle;
+    if (focusCopyEl) focusCopyEl.textContent = focusCopy;
+  }
+
+  renderOverviewCoverage(timeline);
+}
+function goalDisplayValue(metricKey, value, goal) {
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+  if (metricKey === 'sleep') {
+    const formattedValue = `${formatDecimal(value, 1)} hrs`;
+    if (Number.isFinite(goal)) {
+      return `${formattedValue} / ${formatDecimal(goal, 1)} hrs`;
+    }
+    return formattedValue;
+  }
+  const rounded = metricKey === 'calories' ? Math.round(value) : Math.round(value);
+  const suffix = metricKey === 'steps' ? ' steps' : metricKey === 'calories' ? ' kcal' : '';
+  const formattedValue = `${formatNumber(rounded)}${suffix}`;
+  if (Number.isFinite(goal)) {
+    const goalRounded = metricKey === 'calories' ? Math.round(goal) : Math.round(goal);
+    const goalSuffix = suffix;
+    return `${formattedValue} / ${formatNumber(goalRounded)}${goalSuffix}`;
+  }
+  return formattedValue;
+}
+
+function goalTargetLabel(metricKey, goal) {
+  if (!Number.isFinite(goal)) return '';
+  if (metricKey === 'sleep') {
+    return `Goal ${formatDecimal(goal, 1)} hrs`;
+  }
+  return `Goal ${formatNumber(Math.round(goal))}${metricKey === 'steps' ? ' steps' : ' kcal'}`;
+}
+
+function describeGoalStatus(metricKey, { value, goal, diff }) {
+  if (!Number.isFinite(goal)) {
+    return 'Set a goal to track progress.';
+  }
+  if (!Number.isFinite(value)) {
+    return 'Awaiting data.';
+  }
+  if (!Number.isFinite(diff)) {
+    return 'Log data to compare vs target.';
+  }
+  if (metricKey === 'steps') {
+    if (diff >= 0) {
+      return `Ahead by ${formatNumber(Math.round(diff))} steps.`;
+    }
+    return `${formatNumber(Math.abs(Math.round(diff)))} steps to go.`;
+  }
+  if (metricKey === 'calories') {
+    if (diff > 0) {
+      return `${formatNumber(Math.round(diff))} kcal above target.`;
+    }
+    if (diff === 0) {
+      return 'Right on target.';
+    }
+    return `${formatNumber(Math.abs(Math.round(diff)))} kcal remaining to hit target.`;
+  }
+  if (metricKey === 'sleep') {
+    if (diff > 0) {
+      return `${formatDecimal(diff, 1)} hrs above goal.`;
+    }
+    if (diff === 0) {
+      return 'Exactly on your goal.';
+    }
+    return `${formatDecimal(Math.abs(diff), 1)} hrs to catch up.`;
+  }
+  return '';
+}
+
+function updateOverviewGoalList(goalDetails) {
+  const list = document.getElementById('overviewGoalList');
+  if (!list) return;
+  if (!goalDetails) {
+    list.innerHTML =
+      '<li class="goal-progress-item"><p class="muted small-text">Sync metrics to compare against your goals.</p></li>';
+    return;
+  }
+
+  const metrics = [
+    { key: 'steps', label: 'Steps' },
+    { key: 'calories', label: 'Calories' },
+    { key: 'sleep', label: 'Sleep' },
+  ];
+
+  const items = metrics
+    .map((metric) => {
+      const detail = goalDetails[metric.key];
+      if (!detail) {
+        return '';
+      }
+      const value = Number(detail.value);
+      const goal = Number(detail.goal);
+      const diff = Number(detail.diff);
+      const status = describeGoalStatus(metric.key, { value, goal, diff });
+      const hasGoal = Number.isFinite(goal) && goal > 0;
+      const hasValue = Number.isFinite(value);
+      const percent = hasGoal && hasValue ? Math.round((value / goal) * 100) : null;
+      const width = Number.isFinite(percent) ? Math.max(0, Math.min(percent, 100)) : null;
+      return `
+        <li class="goal-progress-item">
+          <div class="goal-progress-header">
+            <div>
+              <p class="label">${metric.label}</p>
+              <p class="muted small-text">${status}</p>
+            </div>
+            <div class="goal-progress-value">
+              <strong>${goalDisplayValue(metric.key, value, goal)}</strong>
+              ${hasGoal ? `<span>${goalTargetLabel(metric.key, goal)}</span>` : ''}
+            </div>
+          </div>
+          ${
+            width !== null
+              ? `<div class="goal-progress-bar"><span style="width:${width}%"></span></div>`
+              : ''
+          }
+        </li>
+      `;
+    })
+    .filter(Boolean);
+
+  list.innerHTML =
+    items.length > 0
+      ? items.join('')
+      : '<li class="goal-progress-item"><p class="muted small-text">Add goals to start tracking pacing.</p></li>';
+}
+
+function renderOverviewCoverage(timeline = []) {
+  const copyEl = document.getElementById('overviewCoverageCopy');
+  const gridEl = document.getElementById('overviewCoverageGrid');
+  if (!copyEl || !gridEl) return;
+
+  if (!Array.isArray(timeline) || !timeline.length) {
+    copyEl.textContent = 'Sync your wearable + meals to reveal how many days reported data.';
+    gridEl.innerHTML = '<p class="muted small-text">No history yet.</p>';
+    return;
+  }
+
+  const recent = timeline.slice(-7);
+  const totalDays = recent.length || 0;
+  const coverage = [
+    {
+      label: 'Steps logged',
+      covered: recent.filter((entry) => Number(entry.steps) > 0).length,
+    },
+    {
+      label: 'Calories logged',
+      covered: recent.filter((entry) => Number(entry.calories) > 0).length,
+    },
+    {
+      label: 'Sleep tracked',
+      covered: recent.filter((entry) => Number(entry.sleepHours) > 0).length,
+    },
+  ].map((metric) => ({
+    ...metric,
+    percent: totalDays ? Math.round((metric.covered / totalDays) * 100) : 0,
+  }));
+
+  gridEl.innerHTML = coverage
+    .map(
+      (row) => `
+        <div class="coverage-row">
+          <div>
+            <p class="label">${row.label}</p>
+            <p class="muted small-text">${row.covered}/${totalDays} days</p>
+          </div>
+          <div class="coverage-bar"><span style="width:${row.percent}%"></span></div>
+          <span class="coverage-value">${row.percent}%</span>
+        </div>
+      `
+    )
+    .join('');
+
+  const best = coverage.reduce(
+    (acc, item) => (item.percent > acc.percent ? item : acc),
+    coverage[0]
+  );
+  const lowest = coverage.reduce(
+    (acc, item) => (item.percent < acc.percent ? item : acc),
+    coverage[0]
+  );
+
+  if (!totalDays) {
+    copyEl.textContent = 'Sync your wearable + meals to reveal how many days reported data.';
+  } else if (best && lowest) {
+    copyEl.textContent = `${totalDays}-day window: ${best.label} strongest (${best.percent}%), ${lowest.label} needs attention (${lowest.percent}%).`;
+  } else {
+    copyEl.textContent = `${totalDays}-day window tracked.`;
+  }
+}
+
+function rerenderOverviewFromState() {
+  renderSummary(state.overview.summary, {
+    goalSteps: state.overview.goals.steps,
+    goalCalories: state.overview.goals.calories,
+    goalSleep: state.overview.goals.sleep,
+  });
+  renderSleepDetails({
+    summary: state.overview.summary,
+    timeline: state.overview.timeline,
+    sleepStages: state.overview.sleepStages,
+    goalSleep: state.overview.goals.sleep,
+  });
 }
 
 function renderHydration(entries = state.hydrationEntries) {
   const list = document.getElementById('hydrationList');
+  if (!list) return;
   list.innerHTML = '';
   if (!entries.length) {
     renderListPlaceholder(list, 'No hydration logs yet.');
+    enforceScrollableList(list);
     return;
   }
   entries.forEach((item) => {
@@ -4971,13 +5711,16 @@ function renderHydration(entries = state.hydrationEntries) {
     li.innerHTML = `<span>${formatDate(item.date)}</span><span>${item.ounces} oz</span>`;
     list.appendChild(li);
   });
+  enforceScrollableList(list);
 }
 
 function renderHeartRate(zones = []) {
   const list = document.getElementById('heartRateList');
+  if (!list) return;
   list.innerHTML = '';
   if (!zones.length) {
     renderListPlaceholder(list, 'No heart rate data yet.');
+    enforceScrollableList(list);
     return;
   }
   zones.forEach((zone) => {
@@ -4985,6 +5728,7 @@ function renderHeartRate(zones = []) {
     li.innerHTML = `<span>${zone.zone}</span><span>${zone.minutes} min</span>`;
     list.appendChild(li);
   });
+  enforceScrollableList(list);
 }
 
 function describeVitalsDelta(delta, unit = '') {
@@ -5016,6 +5760,28 @@ function formatBloodPressure(entry) {
     return `${Number.isFinite(systolic) ? systolic : diastolic} mmHg`;
   }
   return '— mmHg';
+}
+
+const VITALS_CHART_WINDOW = 30;
+
+function sortVitalsTimeline(timeline = []) {
+  return timeline
+    .slice()
+    .sort((a, b) => {
+      const aTime = new Date(a?.date || 0).getTime();
+      const bTime = new Date(b?.date || 0).getTime();
+      const safeATime = Number.isFinite(aTime) ? aTime : 0;
+      const safeBTime = Number.isFinite(bTime) ? bTime : 0;
+      return safeATime - safeBTime;
+    });
+}
+
+function getRecentVitalsTimeline(timeline = [], limit = VITALS_CHART_WINDOW) {
+  const chronological = sortVitalsTimeline(timeline);
+  if (!limit || chronological.length <= limit) {
+    return chronological;
+  }
+  return chronological.slice(-limit);
 }
 
 function renderVitalsDashboard(vitals = state.vitals) {
@@ -5083,13 +5849,15 @@ function renderVitalsDashboard(vitals = state.vitals) {
 
 function renderVitalsHistory(timeline = []) {
   if (!vitalsHistoryList) return;
+  const chronological = sortVitalsTimeline(timeline);
   vitalsHistoryList.innerHTML = '';
-  if (!timeline.length) {
+  if (!chronological.length) {
     renderListPlaceholder(vitalsHistoryList, 'Vitals history will appear after your first sync.');
+    enforceScrollableList(vitalsHistoryList);
     return;
   }
-  const recent = timeline.slice(-7).reverse();
-  recent.forEach((entry) => {
+  const ordered = chronological.slice().reverse();
+  ordered.forEach((entry) => {
     const li = document.createElement('li');
     const dateLabel = formatDate(entry.date);
     const hrText = Number.isFinite(entry.restingHr) ? `${entry.restingHr} bpm` : '— bpm';
@@ -5100,21 +5868,23 @@ function renderVitalsHistory(timeline = []) {
       <div>
         <p class="label">${dateLabel}</p>
         <p class="muted small-text">${hrText} • ${formatBloodPressure(entry)} • ${glucoseText}</p>
-      </div>
-      <div class="vitals-history-meta">
-        <span>${hrvText}</span>
-        <span>${spo2Text}</span>
-      </div>
+    </div>
+    <div class="vitals-history-meta">
+      <span>${hrvText}</span>
+      <span>${spo2Text}</span>
+    </div>
     `;
     vitalsHistoryList.appendChild(li);
   });
+  enforceScrollableList(vitalsHistoryList);
 }
 
 function renderVitalsChart(timeline = []) {
   const canvasId = 'vitalsTrendChart';
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
-  if (!timeline.length) {
+  const chronological = getRecentVitalsTimeline(timeline);
+  if (!chronological.length) {
     state.charts.vitalsTrend?.destroy();
     state.charts.vitalsTrend = null;
     showChartMessage(canvasId, 'Vitals history will visualize once readings sync.');
@@ -5122,10 +5892,10 @@ function renderVitalsChart(timeline = []) {
   }
   hideChartMessage(canvasId);
   const ctx = canvas.getContext('2d');
-  const labels = timeline.map((entry) => formatDate(entry.date));
-  const restingHr = timeline.map((entry) => entry.restingHr ?? null);
-  const glucose = timeline.map((entry) => entry.glucose ?? null);
-  const systolic = timeline.map((entry) => entry.systolic ?? null);
+  const labels = chronological.map((entry) => formatDate(entry.date));
+  const restingHr = chronological.map((entry) => entry.restingHr ?? null);
+  const glucose = chronological.map((entry) => entry.glucose ?? null);
+  const systolic = chronological.map((entry) => entry.systolic ?? null);
   state.charts.vitalsTrend?.destroy();
   state.charts.vitalsTrend = createChart(ctx, {
     type: 'line',
@@ -5247,6 +6017,7 @@ function renderSleepStageBreakdown(sleepStages) {
     `;
     sleepStageBreakdown.appendChild(item);
   });
+  enforceScrollableList(sleepStageBreakdown, { limit: 3 });
 }
 
 function describeSleepHint(latestHours, goalSleep, trendAverage) {
@@ -5407,6 +6178,23 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
   });
 }
 
+function handleSleepGoalInputChange(event) {
+  const rawValue = Number.parseFloat(event?.target?.value ?? '');
+  const normalized = Number.isFinite(rawValue)
+    ? Math.min(Math.max(rawValue, 4), 12)
+    : 8;
+  if (sleepGoalInput) {
+    sleepGoalInput.value = normalized.toFixed(1);
+  }
+  const targetProfile =
+    state.viewing && state.viewing.id !== state.user.id ? state.viewing : state.user;
+  if (targetProfile) {
+    targetProfile.goal_sleep = normalized;
+  }
+  state.overview.goals.sleep = normalized;
+  rerenderOverviewFromState();
+}
+
 function updateCharts(data) {
   renderActivityChart(data.timeline);
   renderMacroChart(data.macros);
@@ -5497,10 +6285,12 @@ function renderSessions(timeline = []) {
   const summary = document.getElementById('sessionsSummary');
   if (!list) return;
 
+  const hasTimeline = Array.isArray(timeline) && timeline.length > 0;
+  const sourceTimeline = hasTimeline ? timeline : DEMO_SESSIONS;
+  const usingDemoTimeline = !hasTimeline && Array.isArray(sourceTimeline) && sourceTimeline.length > 0;
   list.innerHTML = '';
 
-  const recentSessions = timeline.slice(-5).reverse();
-  if (!recentSessions.length) {
+  if (!sourceTimeline.length) {
     const li = document.createElement('li');
     li.className = 'session-item';
     li.innerHTML = '<p class="muted">No sessions logged yet.</p>';
@@ -5508,14 +6298,15 @@ function renderSessions(timeline = []) {
     if (summary) {
       summary.textContent = 'Sessions will populate once your tracker syncs activity.';
     }
+    enforceScrollableList(list);
     return;
   }
 
-  let cumulativeLoad = 0;
+  const orderedSessions = sourceTimeline.slice().reverse();
+  const loadBySession = orderedSessions.map((entry) => Math.round(entry.calories / 12 + entry.steps / 500));
 
-  recentSessions.forEach((entry) => {
-    const load = Math.round(entry.calories / 12 + entry.steps / 500);
-    cumulativeLoad += load;
+  orderedSessions.forEach((entry, index) => {
+    const load = loadBySession[index];
     const li = document.createElement('li');
     li.className = 'session-item';
     const effort =
@@ -5534,19 +6325,26 @@ function renderSessions(timeline = []) {
   });
 
   if (summary) {
-    const avgLoad = Math.round(cumulativeLoad / recentSessions.length);
-    summary.textContent =
+    const summaryWindow = orderedSessions.slice(0, 5);
+    const windowLoad = loadBySession.slice(0, summaryWindow.length).reduce((sum, value) => sum + value, 0);
+    const avgLoad = Math.round(windowLoad / (summaryWindow.length || 1));
+    const windowLabel =
+      summaryWindow.length >= 5
+        ? 'last five days'
+        : `${summaryWindow.length} recent day${summaryWindow.length === 1 ? '' : 's'}`;
+    const baseCopy =
       avgLoad >= 40
-        ? 'Dial in parasympathetic work—pair tough days with breath work or easy spins.'
+        ? `Dial in parasympathetic work—pair tough days with breath work or easy spins (${windowLabel}).`
         : avgLoad >= 25
-        ? 'Load is balanced. Keep two intensity waves and anchor sleep before peak sessions.'
-        : 'Volume is light. Layer in one longer aerobic builder plus a short strength primer.';
+          ? `Load is balanced (${windowLabel}). Keep two intensity waves and anchor sleep before peak sessions.`
+          : `Volume is light (${windowLabel}). Layer in one longer aerobic builder plus a short strength primer.`;
+    summary.textContent = usingDemoTimeline ? `Demo block · ${baseCopy}` : baseCopy;
   }
+  enforceScrollableList(list);
 }
 
 function renderNutritionDetails(macros, hydration = []) {
   const macroBreakdown = document.getElementById('macroBreakdown');
-  const hydrationStats = document.getElementById('hydrationStats');
 
   if (macroBreakdown) {
     macroBreakdown.innerHTML = '';
@@ -5570,23 +6368,7 @@ function renderNutritionDetails(macros, hydration = []) {
     }
   }
 
-  if (hydrationStats) {
-    hydrationStats.innerHTML = '';
-    if (!hydration.length) {
-      hydrationStats.innerHTML = '<p class="empty-state">Hydration summary not available yet.</p>';
-      return;
-    }
-
-    const total = hydration.reduce((sum, entry) => sum + entry.ounces, 0);
-    const avg = Math.round(total / hydration.length);
-    const lastEntry = hydration[hydration.length - 1];
-    hydrationStats.innerHTML = `
-      <p class="label">7-day total</p>
-      <h3>${formatNumber(total)} oz</h3>
-      <p class="label">Daily rhythm</p>
-      <p class="muted">${avg} oz avg • Last logged: ${formatDate(lastEntry.date)}</p>
-    `;
-  }
+  // hydration summary card removed per design refresh
 }
 
 function renderActivitySummary(summary) {
@@ -5645,6 +6427,7 @@ function renderActivitySessions(sessions = []) {
     if (activitySessionHint) {
       activitySessionHint.textContent = 'Connect Strava to start streaming your runs.';
     }
+    enforceScrollableList(activitySessionsList);
     return;
   }
 
@@ -5688,6 +6471,7 @@ function renderActivitySessions(sessions = []) {
     li.appendChild(button);
     activitySessionsList.appendChild(li);
   });
+  enforceScrollableList(activitySessionsList);
 }
 
 function renderActivitySplits() {
@@ -5701,6 +6485,7 @@ function renderActivitySplits() {
     empty.className = 'empty-row';
     empty.textContent = 'Choose a session to review splits.';
     activitySplitsList.appendChild(empty);
+    enforceScrollableList(activitySplitsList);
     return;
   }
   if (activitySplitTitle) activitySplitTitle.textContent = session.name || 'Session splits';
@@ -5710,6 +6495,7 @@ function renderActivitySplits() {
     empty.className = 'empty-row';
     empty.textContent = 'Splits not available for this run.';
     activitySplitsList.appendChild(empty);
+    enforceScrollableList(activitySplitsList);
     return;
   }
   splits.forEach((split) => {
@@ -5741,6 +6527,7 @@ function renderActivitySplits() {
     li.appendChild(metrics);
     activitySplitsList.appendChild(li);
   });
+  enforceScrollableList(activitySplitsList);
 }
 
 function renderActivityBestEfforts(efforts = []) {
@@ -5751,6 +6538,7 @@ function renderActivityBestEfforts(efforts = []) {
     empty.className = 'empty-row';
     empty.textContent = 'Log more runs to uncover best efforts.';
     activityBestEffortsList.appendChild(empty);
+    enforceScrollableList(activityBestEffortsList);
     return;
   }
   efforts.forEach((effort) => {
@@ -5773,6 +6561,7 @@ function renderActivityBestEfforts(efforts = []) {
     li.appendChild(date);
     activityBestEffortsList.appendChild(li);
   });
+  enforceScrollableList(activityBestEffortsList);
 }
 
 function renderActivityCharts(charts = {}) {

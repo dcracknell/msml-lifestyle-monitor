@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { hashPassword } = require('../utils/hash-password');
+const { PASSWORD_LIMITS, violatesLimits } = require('../utils/validation');
 
 const router = express.Router();
 
@@ -54,6 +55,11 @@ router.post('/reset', (req, res) => {
 
   if (newPassword.length < 8) {
     return res.status(400).json({ message: 'Password must be at least 8 characters.' });
+  }
+  if (violatesLimits(newPassword, PASSWORD_LIMITS)) {
+    return res.status(400).json({
+      message: `Password must be ${PASSWORD_LIMITS.maxWords} words and ${PASSWORD_LIMITS.maxLength} characters or fewer.`,
+    });
   }
 
   const entry = db

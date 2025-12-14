@@ -3,6 +3,7 @@ const db = require('../db');
 const { authenticate } = require('../services/session-store');
 const { hashPassword } = require('../utils/hash-password');
 const { ROLES, isHeadCoach, isHeadCoach: isHeadCoachRole, isCoach, coerceRole } = require('../utils/role');
+const { PASSWORD_LIMITS, violatesLimits } = require('../utils/validation');
 
 const router = express.Router();
 
@@ -132,6 +133,11 @@ router.post('/reset-password', (req, res) => {
   const desiredPassword = typeof password === 'string' ? password.trim() : '';
   if (desiredPassword && desiredPassword.length < 8) {
     return res.status(400).json({ message: 'Temporary password must be at least 8 characters.' });
+  }
+  if (desiredPassword && violatesLimits(desiredPassword, PASSWORD_LIMITS)) {
+    return res.status(400).json({
+      message: `Password must be ${PASSWORD_LIMITS.maxWords} words and ${PASSWORD_LIMITS.maxLength} characters or fewer.`,
+    });
   }
   const tempPassword = desiredPassword || 'Password';
   const nextHash = hashPassword(tempPassword);
