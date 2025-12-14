@@ -5762,7 +5762,9 @@ function formatBloodPressure(entry) {
   return '— mmHg';
 }
 
-const VITALS_CHART_WINDOW = 30;
+const VITALS_CHART_WINDOW = 14;
+const VITALS_CHART_AXIS_MIN = 40;
+const VITALS_CHART_AXIS_MAX = 200;
 
 function sortVitalsTimeline(timeline = []) {
   return timeline
@@ -5934,6 +5936,18 @@ function renderVitalsChart(timeline = []) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
+      animations: {
+        colors: { duration: 0 },
+        borderColor: { duration: 0 },
+        tension: { duration: 0 },
+        x: { duration: 0 },
+        y: { duration: 0 },
+      },
+      transitions: {
+        active: { animation: { duration: 0 } },
+        resize: { animation: { duration: 0 } },
+      },
       interaction: { intersect: false, mode: 'index' },
       plugins: {
         legend: { display: false },
@@ -5952,7 +5966,13 @@ function renderVitalsChart(timeline = []) {
       },
       scales: {
         y: {
-          ticks: { color: 'rgba(255, 255, 255, 0.7)' },
+          min: VITALS_CHART_AXIS_MIN,
+          max: VITALS_CHART_AXIS_MAX,
+          ticks: {
+            color: 'rgba(255, 255, 255, 0.7)',
+            stepSize: 10,
+            autoSkip: false,
+          },
           grid: { color: 'rgba(255, 255, 255, 0.08)' },
         },
         x: {

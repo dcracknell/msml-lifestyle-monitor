@@ -68,11 +68,21 @@ export function VitalsScreen() {
       </Card>
       <Card>
         <SectionHeader title="Resting HR" subtitle="14-day trend" />
-        <TrendChart data={restingTrend} yLabel="bpm" />
+        <TrendChart
+          data={restingTrend}
+          yLabel="bpm"
+          yDomain={[40, 200]}
+          yTickStep={10}
+        />
       </Card>
       <Card>
         <SectionHeader title="Glucose" subtitle="14-day trend" />
-        <TrendChart data={glucoseTrend} yLabel="mg/dL" />
+        <TrendChart
+          data={glucoseTrend}
+          yLabel="mg/dL"
+          yDomain={[70, 200]}
+          yTickStep={10}
+        />
       </Card>
     </RefreshableScrollView>
   );

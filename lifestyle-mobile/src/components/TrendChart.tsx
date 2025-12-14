@@ -13,9 +13,18 @@ interface Props {
   height?: number;
   color?: string;
   yLabel?: string;
+  yDomain?: [number, number];
+  yTickStep?: number;
 }
 
-export function TrendChart({ data, height = 180, color = colors.accent, yLabel }: Props) {
+export function TrendChart({
+  data,
+  height = 180,
+  color = colors.accent,
+  yLabel,
+  yDomain,
+  yTickStep,
+}: Props) {
   const { width } = useWindowDimensions();
   const horizontalPadding = spacing.lg * 2 + 32; // screen gutters + card padding
   const chartWidth = Math.max(240, width - horizontalPadding);
@@ -23,6 +32,10 @@ export function TrendChart({ data, height = 180, color = colors.accent, yLabel }
     x: point.label,
     y: point.value,
   }));
+  const tickValues =
+    Array.isArray(yDomain) && yDomain.length === 2 && yTickStep
+      ? buildTickValues(yDomain[0], yDomain[1], yTickStep)
+      : undefined;
 
   if (!data || !data.length) {
     return (
@@ -38,6 +51,7 @@ export function TrendChart({ data, height = 180, color = colors.accent, yLabel }
       width={chartWidth}
       padding={{ top: 24, bottom: 36, left: 48, right: 24 }}
       theme={VictoryTheme.material}
+      domain={yDomain ? { y: yDomain } : undefined}
     >
       <VictoryAxis
         style={{
@@ -49,6 +63,7 @@ export function TrendChart({ data, height = 180, color = colors.accent, yLabel }
       <VictoryAxis
         dependentAxis
         label={yLabel}
+        tickValues={tickValues}
         style={{
           axis: { stroke: 'transparent' },
           tickLabels: { fill: colors.muted, fontSize: 10 },
@@ -76,4 +91,12 @@ export function TrendChart({ data, height = 180, color = colors.accent, yLabel }
       />
     </VictoryChart>
   );
+}
+
+function buildTickValues(min: number, max: number, step: number) {
+  const values: number[] = [];
+  for (let value = min; value <= max; value += step) {
+    values.push(value);
+  }
+  return values;
 }
