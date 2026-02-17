@@ -1,0 +1,15 @@
+services:
+  lifestyle-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - server/.env
+    ports:
+      - "4000:4000"
+    volumes:
+      - lifestyle-web-db:/app/lifestyle-web/database/storage
+    restart: unless-stopped
+
+volumes:
+  lifestyle-web-db:

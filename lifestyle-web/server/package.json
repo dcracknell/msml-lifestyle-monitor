@@ -1,0 +1,26 @@
+{
+  "name": "lifestyle-dashboard",
+  "version": "1.0.0",
+  "description": "Fitbit-style lifestyle monitor web experience with shared auth for web and app clients.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "jest",
+    "reset-db": "node scripts/reset-db.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.0",
+    "chart.js": "^4.5.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.1",
+    "express": "^4.19.2",
+    "helmet": "^8.1.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "supertest": "^6.3.4"
+  }
+}

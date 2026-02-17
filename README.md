@@ -19,6 +19,7 @@ A final-year MEng group project focused on developing an integrated, low-cost pr
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Installation](#installation)
+- [Mobile App](#mobile-app)
 - [Contributing](#contributing)
 - [Contributors](#contributors)
 - [License](#license)
@@ -121,6 +122,23 @@ git checkout -b feature/your-feature-name
 Install all required software dependencies, such as Python packages or hardware drivers, using the appropriate package manager or setup scripts provided in the project.
 
 Build or compile the project according to the instructions in the documentation or build scripts included.
+
+## Mobile App
+
+React Native + Expo sources for the cross-platform companion app live in [`lifestyle-mobile`](lifestyle-mobile). The app mirrors the browser dashboard (auth, overview, activity, vitals, nutrition, weight, roster, profile/admin) and talks to the same Express API.
+
+1. Copy the sample env file and point it to your running web server:
+   ```bash
+   cd lifestyle-mobile
+   cp .env.example .env   # update EXPO_PUBLIC_API_BASE_URL
+   ```
+2. Install dependencies and start Expo:
+   ```bash
+   npm install
+   npm run start
+   ```
+
+See [`lifestyle-mobile/README.md`](lifestyle-mobile/README.md) for detailed architecture, feature parity, and offline-sync notes.
 
 ## Contributing
 

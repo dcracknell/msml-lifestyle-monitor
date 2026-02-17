@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bluetooth Bridge • MSML Lifestyle</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body class="device-body">
+  <a class="back-link" href="/">&larr; Back to dashboard</a>
+  <div class="device-page">
+    <section class="device-hero">
+      <div>
+        <p class="eyebrow">Wearable bridge</p>
+        <h1>Capture a Bluetooth stream</h1>
+        <p>
+          Pair a Web Bluetooth capable device (Chrome, Edge, or Android) to forward per-second data
+          into the Lifestyle `/api/streams` endpoint. Samples are buffered locally, deduplicated on
+          the server, and automatically stitched into coach dashboards.
+        </p>
+      </div>
+      <div class="device-card">
+        <h3>How it works</h3>
+        <ul class="muted">
+          <li>Sign in through the main dashboard first so this page can reuse your token.</li>
+          <li>Enter the service + characteristic UUID exposed by your device.</li>
+          <li>Choose a parser (uint8/16 or float32) and click <strong>Connect</strong>.</li>
+          <li>Measurements stream into `/api/streams` using the metric name you provide.</li>
+        </ul>
+      </div>
+      <a class="outline-link" href="https://web.dev/bluetooth/" target="_blank" rel="noreferrer">
+        Learn about Web Bluetooth ↗
+      </a>
+    </section>
+
+    <section class="device-card">
+      <h3>Device &amp; metric setup</h3>
+      <div class="device-warning hidden" id="browserWarning">
+        <strong>Browser unsupported.</strong> Web Bluetooth requires Chrome/Edge on desktop or Android.
+      </div>
+      <div class="device-warning hidden" id="authWarning">
+        <strong>Sign in first.</strong> Open the <a href="/">main dashboard</a>, log into your account, then return so
+        we can forward samples under your profile.
+      </div>
+      <form class="device-form" id="bluetoothForm">
+        <label>
+          Metric name
+          <input
+            type="text"
+            id="metricName"
+            name="metric"
+            placeholder="heart_rate or cadence"
+            minlength="2"
+            maxlength="64"
+            required />
+        </label>
+        <label>
+          Service UUID or name
+          <input
+            type="text"
+            id="serviceId"
+            placeholder="heart_rate or 0000180d-0000-1000-8000-00805f9b34fb"
+            required />
+        </label>
+        <label>
+          Characteristic UUID
+          <input
+            type="text"
+            id="characteristicId"
+            placeholder="heart_rate_measurement or 00002a37-0000-1000-8000-00805f9b34fb"
+            required />
+        </label>
+        <label>
+          Data parser
+          <select id="parser">
+            <option value="uint8">Unsigned 8-bit</option>
+            <option value="uint16">Unsigned 16-bit (little-endian)</option>
+            <option value="int16">Signed 16-bit (little-endian)</option>
+            <option value="float32">Float32 (little-endian)</option>
+          </select>
+        </label>
+        <div class="device-actions">
+          <button type="submit" class="primary" id="connectButton">Connect device</button>
+          <button type="button" class="secondary" id="disconnectButton" disabled>Disconnect</button>
+        </div>
+      </form>
+      <div class="device-status" id="statusText">
+        Waiting for device... (Chrome on macOS/Windows or Android recommended)
+      </div>
+    </section>
+
+    <section class="device-card">
+      <h3>Live telemetry</h3>
+      <div class="device-grid">
+        <div class="device-metric">
+          <p class="muted">Buffered samples</p>
+          <span id="bufferSize">0</span>
+        </div>
+        <div class="device-metric">
+          <p class="muted">Sent to API</p>
+          <span id="sentCount">0</span>
+        </div>
+        <div class="device-metric">
+          <p class="muted">Last sample</p>
+          <span id="lastValue">—</span>
+        </div>
+        <div class="device-metric">
+          <p class="muted">Last sync</p>
+          <span id="lastSync">—</span>
+        </div>
+      </div>
+      <ol class="sample-log" id="sampleLog">
+        <li class="muted">Samples appear here after notifications begin.</li>
+      </ol>
+    </section>
+  </div>
+
+  <script src="bluetooth.js" type="module"></script>
+</body>
+
+</html>

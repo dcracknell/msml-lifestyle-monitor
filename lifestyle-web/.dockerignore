@@ -1,0 +1,11 @@
+node_modules
+server/node_modules
+server/.env
+server/.env.local
+server/lifestyle-dashboard@1.0.0
+server/noip-duc_3.3.0
+server/noip-duc_3.3.0.tar.gz
+database/storage
+npm-debug.log
+.DS_Store
+.git
