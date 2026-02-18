@@ -46,6 +46,7 @@ export default ({ config }) => ({
       NSBluetoothPeripheralUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
       NSCameraUsageDescription: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
       NSPhotoLibraryUsageDescription: 'Allow MSML Lifestyle to attach meal photos from your library.',
+      NSMotionUsageDescription: 'Allow MSML Lifestyle to read your activity data for step export.',
     },
   },
   android: {
@@ -55,7 +56,7 @@ export default ({ config }) => ({
       backgroundColor: '#010915',
     },
     package: androidPackage,
-    permissions: ['android.permission.CAMERA'],
+    permissions: ['android.permission.CAMERA', 'android.permission.ACTIVITY_RECOGNITION'],
   },
   web: {
     favicon: './assets/icon.png',
