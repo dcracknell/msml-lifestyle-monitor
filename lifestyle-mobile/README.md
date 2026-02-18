@@ -39,6 +39,15 @@ The mobile app implements the same major surfaces as the web UI:
 
 Subject switching is available to coaches so they can view linked athletes just like the browser experience.
 
+
+### Syncing phone step data
+
+In **Activity** screen:
+1. Tap **Export now** and grant motion/activity permission when prompted.
+2. Confirm the **Last export** timestamp updates and check feedback text.
+3. Optional: tap **Enable auto-export** to sync every 15 minutes while the Activity screen is open.
+4. If Android permissions were previously denied, allow **Physical activity**, **Nearby devices**, and **Location** in system app settings so both step sync and BLE device sync can work.
+
 ## Offline sync queue
 
 Mutations that write data (weight logs, nutrition entries) route through `SyncProvider`, which:

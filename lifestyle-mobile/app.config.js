@@ -63,9 +63,10 @@ export default ({ config }) => ({
     package: androidPackage,
     permissions: [
       'android.permission.CAMERA',
-      'android.permission.ACCESS_COARSE_LOCATION',
-      'android.permission.ACCESS_FINE_LOCATION',
       'android.permission.ACTIVITY_RECOGNITION',
+      'android.permission.BLUETOOTH_SCAN',
+      'android.permission.BLUETOOTH_CONNECT',
+      'android.permission.ACCESS_FINE_LOCATION',
     ],
   },
   web: {
