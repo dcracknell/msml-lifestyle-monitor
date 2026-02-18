@@ -4,8 +4,6 @@ import {
   VictoryChart,
   VictoryScatter,
   VictoryTheme,
-  VictoryTooltip,
-  VictoryVoronoiContainer,
 } from 'victory-native';
 import { AppText } from './AppText';
 import { colors, spacing } from '../theme';
@@ -54,22 +52,6 @@ export function ScatterChart({
       width={chartWidth}
       padding={{ top: 24, bottom: 48, left: 56, right: 24 }}
       theme={VictoryTheme.material}
-      containerComponent={
-        <VictoryVoronoiContainer
-          voronoiDimension="x"
-          labels={({ datum }) => {
-            const paceLabel = xFormatter ? xFormatter(Number(datum.x)) : String(datum.x);
-            const hrLabel = yFormatter ? yFormatter(Number(datum.y)) : String(datum.y);
-            return `${datum.label || 'Session'}\n${paceLabel} • ${hrLabel}`;
-          }}
-          labelComponent={
-            <VictoryTooltip
-              flyoutStyle={{ fill: colors.panel, stroke: colors.border }}
-              style={{ fill: colors.text, fontSize: 12 }}
-            />
-          }
-        />
-      }
     >
       <VictoryAxis
         label={xLabel}
