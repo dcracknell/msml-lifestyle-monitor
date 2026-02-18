@@ -56,7 +56,13 @@ export default ({ config }) => ({
       backgroundColor: '#010915',
     },
     package: androidPackage,
-    permissions: ['android.permission.CAMERA', 'android.permission.ACTIVITY_RECOGNITION'],
+    permissions: [
+      'android.permission.CAMERA',
+      'android.permission.ACTIVITY_RECOGNITION',
+      'android.permission.BLUETOOTH_SCAN',
+      'android.permission.BLUETOOTH_CONNECT',
+      'android.permission.ACCESS_FINE_LOCATION',
+    ],
   },
   web: {
     favicon: './assets/icon.png',
