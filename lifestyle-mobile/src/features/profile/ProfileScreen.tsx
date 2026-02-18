@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View, Image } from 'react-native';
 import { updateProfileRequest } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
 import { useApiConfig } from '../../providers/ApiConfigProvider';
+import { useSyncQueue } from '../../providers/SyncProvider';
 import {
   AppButton,
   AppInput,
@@ -10,13 +11,23 @@ import {
   Card,
   SectionHeader,
   RefreshableScrollView,
+  TrendChart,
 } from '../../components';
 import { colors, spacing } from '../../theme';
 import { getImagePickerMissingMessage, getImagePickerModule } from '../../utils/imagePicker';
+import { getDocumentPickerMissingMessage, getDocumentPickerModule } from '../../utils/documentPicker';
+import { formatDate, formatNumber } from '../../utils/format';
+import { parseIPhoneExportPayload, StreamBatch } from '../devices/iphoneImport';
+import { getPedometerMissingMessage, getPedometerModule, isPermissionGranted } from '../../utils/pedometer';
+
+type PhoneAccessStatus = 'unknown' | 'granted' | 'denied' | 'unavailable';
+
+const PHONE_STEPS_METRIC = 'activity.steps';
 
 export function ProfileScreen() {
   const { user, setSessionFromPayload } = useAuth();
   const { apiBaseUrl, updateBaseUrl, resetBaseUrl } = useApiConfig();
+  const { runOrQueue } = useSyncQueue();
   const [form, setForm] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -35,6 +46,19 @@ export function ProfileScreen() {
   const [apiUrlInput, setApiUrlInput] = useState(apiBaseUrl);
   const [apiUrlFeedback, setApiUrlFeedback] = useState<string | null>(null);
   const [apiUrlSaving, setApiUrlSaving] = useState(false);
+  const [iphonePayload, setIphonePayload] = useState('');
+  const [iphoneBatches, setIphoneBatches] = useState<StreamBatch[]>([]);
+  const [iphoneImportFeedback, setIphoneImportFeedback] = useState<string | null>(null);
+  const [iphonePickLoading, setIphonePickLoading] = useState(false);
+  const [iphoneParseLoading, setIphoneParseLoading] = useState(false);
+  const [iphoneUploadLoading, setIphoneUploadLoading] = useState(false);
+  const [selectedImportMetric, setSelectedImportMetric] = useState<string | null>(null);
+  const [importWindow, setImportWindow] = useState<string | null>(null);
+  const [phoneAccessStatus, setPhoneAccessStatus] = useState<PhoneAccessStatus>('unknown');
+  const [phoneAccessFeedback, setPhoneAccessFeedback] = useState<string | null>(null);
+  const [phonePermissionLoading, setPhonePermissionLoading] = useState(false);
+  const [phoneSyncLoading, setPhoneSyncLoading] = useState(false);
+  const [phoneStepSample, setPhoneStepSample] = useState<{ steps: number; ts: number } | null>(null);
 
   useEffect(() => {
     setApiUrlInput(apiBaseUrl);
@@ -54,6 +78,33 @@ export function ProfileScreen() {
   const previewUri = derivedAvatarPhoto
     ? `data:image/jpeg;base64,${derivedAvatarPhoto}`
     : form.avatarUrl || user?.avatar_url || null;
+
+  const importedSampleCount = useMemo(
+    () => iphoneBatches.reduce((total, batch) => total + batch.samples.length, 0),
+    [iphoneBatches]
+  );
+
+  const selectedImportBatch = useMemo(
+    () =>
+      iphoneBatches.find((batch) => batch.metric === selectedImportMetric) ||
+      iphoneBatches[0] ||
+      null,
+    [iphoneBatches, selectedImportMetric]
+  );
+
+  const selectedImportTrend = useMemo(
+    () =>
+      (selectedImportBatch?.samples || [])
+        .filter((sample) => sample.value !== null && Number.isFinite(sample.value))
+        .slice(-40)
+        .map((sample) => ({
+          label: formatDate(new Date(sample.ts).toISOString(), 'MMM D HH:mm'),
+          value: sample.value as number,
+        })),
+    [selectedImportBatch]
+  );
+
+  const visibleImportBatches = useMemo(() => iphoneBatches.slice(0, 8), [iphoneBatches]);
 
   const handleTakePhoto = async () => {
     setPhotoStatus(null);
@@ -175,6 +226,211 @@ export function ProfileScreen() {
     }
   };
 
+  const ensurePhoneAccess = async (requestAccess: boolean) => {
+    const pedometer = getPedometerModule();
+    if (!pedometer) {
+      setPhoneAccessStatus('unavailable');
+      throw new Error(getPedometerMissingMessage());
+    }
+    if (pedometer.isAvailableAsync) {
+      const isAvailable = await pedometer.isAvailableAsync();
+      if (!isAvailable) {
+        setPhoneAccessStatus('unavailable');
+        throw new Error('Phone motion data is not available on this device.');
+      }
+    }
+
+    let permission = null;
+    if (requestAccess && pedometer.requestPermissionsAsync) {
+      permission = await pedometer.requestPermissionsAsync();
+    } else if (pedometer.getPermissionsAsync) {
+      permission = await pedometer.getPermissionsAsync();
+    }
+
+    const granted = isPermissionGranted(permission);
+    setPhoneAccessStatus(granted ? 'granted' : 'denied');
+    if (!granted) {
+      throw new Error('Motion access denied. Enable Motion & Fitness permission in settings.');
+    }
+    return pedometer;
+  };
+
+  const handleGrantPhoneAccess = async () => {
+    setPhoneAccessFeedback(null);
+    setPhonePermissionLoading(true);
+    try {
+      await ensurePhoneAccess(true);
+      setPhoneAccessFeedback('Access granted. You can now sync phone step data.');
+    } catch (error) {
+      setPhoneAccessFeedback(
+        error instanceof Error ? error.message : 'Unable to request phone data access.'
+      );
+    } finally {
+      setPhonePermissionLoading(false);
+    }
+  };
+
+  const handleSyncPhoneSteps = async () => {
+    setPhoneAccessFeedback(null);
+    setPhoneSyncLoading(true);
+    try {
+      const pedometer = await ensurePhoneAccess(true);
+      if (!pedometer.getStepCountAsync) {
+        throw new Error('Step count API is unavailable on this phone.');
+      }
+      const end = new Date();
+      const start = new Date(end);
+      start.setHours(0, 0, 0, 0);
+      const response = await pedometer.getStepCountAsync(start, end);
+      const rawSteps = Number(response?.steps);
+      if (!Number.isFinite(rawSteps)) {
+        throw new Error('No step data was returned by the phone.');
+      }
+      const steps = Math.max(0, Math.round(rawSteps));
+      const ts = Date.now();
+      const upload = await runOrQueue({
+        endpoint: '/api/streams',
+        payload: { metric: PHONE_STEPS_METRIC, samples: [{ ts, value: steps }] },
+        description: 'Phone step count sync',
+      });
+      setPhoneStepSample({ steps, ts });
+      setPhoneAccessFeedback(
+        upload.status === 'queued'
+          ? `Read ${steps.toLocaleString()} steps today. Upload queued offline.`
+          : `Read ${steps.toLocaleString()} steps today and uploaded.`
+      );
+    } catch (error) {
+      setPhoneAccessFeedback(error instanceof Error ? error.message : 'Unable to sync phone data.');
+    } finally {
+      setPhoneSyncLoading(false);
+    }
+  };
+
+  const parseIphonePayload = (payloadText: string) => {
+    const parsed = parseIPhoneExportPayload(payloadText);
+    setIphoneBatches(parsed.batches);
+    setSelectedImportMetric(parsed.batches[0]?.metric || null);
+    setImportWindow(formatImportWindow(parsed.startTs, parsed.endTs));
+    return parsed;
+  };
+
+  const handlePickIphoneExport = async () => {
+    setIphoneImportFeedback(null);
+    setIphonePickLoading(true);
+    try {
+      const documentPicker = getDocumentPickerModule();
+      if (!documentPicker) {
+        throw new Error(getDocumentPickerMissingMessage());
+      }
+      const result = await documentPicker.getDocumentAsync({
+        multiple: false,
+        copyToCacheDirectory: true,
+        type: ['application/json', 'text/plain', 'text/*'],
+      });
+      if (result.canceled) {
+        setIphoneImportFeedback('Import cancelled.');
+        return;
+      }
+      const asset = result.assets?.[0];
+      if (!asset?.uri) {
+        throw new Error('Unable to read the selected file.');
+      }
+
+      let payloadText: string | null = null;
+      if (asset.file && typeof asset.file.text === 'function') {
+        payloadText = await asset.file.text();
+      }
+      if (!payloadText) {
+        payloadText = await readTextFromUri(asset.uri);
+      }
+      if (!payloadText.trim()) {
+        throw new Error('Selected file is empty.');
+      }
+
+      setIphonePayload(payloadText);
+      const parsed = parseIphonePayload(payloadText);
+      setIphoneImportFeedback(
+        `Loaded ${asset.name || 'export file'}: ${parsed.sampleCount} samples across ${parsed.metricCount} metrics.`
+      );
+    } catch (error) {
+      setIphoneBatches([]);
+      setSelectedImportMetric(null);
+      setImportWindow(null);
+      setIphoneImportFeedback(
+        error instanceof Error
+          ? error.message
+          : 'Unable to import this file. You can still paste JSON manually.'
+      );
+    } finally {
+      setIphonePickLoading(false);
+    }
+  };
+
+  const handleParseIphonePayload = () => {
+    const trimmed = iphonePayload.trim();
+    if (!trimmed) {
+      setIphoneImportFeedback('Paste your iPhone export JSON before parsing.');
+      return;
+    }
+    setIphoneParseLoading(true);
+    setIphoneImportFeedback(null);
+    try {
+      const parsed = parseIphonePayload(trimmed);
+      setIphoneImportFeedback(
+        `Parsed ${parsed.sampleCount} samples across ${parsed.metricCount} metrics.`
+      );
+    } catch (error) {
+      setIphoneBatches([]);
+      setSelectedImportMetric(null);
+      setImportWindow(null);
+      setIphoneImportFeedback(error instanceof Error ? error.message : 'Unable to parse iPhone export.');
+    } finally {
+      setIphoneParseLoading(false);
+    }
+  };
+
+  const handleUploadIphoneImport = async () => {
+    if (!iphoneBatches.length) {
+      setIphoneImportFeedback('Parse an export before uploading.');
+      return;
+    }
+
+    setIphoneUploadLoading(true);
+    setIphoneImportFeedback(null);
+    try {
+      const uploadResults = await Promise.all(
+        iphoneBatches.map((batch) =>
+          runOrQueue({
+            endpoint: '/api/streams',
+            payload: { metric: batch.metric, samples: batch.samples },
+            description: `iPhone import (${batch.metric})`,
+          })
+        )
+      );
+      const queuedCount = uploadResults.filter((result) => result.status === 'queued').length;
+      const sentCount = uploadResults.length - queuedCount;
+      setIphoneImportFeedback(
+        queuedCount > 0
+          ? `Imported ${importedSampleCount} samples. Uploaded ${sentCount} metrics and queued ${queuedCount}.`
+          : `Imported ${importedSampleCount} samples across ${sentCount} metrics.`
+      );
+    } catch (error) {
+      setIphoneImportFeedback(
+        error instanceof Error ? error.message : 'Unable to upload imported samples.'
+      );
+    } finally {
+      setIphoneUploadLoading(false);
+    }
+  };
+
+  const handleClearIphoneImport = () => {
+    setIphonePayload('');
+    setIphoneBatches([]);
+    setSelectedImportMetric(null);
+    setImportWindow(null);
+    setIphoneImportFeedback(null);
+  };
+
   return (
     <RefreshableScrollView
       contentContainerStyle={styles.container}
@@ -284,6 +540,120 @@ export function ProfileScreen() {
           />
         </View>
       </Card>
+      <Card>
+        <SectionHeader title="Phone data import" subtitle="Import Auto Export / Health JSON from your iPhone" />
+        <AppText variant="muted" style={styles.importHint}>
+          Export health data to a JSON file on your iPhone, then choose the file here or paste the JSON
+          directly. Parsed metrics are uploaded to your stream timeline.
+        </AppText>
+        <SectionHeader
+          title="Direct phone access"
+          subtitle={`Status: ${formatPhoneAccessStatus(phoneAccessStatus)}`}
+        />
+        <View style={styles.importActionsRow}>
+          <AppButton
+            title="Grant access"
+            onPress={handleGrantPhoneAccess}
+            loading={phonePermissionLoading}
+            style={styles.importActionButton}
+          />
+          <AppButton
+            title="Sync today steps"
+            onPress={handleSyncPhoneSteps}
+            loading={phoneSyncLoading}
+            style={styles.importActionButton}
+          />
+        </View>
+        {phoneAccessFeedback ? (
+          <AppText variant="muted" style={styles.helperText}>
+            {phoneAccessFeedback}
+          </AppText>
+        ) : null}
+        {phoneStepSample ? (
+          <View style={styles.metricsRow}>
+            <Metric label="Today steps" value={formatNumber(phoneStepSample.steps)} />
+            <Metric label="Metric" value={PHONE_STEPS_METRIC} />
+            <Metric label="Synced" value={formatDate(new Date(phoneStepSample.ts).toISOString(), 'HH:mm')} />
+          </View>
+        ) : null}
+        <View style={styles.importDivider} />
+        <SectionHeader title="File / paste import" subtitle="Use exported JSON from iPhone apps" />
+        <View style={styles.importActionsRow}>
+          <AppButton
+            title="Choose file"
+            variant="ghost"
+            onPress={handlePickIphoneExport}
+            loading={iphonePickLoading}
+            style={styles.importActionButton}
+          />
+          <AppButton
+            title="Parse JSON"
+            onPress={handleParseIphonePayload}
+            loading={iphoneParseLoading}
+            style={styles.importActionButton}
+          />
+          <AppButton
+            title="Upload"
+            onPress={handleUploadIphoneImport}
+            loading={iphoneUploadLoading}
+            disabled={!iphoneBatches.length}
+            style={styles.importActionButton}
+          />
+          <AppButton title="Clear" variant="ghost" onPress={handleClearIphoneImport} />
+        </View>
+        <AppInput
+          label="Import JSON"
+          placeholder='{"samples":[{"metric":"exercise.hr","ts":1739836800000,"value":72}]}'
+          value={iphonePayload}
+          onChangeText={setIphonePayload}
+          multiline
+          numberOfLines={8}
+          autoCapitalize="none"
+          style={styles.importInput}
+        />
+        {iphoneImportFeedback ? (
+          <AppText variant="muted" style={styles.helperText}>
+            {iphoneImportFeedback}
+          </AppText>
+        ) : null}
+        {iphoneBatches.length ? (
+          <>
+            <View style={styles.metricsRow}>
+              <Metric label="Metrics" value={formatNumber(iphoneBatches.length)} />
+              <Metric label="Samples" value={formatNumber(importedSampleCount)} />
+              <Metric
+                label="Preview"
+                value={selectedImportBatch ? toMetricLabel(selectedImportBatch.metric) : '--'}
+              />
+            </View>
+            {importWindow ? (
+              <AppText variant="muted" style={styles.helperText}>
+                Time window: {importWindow}
+              </AppText>
+            ) : null}
+            <View style={styles.importMetricRow}>
+              {visibleImportBatches.map((batch) => (
+                <AppButton
+                  key={batch.metric}
+                  title={toMetricLabel(batch.metric)}
+                  variant={selectedImportMetric === batch.metric ? 'secondary' : 'ghost'}
+                  onPress={() => setSelectedImportMetric(batch.metric)}
+                  style={styles.importMetricButton}
+                />
+              ))}
+            </View>
+            {iphoneBatches.length > visibleImportBatches.length ? (
+              <AppText variant="muted" style={styles.helperText}>
+                +{iphoneBatches.length - visibleImportBatches.length} more metrics parsed.
+              </AppText>
+            ) : null}
+            <TrendChart
+              data={selectedImportTrend}
+              yLabel={selectedImportBatch ? toMetricLabel(selectedImportBatch.metric) : 'Value'}
+            />
+          </>
+        ) : null}
+      </Card>
       {feedback ? (
         <AppText variant="muted" style={styles.feedback}>
           {feedback}
@@ -294,6 +664,53 @@ export function ProfileScreen() {
   );
 }
 
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metric}>
+      <AppText variant="label">{label}</AppText>
+      <AppText variant="heading">{value}</AppText>
+    </View>
+  );
+}
+
+function formatImportWindow(startTs: number | null, endTs: number | null) {
+  if (!startTs || !endTs) {
+    return null;
+  }
+  return `${formatDate(new Date(startTs).toISOString(), 'MMM D, HH:mm')} - ${formatDate(
+    new Date(endTs).toISOString(),
+    'MMM D, HH:mm'
+  )}`;
+}
+
+function toMetricLabel(metric: string) {
+  const tail = metric.split('.').pop() || metric;
+  const pretty = tail.replace(/_/g, ' ');
+  return pretty.length > 18 ? `${pretty.slice(0, 16)}..` : pretty;
+}
+
+function formatPhoneAccessStatus(status: PhoneAccessStatus) {
+  if (status === 'granted') {
+    return 'Granted';
+  }
+  if (status === 'denied') {
+    return 'Denied';
+  }
+  if (status === 'unavailable') {
+    return 'Unavailable';
+  }
+  return 'Not requested';
+}
+
+async function readTextFromUri(uri: string) {
+  try {
+    const response = await fetch(uri);
+    return await response.text();
+  } catch {
+    throw new Error('Unable to read the selected file. Paste JSON manually if needed.');
+  }
+}
+
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
@@ -301,6 +718,9 @@ const styles = StyleSheet.create({
   },
   feedback: {
     textAlign: 'center',
+  },
+  importHint: {
+    marginBottom: spacing.sm,
   },
   avatarRow: {
     flexDirection: 'row',
@@ -332,5 +752,44 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.sm,
     flexWrap: 'wrap',
+  },
+  importActionsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+    marginBottom: spacing.sm,
+  },
+  importActionButton: {
+    flexGrow: 1,
+    minWidth: 100,
+  },
+  importInput: {
+    minHeight: 140,
+    textAlignVertical: 'top',
+  },
+  importDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.md,
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  metric: {
+    flex: 1,
+  },
+  importMetricRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  importMetricButton: {
+    flexGrow: 1,
+    minWidth: 96,
   },
 });

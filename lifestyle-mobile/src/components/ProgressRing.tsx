@@ -18,8 +18,8 @@ export function ProgressRing({ value, max = 100, size = 140, label }: Props) {
   const progress = (normalized / max) * circumference;
 
   return (
-    <View style={{ width: size, height: size }}>
-      <Svg width={size} height={size}>
+    <View style={{ width: size, height: size }} pointerEvents="none">
+      <Svg width={size} height={size} pointerEvents="none">
         <Circle
           stroke={colors.border}
           cx={size / 2}

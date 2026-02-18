@@ -1,7 +1,12 @@
 import '../utils/reanimatedCompat';
 import { View, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createDrawerNavigator, DrawerContentScrollView, DrawerItem } from '@react-navigation/drawer';
+import {
+  createDrawerNavigator,
+  DrawerContentComponentProps,
+  DrawerContentScrollView,
+  DrawerItem,
+} from '@react-navigation/drawer';
 import { useMemo } from 'react';
 import { AuthScreen, AuthStackParamList } from '../features/auth/AuthScreen';
 import { ForgotPasswordScreen } from '../features/auth/ForgotPasswordScreen';
@@ -42,6 +47,13 @@ type DrawerParamList = {
 };
 
 const Drawer = createDrawerNavigator<DrawerParamList>();
+type DrawerRouteName = keyof DrawerParamList;
+type DrawerGroup = {
+  key: string;
+  items: Array<{ label: string; route: DrawerRouteName }>;
+  includeSignOut?: boolean;
+};
+const drawerItem = (label: string, route: DrawerRouteName) => ({ label, route });
 
 export function AppNavigator() {
   const { user, isRestoring } = useAuth();
@@ -86,10 +98,11 @@ function DrawerNavigator() {
     <Drawer.Navigator
       useLegacyImplementation={false}
       initialRouteName="Overview"
-      drawerContent={(props) => <CustomDrawerContent {...props} />}
+      drawerContent={(drawerProps) => <CustomDrawerContent {...drawerProps} />}
       screenOptions={({ navigation }) => ({
         headerShown: true,
         drawerType: 'front',
+        swipeEnabled: false,
         drawerStyle: { backgroundColor: colors.background },
         headerStyle: {
           backgroundColor: colors.background,
@@ -139,51 +152,55 @@ function DrawerNavigator() {
   );
 }
 
-function CustomDrawerContent(props: any) {
+function CustomDrawerContent({
+  state,
+  navigation,
+}: DrawerContentComponentProps) {
   const { user, signOut } = useAuth();
   const isCoach = user?.role === 'Coach' || user?.role === 'Head Coach';
   const isHeadCoach = user?.role === 'Head Coach';
-  const activeRoute = props.state?.routes?.[props.state?.index]?.name;
-  const navGroups = useMemo(
-    () => [
-      {
-        key: 'overview',
-        items: [{ label: 'Overview', route: 'Overview' }],
-      },
-      {
-        key: 'training',
-        items: [
-          { label: 'Exercise', route: 'Exercise' },
-          { label: 'Activity', route: 'Activity' },
-          ...(isCoach ? [{ label: 'Roster', route: 'Roster' }] : []),
-          { label: 'Sessions', route: 'Sessions' },
-        ],
-      },
-      {
-        key: 'recovery',
-        items: [
-          { label: 'Sleep', route: 'Sleep' },
-          { label: 'Vitals', route: 'Vitals' },
-        ],
-      },
-      {
-        key: 'fuel',
-        items: [
-          { label: 'Nutrition', route: 'Nutrition' },
-          { label: 'Weight', route: 'Weight' },
-        ],
-      },
-      {
-        key: 'account',
-        items: [
-          { label: 'Settings', route: 'Profile' },
-          { label: 'Share', route: 'Share' },
-          { label: 'Devices', route: 'Devices' },
-          ...(isHeadCoach ? [{ label: 'Admin', route: 'Admin' }] : []),
-        ],
-        includeSignOut: true,
-      },
-    ],
+  const activeRoute = state?.routes?.[state?.index]?.name;
+  const navGroups = useMemo<DrawerGroup[]>(
+    () =>
+      [
+        {
+          key: 'overview',
+          items: [drawerItem('Overview', 'Overview')],
+        },
+        {
+          key: 'training',
+          items: [
+            drawerItem('Exercise', 'Exercise'),
+            drawerItem('Activity', 'Activity'),
+            ...(isCoach ? [drawerItem('Roster', 'Roster')] : []),
+            drawerItem('Sessions', 'Sessions'),
+          ],
+        },
+        {
+          key: 'recovery',
+          items: [
+            drawerItem('Sleep', 'Sleep'),
+            drawerItem('Vitals', 'Vitals'),
+          ],
+        },
+        {
+          key: 'fuel',
+          items: [
+            drawerItem('Nutrition', 'Nutrition'),
+            drawerItem('Weight', 'Weight'),
+          ],
+        },
+        {
+          key: 'account',
+          items: [
+            drawerItem('Settings', 'Profile'),
+            drawerItem('Share', 'Share'),
+            drawerItem('Devices', 'Devices'),
+            ...(isHeadCoach ? [drawerItem('Admin', 'Admin')] : []),
+          ],
+          includeSignOut: true,
+        },
+      ],
     [isCoach, isHeadCoach]
   );
   const initials =
@@ -197,7 +214,7 @@ function CustomDrawerContent(props: any) {
     : user?.avatar_url || null;
 
   return (
-    <DrawerContentScrollView {...props} contentContainerStyle={styles.drawerContent}>
+    <DrawerContentScrollView contentContainerStyle={styles.drawerContent}>
       <View style={styles.profileBlock}>
         <View style={styles.profileAvatar}>
           {avatarUri ? (
@@ -227,7 +244,10 @@ function CustomDrawerContent(props: any) {
               <DrawerItem
                 key={item.route}
                 label={item.label}
-                onPress={() => props.navigation.navigate(item.route)}
+                onPress={() => {
+                  navigation?.closeDrawer();
+                  navigation?.navigate(item.route);
+                }}
                 labelStyle={styles.drawerLabel}
                 focused={activeRoute === item.route}
                 activeBackgroundColor="rgba(77,245,255,0.12)"
