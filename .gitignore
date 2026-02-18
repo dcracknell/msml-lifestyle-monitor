@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Node dependencies and cache
+node_modules/
+lifestyle-mobile/node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+lifestyle-mobile/dist/
+
+# Local env files
+.env
+.env.local
+.env.*.local
+lifestyle-mobile/.env
+
+# Expo / React Native generated files
+lifestyle-mobile/.expo/
+lifestyle-mobile/android/
+lifestyle-mobile/ios/
