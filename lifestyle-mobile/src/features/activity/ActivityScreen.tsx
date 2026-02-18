@@ -187,6 +187,7 @@ export function ActivityScreen() {
 
   useEffect(() => {
     if (!autoExportEnabled || !isFocused) {
+    if (!autoExportEnabled) {
       return;
     }
 
@@ -208,6 +209,7 @@ export function ActivityScreen() {
 
     return () => clearInterval(id);
   }, [autoExportEnabled, isFocused, syncPhoneSteps]);
+  }, [autoExportEnabled, syncPhoneSteps]);
 
   const handleConnect = async () => {
     if (!data?.strava?.canManage) return;
@@ -365,27 +367,36 @@ export function ActivityScreen() {
         <AppText variant="muted">
           Last export: {lastPhoneExportAt ? formatDate(new Date(lastPhoneExportAt).toISOString(), 'MMM D, HH:mm') : 'Not exported yet'}
         </AppText>
+          Reads your phone step count after permission and sends it to streams as {`phone.steps`} every 15 minutes while this screen is open.
+        </AppText>
+        <StatCard label="Today from phone" value={formatNumber(todayPhoneSteps)} />
         {phoneExportFeedback ? <AppText variant="muted">{phoneExportFeedback}</AppText> : null}
       </Card>
 
       <Card>
         <SectionHeader title="Mileage vs duration" subtitle="Last sessions" />
-        <MultiSeriesLineChart series={mileageSeries} yLabel="Volume" />
+        <ChartErrorBoundary fallback="Mileage chart is unavailable on this device.">
+          <MultiSeriesLineChart series={mileageSeries} yLabel="Volume" />
+        </ChartErrorBoundary>
         <ChartLegend items={legendItems} />
       </Card>
       <Card>
         <SectionHeader title="Training load" subtitle="Recent sync" />
-        <TrendChart data={trainingTrend} yLabel="Load" />
+        <ChartErrorBoundary fallback="Training load chart is unavailable on this device.">
+          <TrendChart data={trainingTrend} yLabel="Load" />
+        </ChartErrorBoundary>
       </Card>
       <Card>
         <SectionHeader title="Pace vs heart rate" subtitle="Session comparison" />
-        <ScatterChart
-          data={pacePoints}
-          xLabel="Pace (per km)"
-          yLabel="Avg heart rate"
-          xFormatter={(value) => formatPace(Number(value))}
-          yFormatter={(value) => formatHeartRateAxis(Number(value))}
-        />
+        <ChartErrorBoundary fallback="Pace vs heart rate chart is unavailable on this device.">
+          <ScatterChart
+            data={pacePoints}
+            xLabel="Pace (per km)"
+            yLabel="Avg heart rate"
+            xFormatter={(value) => formatPace(Number(value))}
+            yFormatter={(value) => formatHeartRateAxis(Number(value))}
+          />
+        </ChartErrorBoundary>
       </Card>
       <Card>
         <SectionHeader title="Best efforts" subtitle="Auto-detected" />
@@ -677,6 +688,10 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     marginBottom: spacing.sm,
   },
+  chartFallback: {
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+  },
   goalContent: {
     gap: spacing.md,
   },
@@ -730,4 +745,37 @@ function extractErrorMessage(error: unknown, fallback: string) {
     return error.message;
   }
   return fallback;
+}
+
+interface ChartErrorBoundaryProps {
+  children: ReactNode;
+  fallback: string;
+}
+
+interface ChartErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ChartErrorBoundary extends Component<ChartErrorBoundaryProps, ChartErrorBoundaryState> {
+  state: ChartErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn('Activity chart render failed', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.chartFallback}>
+          <AppText variant="muted">{this.props.fallback}</AppText>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
 }
