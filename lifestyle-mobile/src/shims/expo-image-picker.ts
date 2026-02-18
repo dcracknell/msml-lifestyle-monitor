@@ -41,9 +41,13 @@ function canceledResult(): ImagePickerResult {
 }
 
 function getRealModule(): any | null {
-  // Deliberately disabled to avoid native module startup crashes in stale dev builds.
-  // Re-enable by removing this shim once the iOS build is cleanly rebuilt with expo-image-picker.
-  return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    const mod = require('expo-image-picker');
+    return mod?.default ?? mod;
+  } catch {
+    return null;
+  }
 }
 
 async function callReal<TReturn>(method: string, fallback: TReturn, ...args: any[]): Promise<TReturn> {
