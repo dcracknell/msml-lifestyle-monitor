@@ -1,6 +1,5 @@
 import { ReactNode } from 'react';
 import { render, act, cleanup } from '@testing-library/react';
-import { BluetoothProvider, useBluetooth } from '../BluetoothProvider';
 
 const mockConnectedDevices = jest.fn();
 const mockConnectToDevice = jest.fn();
@@ -58,6 +57,10 @@ jest.mock('react-native-ble-plx', () => {
     })),
   };
 });
+
+// Load the provider only after native dependencies are mocked.
+// This avoids initializing the real BLE module in Jest.
+const { BluetoothProvider, useBluetooth } = require('../BluetoothProvider') as typeof import('../BluetoothProvider');
 
 afterEach(() => {
   cleanup();

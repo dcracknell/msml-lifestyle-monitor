@@ -4,7 +4,7 @@ A React Native + Expo client that mirrors the MSML Lifestyle dashboard so athlet
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 20 or 22 LTS (use `.nvmrc`)
 - npm or yarn
 - Expo CLI (`npx expo` is sufficient)
 
@@ -86,6 +86,19 @@ npx expo run:ios
 # Android emulator / device
 npx expo run:android
 ```
+
+### Build with Xcode (installable app)
+
+1. Install pods:
+   ```bash
+   cd ios
+   pod install
+   ```
+2. Open `ios/MSMLLifestyle.xcworkspace` in Xcode (not the `.xcodeproj`).
+3. In Xcode, go to `MSMLLifestyle` target -> `Signing & Capabilities`:
+   - Select your Apple Developer Team.
+   - Confirm Bundle Identifier is `com.msml.lifestyle` (or change to your own unique identifier).
+4. Select a real iPhone device and run, or choose `Product` -> `Archive` for App Store/TestFlight distribution.
 
 On Android 12+ the app requests the `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `ACCESS_FINE_LOCATION` permissions the first time you start a scan. Make sure Bluetooth is enabled and grant those prompts so discovery succeeds.
 

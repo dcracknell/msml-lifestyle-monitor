@@ -12,7 +12,7 @@ import {
   RefreshableScrollView,
 } from '../../components';
 import { colors, spacing } from '../../theme';
-import * as ImagePicker from 'expo-image-picker';
+import { getImagePickerMissingMessage, getImagePickerModule } from '../../utils/imagePicker';
 
 export function ProfileScreen() {
   const { user, setSessionFromPayload } = useAuth();
@@ -57,12 +57,17 @@ export function ProfileScreen() {
 
   const handleTakePhoto = async () => {
     setPhotoStatus(null);
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    const imagePicker = getImagePickerModule();
+    if (!imagePicker) {
+      setPhotoStatus(getImagePickerMissingMessage());
+      return;
+    }
+    const permission = await imagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
       setPhotoStatus('Camera permission is required.');
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
+    const result = await imagePicker.launchCameraAsync({
       allowsEditing: false,
       quality: 0.5,
       base64: true,
@@ -83,12 +88,17 @@ export function ProfileScreen() {
 
   const handlePickFromLibrary = async () => {
     setPhotoStatus(null);
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const imagePicker = getImagePickerModule();
+    if (!imagePicker) {
+      setPhotoStatus(getImagePickerMissingMessage());
+      return;
+    }
+    const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       setPhotoStatus('Photo library permission is required.');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const result = await imagePicker.launchImageLibraryAsync({
       allowsEditing: false,
       quality: 0.5,
       base64: true,

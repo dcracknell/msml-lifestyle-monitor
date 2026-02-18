@@ -35,7 +35,7 @@ import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import { formatDate, formatNumber } from '../../utils/format';
 import { useSyncQueue } from '../../providers/SyncProvider';
-import * as ImagePicker from 'expo-image-picker';
+import { getImagePickerMissingMessage, getImagePickerModule } from '../../utils/imagePicker';
 import {
   CameraView,
   useCameraPermissions,
@@ -516,12 +516,17 @@ export function NutritionScreen() {
 
   const handleCapturePhoto = async () => {
     setPhotoStatus(null);
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    const imagePicker = getImagePickerModule();
+    if (!imagePicker) {
+      setPhotoStatus(getImagePickerMissingMessage());
+      return;
+    }
+    const permission = await imagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
       setPhotoStatus('Camera permission is required to attach a meal photo.');
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
+    const result = await imagePicker.launchCameraAsync({
       allowsEditing: false,
       quality: 0.5,
       base64: true,

@@ -20,6 +20,7 @@ import {
 } from '../../components';
 import { activityRequest, connectStravaRequest, disconnectStravaRequest, syncStravaRequest } from '../../api/endpoints';
 import { ActivityEffort } from '../../api/types';
+import { ApiError } from '../../api/client';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import { colors, spacing } from '../../theme';
@@ -58,8 +59,9 @@ export function ActivityScreen() {
   const { user } = useAuth();
   const navigation = useNavigation();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
+  const [stravaFeedback, setStravaFeedback] = useState<string | null>(null);
 
-  const { data, isLoading, isError, refetch, isFetching, isRefetching } = useQuery({
+  const { data, isLoading, isError, error, refetch, isFetching, isRefetching } = useQuery({
     queryKey: ['activity', requestSubject || user?.id],
     queryFn: () => activityRequest({ athleteId: requestSubject }),
     enabled: Boolean(user?.id),
@@ -74,32 +76,64 @@ export function ActivityScreen() {
 
   const handleConnect = async () => {
     if (!data?.strava?.canManage) return;
-    const payload = await connectStravaRequest();
-    await WebBrowser.openBrowserAsync(payload.url);
-    refetch();
+    setStravaFeedback(null);
+    try {
+      const payload = await connectStravaRequest();
+      await WebBrowser.openBrowserAsync(payload.url);
+      await refetch();
+      setStravaFeedback('Strava connection flow opened. Return here after authorization.');
+    } catch (connectError) {
+      setStravaFeedback(extractErrorMessage(connectError, 'Unable to start Strava connection.'));
+    }
   };
 
   const handleDisconnect = async () => {
-    await disconnectStravaRequest();
-    refetch();
+    setStravaFeedback(null);
+    try {
+      await disconnectStravaRequest();
+      await refetch();
+      setStravaFeedback('Strava disconnected.');
+    } catch (disconnectError) {
+      setStravaFeedback(extractErrorMessage(disconnectError, 'Unable to disconnect Strava.'));
+    }
   };
 
   const handleSync = async () => {
-    await syncStravaRequest();
-    refetch();
+    setStravaFeedback(null);
+    try {
+      const payload = await syncStravaRequest();
+      await refetch();
+      setStravaFeedback(`Imported ${payload.imported} of ${payload.fetched} activities.`);
+    } catch (syncError) {
+      setStravaFeedback(extractErrorMessage(syncError, 'Unable to sync Strava right now.'));
+    }
   };
 
-  if (isLoading || !data) {
+  if (isLoading && !data) {
     return <LoadingView />;
   }
 
-  if (isError) {
-    return <ErrorView message="Unable to load activity" onRetry={refetch} />;
+  if (!data) {
+    return (
+      <ErrorView
+        message={isError ? extractErrorMessage(error, 'Unable to load activity') : 'No activity data available.'}
+        onRetry={refetch}
+      />
+    );
+  }
+
+  if (typeof data !== 'object') {
+    return <ErrorView message="Activity response was invalid. Please try again." onRetry={refetch} />;
   }
 
   const summary = data.summary;
-  const efforts = (data.bestEfforts || []).filter((entry): entry is ActivityEffort => Boolean(entry));
-  const mileageTrend = data.charts?.mileageTrend || [];
+  const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+  const efforts = Array.isArray(data.bestEfforts)
+    ? data.bestEfforts.filter((entry): entry is ActivityEffort => Boolean(entry))
+    : [];
+  const mileageTrend = Array.isArray(data.charts?.mileageTrend) ? data.charts.mileageTrend : [];
+  const trainingLoadTrendData = Array.isArray(data.charts?.trainingLoad) ? data.charts.trainingLoad : [];
+  const heartRatePaceData = Array.isArray(data.charts?.heartRatePace) ? data.charts.heartRatePace : [];
   const mileageSeries = [
     {
       id: 'distance',
@@ -124,11 +158,11 @@ export function ActivityScreen() {
   const legendItems = mileageSeries
     .filter((serie) => serie.data.length)
     .map((serie) => ({ label: serie.label, color: serie.color || colors.accent }));
-  const trainingTrend = (data.charts?.trainingLoad || []).map((entry) => ({
+  const trainingTrend = trainingLoadTrendData.map((entry) => ({
     label: formatDate(entry.startTime, 'MMM D'),
     value: entry.trainingLoad ?? 0,
   }));
-  const pacePoints = (data.charts?.heartRatePace || []).map((point) => ({
+  const pacePoints = heartRatePaceData.map((point) => ({
     x: Number(point.paceSeconds),
     y: Number(point.heartRate),
     label: point.label,
@@ -141,6 +175,11 @@ export function ActivityScreen() {
       onRefresh={refetch}
       showsVerticalScrollIndicator={false}
     >
+      {isError ? (
+        <Card>
+          <AppText variant="muted">{extractErrorMessage(error, 'Showing cached activity data.')}</AppText>
+        </Card>
+      ) : null}
       {goalsReady ? (
         <ActivityGoalCard
           summaryDistanceKm={summary?.weeklyDistanceKm ?? 0}
@@ -207,18 +246,22 @@ export function ActivityScreen() {
         <SectionHeader title="Recent sessions" subtitle="Latest 3" action={
           <AppButton title="See all" variant="ghost" onPress={() => navigation.navigate('Sessions' as never)} />
         } />
-        {data.sessions.slice(0, 3).map((session) => (
-          <View key={session.id} style={styles.sessionRow}>
-            <View>
-              <AppText variant="body">{session.name}</AppText>
-              <AppText variant="muted">{formatDate(session.startTime)} · {session.sportType}</AppText>
+        {sessions.length ? (
+          sessions.slice(0, 3).map((session) => (
+            <View key={session.id} style={styles.sessionRow}>
+              <View>
+                <AppText variant="body">{session.name}</AppText>
+                <AppText variant="muted">{formatDate(session.startTime)} · {session.sportType}</AppText>
+              </View>
+              <View>
+                <AppText variant="heading">{formatDistance(session.distance || 0)}</AppText>
+                <AppText variant="muted">{formatPace(session.averagePace)}</AppText>
+              </View>
             </View>
-            <View>
-              <AppText variant="heading">{formatDistance(session.distance || 0)}</AppText>
-              <AppText variant="muted">{formatPace(session.averagePace)}</AppText>
-            </View>
-          </View>
-        ))}
+          ))
+        ) : (
+          <AppText variant="muted">No sessions available yet.</AppText>
+        )}
       </Card>
       {data.strava?.enabled ? (
         <Card>
@@ -242,6 +285,11 @@ export function ActivityScreen() {
           {data.strava.requiresSetup ? (
             <AppText variant="muted" style={styles.warning}>
               Add your Strava API keys under Profile before connecting.
+            </AppText>
+          ) : null}
+          {stravaFeedback ? (
+            <AppText variant="muted" style={styles.stravaFeedback}>
+              {stravaFeedback}
             </AppText>
           ) : null}
         </Card>
@@ -456,6 +504,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     color: colors.warning,
   },
+  stravaFeedback: {
+    marginTop: spacing.sm,
+  },
   goalContent: {
     gap: spacing.md,
   },
@@ -495,3 +546,18 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
 });
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiError) {
+    if (error.message) {
+      return error.message;
+    }
+    if (error.status) {
+      return `${fallback} (HTTP ${error.status})`;
+    }
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}

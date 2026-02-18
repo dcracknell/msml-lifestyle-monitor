@@ -5,7 +5,7 @@ import { AppButton, AppInput, AppText, Card } from '../../components';
 import { colors } from '../../theme';
 import { useAuth } from '../../providers/AuthProvider';
 import { useApiConfig } from '../../providers/ApiConfigProvider';
-import * as ImagePicker from 'expo-image-picker';
+import { getImagePickerMissingMessage, getImagePickerModule } from '../../utils/imagePicker';
 
 export type AuthStackParamList = {
   AuthLanding: undefined;
@@ -148,12 +148,17 @@ export function AuthScreen({ navigation }: Props) {
               variant="ghost"
               onPress={async () => {
                 setPhotoStatus(null);
-                const permission = await ImagePicker.requestCameraPermissionsAsync();
+                const imagePicker = getImagePickerModule();
+                if (!imagePicker) {
+                  setPhotoStatus(getImagePickerMissingMessage());
+                  return;
+                }
+                const permission = await imagePicker.requestCameraPermissionsAsync();
                 if (!permission.granted) {
                   setPhotoStatus('Camera permission is required.');
                   return;
                 }
-                const result = await ImagePicker.launchCameraAsync({
+                const result = await imagePicker.launchCameraAsync({
                   allowsEditing: false,
                   quality: 0.5,
                   base64: true,

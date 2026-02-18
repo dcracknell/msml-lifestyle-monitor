@@ -7,6 +7,16 @@ try {
   }
 }
 
+const iosBundleIdentifier =
+  process.env.EXPO_PUBLIC_IOS_BUNDLE_IDENTIFIER ||
+  process.env.IOS_BUNDLE_IDENTIFIER ||
+  'com.dcracknell.msml.lifestyle';
+const androidPackage =
+  process.env.EXPO_PUBLIC_ANDROID_PACKAGE ||
+  process.env.ANDROID_PACKAGE ||
+  'com.dcracknell.msml.lifestyle';
+const appleTeamId = process.env.APPLE_TEAM_ID;
+
 export default ({ config }) => ({
   ...config,
   name: 'MSML Lifestyle',
@@ -28,18 +38,23 @@ export default ({ config }) => ({
   },
   ios: {
     supportsTablet: true,
-    bundleIdentifier: 'com.msml.lifestyle',
+    bundleIdentifier: iosBundleIdentifier,
+    icon: './assets/icon.png',
+    ...(appleTeamId ? { appleTeamId } : {}),
     infoPlist: {
+      NSBluetoothAlwaysUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
+      NSBluetoothPeripheralUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
       NSCameraUsageDescription: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
       NSPhotoLibraryUsageDescription: 'Allow MSML Lifestyle to attach meal photos from your library.',
     },
   },
   android: {
     adaptiveIcon: {
-      foregroundImage: './assets/icon.png',
+      foregroundImage: './assets/adaptive-icon-foreground.png',
+      monochromeImage: './assets/adaptive-icon-foreground.png',
       backgroundColor: '#010915',
     },
-    package: 'com.msml.lifestyle',
+    package: androidPackage,
     permissions: ['android.permission.CAMERA'],
   },
   web: {
@@ -49,6 +64,13 @@ export default ({ config }) => ({
     'expo-secure-store',
     'expo-font',
     'expo-web-browser',
+    [
+      'expo-image-picker',
+      {
+        photosPermission: 'Allow MSML Lifestyle to attach meal photos from your library.',
+        cameraPermission: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
+      },
+    ],
     [
       'expo-camera',
       {
