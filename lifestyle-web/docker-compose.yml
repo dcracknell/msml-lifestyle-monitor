@@ -1,5 +1,6 @@
 services:
   lifestyle-web:
+    image: ${LIFESTYLE_WEB_IMAGE:-lifestyle-web:local}
     build:
       context: .
       dockerfile: Dockerfile
