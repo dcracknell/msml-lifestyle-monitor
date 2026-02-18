@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as WebBrowser from 'expo-web-browser';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import {
   AppButton,
   AppInput,
@@ -65,6 +65,7 @@ export function ActivityScreen() {
   const { user } = useAuth();
   const { runOrQueue } = useSyncQueue();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const [stravaFeedback, setStravaFeedback] = useState<string | null>(null);
   const [todayPhoneSteps, setTodayPhoneSteps] = useState<number | null>(null);
