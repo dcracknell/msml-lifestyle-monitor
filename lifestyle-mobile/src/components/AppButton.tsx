@@ -1,9 +1,9 @@
-import { ActivityIndicator, Pressable, PressableProps, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, TouchableOpacity, TouchableOpacityProps, StyleSheet, Text } from 'react-native';
 import { colors, fonts } from '../theme';
 
 type Variant = 'primary' | 'secondary' | 'ghost';
 
-interface Props extends PressableProps {
+interface Props extends TouchableOpacityProps {
   title: string;
   variant?: Variant;
   loading?: boolean;
@@ -12,12 +12,13 @@ interface Props extends PressableProps {
 export function AppButton({ title, variant = 'primary', loading, style, disabled, ...rest }: Props) {
   const isDisabled = disabled || loading;
   return (
-    <Pressable
+    <TouchableOpacity
       accessibilityRole="button"
-      style={({ pressed }) => [
+      activeOpacity={0.85}
+      hitSlop={8}
+      style={[
         styles.base,
         buttonVariants[variant],
-        pressed && !isDisabled ? styles.pressed : null,
         isDisabled ? styles.disabled : null,
         style,
       ]}
@@ -29,7 +30,7 @@ export function AppButton({ title, variant = 'primary', loading, style, disabled
       ) : (
         <Text style={[styles.text, textVariants[variant]]}>{title}</Text>
       )}
-    </Pressable>
+    </TouchableOpacity>
   );
 }
 
@@ -46,9 +47,6 @@ const styles = StyleSheet.create({
   text: {
     fontFamily: fonts.sansSemi,
     fontSize: 16,
-  },
-  pressed: {
-    opacity: 0.85,
   },
   disabled: {
     opacity: 0.5,

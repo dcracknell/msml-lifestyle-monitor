@@ -1,15 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, Pressable } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import {
   AppButton,
   AppText,
   Card,
   ProgressRing,
-  RefreshableScrollView,
   SectionHeader,
 } from '../../components';
 import { activityRequest } from '../../api/endpoints';
@@ -31,6 +30,13 @@ interface SportOption {
 type SessionState = 'idle' | 'recording' | 'paused';
 
 type ExerciseAction = 'start' | 'pause' | 'resume' | 'stop';
+type PhoneTrackerSource = 'expo-location' | 'geolocation';
+
+interface PhoneGeoPoint {
+  latitude: number;
+  longitude: number;
+  timestamp: number;
+}
 
 const SPORT_OPTIONS: SportOption[] = [
   { id: 'run', label: 'Run', tagline: 'Outdoor effort', match: 'run' },
@@ -46,6 +52,14 @@ const DEVICE_METRICS = {
 
 const PROGRESS_MAX_MINUTES = 120;
 const HERO_GRADIENT = colors.gradient as [string, string, ...string[]];
+const WATCH_COMMAND_TIMEOUT_MS = 3500;
+const PHONE_TRACKER_START_TIMEOUT_MS = 4000;
+const PHONE_UPLOAD_INTERVAL_MS = 15_000;
+const PHONE_UPLOAD_DISTANCE_DELTA_KM = 0.05;
+const PHONE_MIN_STEP_METERS = 1;
+const PHONE_MAX_STEP_METERS = 300;
+const WATCH_AUTO_START_FRESH_WINDOW_MS = 15_000;
+const EXERCISE_BUILD_MARKER = 'run-fix-2026-02-18-b';
 
 export function ExerciseScreen() {
   const navigation = useNavigation();
@@ -54,6 +68,7 @@ export function ExerciseScreen() {
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
 
   const {
+    config,
     bluetoothState,
     status,
     isPoweredOn,
@@ -65,9 +80,10 @@ export function ExerciseScreen() {
     stopScan,
     disconnectFromDevice,
     sendCommand,
+    manualPublish,
   } = useBluetooth();
 
-  const { data, refetch, isFetching, isRefetching } = useQuery({
+  const { data, isFetching } = useQuery({
     queryKey: ['exercise', requestSubject || user?.id],
     queryFn: () => activityRequest({ athleteId: requestSubject }),
     enabled: Boolean(user?.id),
@@ -79,10 +95,22 @@ export function ExerciseScreen() {
   const [controlLoading, setControlLoading] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [phoneDistanceKm, setPhoneDistanceKm] = useState<number | null>(null);
+  const [phonePaceSeconds, setPhonePaceSeconds] = useState<number | null>(null);
+  const [isPhoneTracking, setIsPhoneTracking] = useState(false);
+  const [phoneTrackingSource, setPhoneTrackingSource] = useState<PhoneTrackerSource | null>(null);
+  const [phoneTrackingError, setPhoneTrackingError] = useState<string | null>(null);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const elapsedBeforePauseRef = useRef(0);
   const sessionStartRef = useRef<number | null>(null);
+  const sessionStateRef = useRef<SessionState>('idle');
+  const locationWatcherRef = useRef<null | { stop: () => void }>(null);
+  const lastPhonePointRef = useRef<PhoneGeoPoint | null>(null);
+  const phoneDistanceMetersRef = useRef(0);
+  const lastPhoneUploadRef = useRef({ ts: 0, distanceKm: 0 });
+  const phoneDistanceRef = useRef<number | null>(null);
+  const phonePaceRef = useRef<number | null>(null);
 
   const sportConfig = useMemo(() => {
     return SPORT_OPTIONS.find((option) => option.id === selectedSport) ?? SPORT_OPTIONS[0];
@@ -93,7 +121,193 @@ export function ExerciseScreen() {
     return sessions.find((session) => session.sportType?.toLowerCase().includes(sportConfig.match));
   }, [sessions, sportConfig.match]);
 
-  const liveMetrics = useMemo(() => {
+  const uploadPhoneMetrics = useCallback(
+    async (distanceKm: number, paceSeconds: number | null, force = false) => {
+      if (!Number.isFinite(distanceKm) || distanceKm <= 0) {
+        return;
+      }
+      const now = Date.now();
+      if (!force) {
+        const elapsedSinceLastUpload = now - lastPhoneUploadRef.current.ts;
+        const distanceDelta = Math.abs(distanceKm - lastPhoneUploadRef.current.distanceKm);
+        if (
+          elapsedSinceLastUpload < PHONE_UPLOAD_INTERVAL_MS &&
+          distanceDelta < PHONE_UPLOAD_DISTANCE_DELTA_KM
+        ) {
+          return;
+        }
+      }
+      lastPhoneUploadRef.current = {
+        ts: now,
+        distanceKm,
+      };
+
+      try {
+        await manualPublish(distanceKm, DEVICE_METRICS.distance);
+        if (paceSeconds !== null && Number.isFinite(paceSeconds)) {
+          await manualPublish(paceSeconds, DEVICE_METRICS.pace);
+        }
+      } catch (error) {
+        setPhoneTrackingError(error instanceof Error ? error.message : 'Unable to upload phone run metrics.');
+      }
+    },
+    [manualPublish]
+  );
+
+  const handlePhoneLocationPoint = useCallback(
+    (point: PhoneGeoPoint) => {
+      if (sessionStateRef.current !== 'recording') {
+        return;
+      }
+      const previous = lastPhonePointRef.current;
+      if (previous) {
+        const deltaMeters = haversineDistanceMeters(previous, point);
+        if (
+          Number.isFinite(deltaMeters) &&
+          deltaMeters >= PHONE_MIN_STEP_METERS &&
+          deltaMeters <= PHONE_MAX_STEP_METERS
+        ) {
+          phoneDistanceMetersRef.current += deltaMeters;
+        }
+      }
+      lastPhonePointRef.current = point;
+
+      const distanceKm = phoneDistanceMetersRef.current / 1000;
+      const activeDurationMs =
+        elapsedBeforePauseRef.current +
+        (sessionStartRef.current ? Math.max(0, Date.now() - sessionStartRef.current) : 0);
+      const paceSeconds =
+        distanceKm > 0.02 && activeDurationMs > 0
+          ? Math.round((activeDurationMs / 1000) / distanceKm)
+          : null;
+
+      setPhoneDistanceKm(distanceKm);
+      setPhonePaceSeconds(paceSeconds);
+      void uploadPhoneMetrics(distanceKm, paceSeconds);
+    },
+    [uploadPhoneMetrics]
+  );
+
+  const stopPhoneTracking = useCallback(() => {
+    locationWatcherRef.current?.stop();
+    locationWatcherRef.current = null;
+    setIsPhoneTracking(false);
+    setPhoneTrackingSource(null);
+    lastPhonePointRef.current = null;
+  }, []);
+
+  const resetPhoneTracking = useCallback(() => {
+    stopPhoneTracking();
+    phoneDistanceMetersRef.current = 0;
+    lastPhoneUploadRef.current = { ts: 0, distanceKm: 0 };
+    setPhoneDistanceKm(null);
+    setPhonePaceSeconds(null);
+    setPhoneTrackingError(null);
+    phoneDistanceRef.current = null;
+    phonePaceRef.current = null;
+  }, [stopPhoneTracking]);
+
+  const startPhoneTracking = useCallback(async () => {
+    if (locationWatcherRef.current) {
+      return true;
+    }
+    setPhoneTrackingError(null);
+    const createPoint = (
+      latitude: number | null | undefined,
+      longitude: number | null | undefined,
+      timestamp?: number | null
+    ) => {
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return;
+      }
+      handlePhoneLocationPoint({
+        latitude: latitude as number,
+        longitude: longitude as number,
+        timestamp: Number.isFinite(timestamp as number) ? Math.round(timestamp as number) : Date.now(),
+      });
+    };
+
+    let lastError: string | null = null;
+
+    try {
+      const expoLocation = loadExpoLocationModule();
+      if (expoLocation?.requestForegroundPermissionsAsync && expoLocation?.watchPositionAsync) {
+        const permission = await expoLocation.requestForegroundPermissionsAsync();
+        if (permission?.status !== 'granted') {
+          throw new Error('Location permission is required to track the run with your phone.');
+        }
+        const accuracy =
+          expoLocation?.Accuracy?.BestForNavigation ??
+          expoLocation?.Accuracy?.Highest ??
+          expoLocation?.Accuracy?.High ??
+          expoLocation?.Accuracy?.Balanced ??
+          3;
+        const subscription = await expoLocation.watchPositionAsync(
+          {
+            accuracy,
+            timeInterval: 2000,
+            distanceInterval: 2,
+            mayShowUserSettingsDialog: true,
+          },
+          (location: any) => {
+            createPoint(
+              location?.coords?.latitude,
+              location?.coords?.longitude,
+              location?.timestamp ?? Date.now()
+            );
+          }
+        );
+        locationWatcherRef.current = {
+          stop: () => {
+            if (typeof subscription?.remove === 'function') {
+              subscription.remove();
+            }
+          },
+        };
+        setIsPhoneTracking(true);
+        setPhoneTrackingSource('expo-location');
+        return true;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'Unable to start phone GPS tracking.';
+    }
+
+    if (typeof navigator !== 'undefined' && navigator?.geolocation?.watchPosition) {
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          createPoint(
+            position?.coords?.latitude,
+            position?.coords?.longitude,
+            position?.timestamp ?? Date.now()
+          );
+        },
+        (geoError) => {
+          setPhoneTrackingError(geoError?.message || 'Phone location tracking failed.');
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 1000,
+        }
+      );
+      locationWatcherRef.current = {
+        stop: () => navigator.geolocation.clearWatch(watchId),
+      };
+      setIsPhoneTracking(true);
+      setPhoneTrackingSource('geolocation');
+      return true;
+    }
+
+    setPhoneTrackingError(
+      lastError ||
+        'Phone location tracking is unavailable. Install expo-location and rebuild to enable GPS run tracking.'
+    );
+    setIsPhoneTracking(false);
+    setPhoneTrackingSource(null);
+    return false;
+  }, [handlePhoneLocationPoint]);
+
+  const watchMetrics = useMemo(() => {
     const result: Record<keyof typeof DEVICE_METRICS, number | null> = {
       distance: null,
       pace: null,
@@ -101,14 +315,19 @@ export function ExerciseScreen() {
     };
     for (let index = recentSamples.length - 1; index >= 0; index -= 1) {
       const sample = recentSamples[index];
-      if (sample.metric === DEVICE_METRICS.distance && result.distance === null) {
-        result.distance = Number.isFinite(sample.value as number) ? (sample.value as number) : null;
+      const numericValue = Number.isFinite(sample.value as number) ? (sample.value as number) : null;
+      if (numericValue === null) {
+        continue;
       }
-      if (sample.metric === DEVICE_METRICS.pace && result.pace === null) {
-        result.pace = Number.isFinite(sample.value as number) ? (sample.value as number) : null;
+
+      if (result.distance === null && isWatchDistanceMetric(sample.metric)) {
+        result.distance = normalizeDistanceSample(sample.metric, numericValue);
       }
-      if (sample.metric === DEVICE_METRICS.heartRate && result.heartRate === null) {
-        result.heartRate = Number.isFinite(sample.value as number) ? (sample.value as number) : null;
+      if (result.pace === null && (isWatchPaceMetric(sample.metric) || isWatchSpeedMetric(sample.metric))) {
+        result.pace = normalizePaceSample(sample.metric, numericValue);
+      }
+      if (result.heartRate === null && isWatchHeartRateMetric(sample.metric)) {
+        result.heartRate = numericValue;
       }
       if (result.distance !== null && result.pace !== null && result.heartRate !== null) {
         break;
@@ -116,19 +335,76 @@ export function ExerciseScreen() {
     }
     return result;
   }, [recentSamples]);
+  const latestWatchSignalTs = useMemo(() => {
+    return recentSamples.reduce((latest, sample) => {
+      if (
+        (isWatchDistanceMetric(sample.metric) ||
+          isWatchPaceMetric(sample.metric) ||
+          isWatchSpeedMetric(sample.metric) ||
+          isWatchHeartRateMetric(sample.metric)) &&
+        Number.isFinite(sample.ts) &&
+        sample.ts > latest
+      ) {
+        return sample.ts;
+      }
+      return latest;
+    }, 0);
+  }, [recentSamples]);
 
-  const displayDistanceKm =
-    liveMetrics.distance !== null
-      ? liveMetrics.distance
-      : lastSessionForSport?.distance
-      ? (lastSessionForSport.distance || 0) / 1000
-      : null;
+  const liveDistanceKm = [watchMetrics.distance, phoneDistanceKm]
+    .filter((value): value is number => value !== null && Number.isFinite(value))
+    .reduce((maxValue, value) => Math.max(maxValue, value), 0);
+  const fallbackDistanceKm = lastSessionForSport?.distance
+    ? (lastSessionForSport.distance || 0) / 1000
+    : null;
+  const displayDistanceKm = liveDistanceKm > 0 ? liveDistanceKm : fallbackDistanceKm;
   const displayPaceSeconds =
-    liveMetrics.pace !== null
-      ? liveMetrics.pace
+    watchMetrics.pace !== null
+      ? watchMetrics.pace
+      : phonePaceSeconds !== null
+      ? phonePaceSeconds
       : lastSessionForSport?.averagePace ?? null;
   const displayHeartRate =
-    liveMetrics.heartRate !== null ? liveMetrics.heartRate : lastSessionForSport?.averageHr ?? null;
+    watchMetrics.heartRate !== null ? watchMetrics.heartRate : lastSessionForSport?.averageHr ?? null;
+  const dataSourceLabel = [
+    (watchMetrics.distance !== null || watchMetrics.pace !== null || watchMetrics.heartRate !== null) ? 'watch' : null,
+    (phoneDistanceKm !== null || isPhoneTracking) ? `phone ${phoneTrackingSource ? `(${phoneTrackingSource})` : ''}` : null,
+  ]
+    .filter(Boolean)
+    .join(' + ');
+
+  useEffect(() => {
+    sessionStateRef.current = sessionState;
+  }, [sessionState]);
+
+  useFocusEffect(
+    useCallback(() => {
+      (navigation as any)?.getParent?.()?.closeDrawer?.();
+      return undefined;
+    }, [navigation])
+  );
+
+  useEffect(() => {
+    phoneDistanceRef.current = phoneDistanceKm;
+    phonePaceRef.current = phonePaceSeconds;
+  }, [phoneDistanceKm, phonePaceSeconds]);
+
+  useEffect(() => {
+    if (sessionState !== 'idle' || latestWatchSignalTs <= 0) {
+      return;
+    }
+    const ageMs = Date.now() - latestWatchSignalTs;
+    if (ageMs < 0 || ageMs > WATCH_AUTO_START_FRESH_WINDOW_MS) {
+      return;
+    }
+    elapsedBeforePauseRef.current = 0;
+    sessionStartRef.current = Date.now();
+    setElapsedMs(0);
+    setSessionState('recording');
+    sessionStateRef.current = 'recording';
+    setFeedback('Workout data detected from watch. Recording started automatically.');
+    void startPhoneTracking();
+  }, [latestWatchSignalTs, sessionState, startPhoneTracking]);
 
   useEffect(() => {
     if (sessionState !== 'recording') {
@@ -150,37 +426,34 @@ export function ExerciseScreen() {
     };
   }, [sessionState]);
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, []);
-
-  const ensureConnected = () => {
-    if (!connectedDevice) {
-      setFeedback('Connect your watch before starting an activity.');
-      return false;
-    }
-    return true;
-  };
-
   const sendExerciseCommand = async (action: ExerciseAction, nextState: SessionState, resetTimer?: boolean) => {
-    if (!ensureConnected()) {
-      return;
-    }
     setControlLoading(true);
+    let watchNote: string | null = null;
+    let trackingNote: string | null = null;
     try {
-      await sendCommand(
-        JSON.stringify({
-          type: 'exercise-control',
-          action,
-          sport: sportConfig.id,
-          timestamp: new Date().toISOString(),
-          durationMs: elapsedMs,
-        })
-      );
+      // Make controls respond immediately, then complete device operations in the background flow below.
+      setSessionState(nextState);
+      sessionStateRef.current = nextState;
+
+      let watchCommandTask: Promise<void> | null = null;
+      if (connectedDevice) {
+        watchCommandTask = withTimeout(
+          sendCommand(
+            JSON.stringify({
+              type: 'exercise-control',
+              action,
+              sport: sportConfig.id,
+              timestamp: new Date().toISOString(),
+              durationMs: elapsedMs,
+            })
+          ),
+          WATCH_COMMAND_TIMEOUT_MS,
+          'Watch command timed out.'
+        );
+      } else if (action === 'start') {
+        watchNote = 'Watch not connected. Tracking with phone GPS only.';
+      }
+
       if (resetTimer) {
         elapsedBeforePauseRef.current = 0;
         sessionStartRef.current = Date.now();
@@ -195,8 +468,49 @@ export function ExerciseScreen() {
         sessionStartRef.current = null;
         setElapsedMs(0);
       }
-      setSessionState(nextState);
-      setFeedback(buildSuccessMessage(action));
+
+      if (nextState === 'recording') {
+        let startedPhoneTracking = false;
+        try {
+          startedPhoneTracking = await withTimeout(
+            startPhoneTracking(),
+            PHONE_TRACKER_START_TIMEOUT_MS,
+            'Phone GPS startup timed out.'
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Phone GPS tracking unavailable.';
+          setPhoneTrackingError(message);
+          trackingNote = message;
+        }
+        if (!startedPhoneTracking && !trackingNote && !connectedDevice) {
+          trackingNote = 'Phone GPS tracking unavailable.';
+        }
+      } else {
+        stopPhoneTracking();
+      }
+
+      if (watchCommandTask) {
+        try {
+          await watchCommandTask;
+        } catch (error) {
+          watchNote =
+            error instanceof Error
+              ? `${error.message} Continuing with phone tracking.`
+              : 'Unable to control the watch. Continuing with phone tracking.';
+        }
+      }
+
+      if (nextState === 'idle') {
+        const finalDistance = phoneDistanceRef.current;
+        const finalPace = phonePaceRef.current;
+        if (finalDistance !== null && Number.isFinite(finalDistance) && finalDistance > 0) {
+          await uploadPhoneMetrics(finalDistance, finalPace, true);
+        }
+        resetPhoneTracking();
+      }
+      const baseMessage = buildSuccessMessage(action, connectedDevice ? 'watch + phone' : 'phone');
+      const message = [baseMessage, watchNote, trackingNote].filter(Boolean).join(' ');
+      setFeedback(message);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to control the watch.';
@@ -206,10 +520,28 @@ export function ExerciseScreen() {
     }
   };
 
-  const handleStart = () => sendExerciseCommand('start', 'recording', true);
-  const handlePause = () => sendExerciseCommand('pause', 'paused');
-  const handleResume = () => sendExerciseCommand('resume', 'recording');
-  const handleFinish = () => sendExerciseCommand('stop', 'idle');
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+      stopPhoneTracking();
+    };
+  }, [stopPhoneTracking]);
+
+  const handleStart = () => {
+    setFeedback(`Starting ${sportConfig.label.toLowerCase()}...`);
+    void sendExerciseCommand('start', 'recording', true);
+  };
+  const handlePause = () => {
+    void sendExerciseCommand('pause', 'paused');
+  };
+  const handleResume = () => {
+    void sendExerciseCommand('resume', 'recording');
+  };
+  const handleFinish = () => {
+    void sendExerciseCommand('stop', 'idle');
+  };
 
   const handleToggleScan = async () => {
     if (!isPoweredOn) {
@@ -238,6 +570,8 @@ export function ExerciseScreen() {
   const adapterStateLabel = formatBluetoothState(bluetoothState);
   const connectionCopy = connectedDevice
     ? `Connected to ${connectedDevice.name || 'custom watch'}`
+    : config.profile === 'apple_watch_companion'
+    ? 'Apple Watch companion ready — open the companion app, then connect.'
     : isPoweredOn
     ? 'Bluetooth ready — tap scan to find your watch.'
     : `Adapter: ${adapterStateLabel}`;
@@ -246,10 +580,9 @@ export function ExerciseScreen() {
   const statusLabel = status === 'connected' ? 'Connected' : titleCase(status);
 
   return (
-    <RefreshableScrollView
+    <ScrollView
       contentContainerStyle={styles.container}
-      refreshing={isRefetching}
-      onRefresh={refetch}
+      keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
       <Card padded={false} style={styles.heroCard}>
@@ -260,6 +593,7 @@ export function ExerciseScreen() {
               {sportConfig.label}
             </AppText>
             <AppText variant="body">{connectionCopy}</AppText>
+            <AppText variant="muted">Build {EXERCISE_BUILD_MARKER}</AppText>
           </View>
           <View style={styles.sportRow}>
             {SPORT_OPTIONS.map((option) => (
@@ -304,7 +638,6 @@ export function ExerciseScreen() {
                 title={`Start ${sportConfig.label.toLowerCase()}`}
                 onPress={handleStart}
                 loading={controlLoading}
-                disabled={!connectedDevice}
                 style={styles.primaryControl}
               />
             ) : (
@@ -342,8 +675,10 @@ export function ExerciseScreen() {
           <LiveMetric label="Heart rate" value={formatHeartRate(displayHeartRate)} helper="bpm" />
         </View>
         <AppText variant="muted" style={styles.liveHint}>
-          Samples use metric names {DEVICE_METRICS.distance}, {DEVICE_METRICS.pace}, and {DEVICE_METRICS.heartRate}.
+          Live source: {dataSourceLabel || 'last session'}. Metrics publish as {DEVICE_METRICS.distance},{' '}
+          {DEVICE_METRICS.pace}, and {DEVICE_METRICS.heartRate}.
         </AppText>
+        {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
       </Card>
 
       <Card>
@@ -391,6 +726,12 @@ export function ExerciseScreen() {
             Scan for your prototype watch or open the Devices tab for advanced controls.
           </AppText>
         )}
+        {config.profile === 'apple_watch_companion' ? (
+          <AppText variant="muted" style={styles.liveHint}>
+            Apple Watch usually cannot stream directly as a BLE sensor to iPhone apps. Use a Watch companion app that
+            relays JSON payloads.
+          </AppText>
+        ) : null}
         <View style={styles.actionsRow}>
           <AppButton
             title={isScanning ? 'Stop scan' : 'Scan for watch'}
@@ -411,7 +752,7 @@ export function ExerciseScreen() {
         ) : null}
         {bluetoothError ? <AppText style={styles.errorText}>{bluetoothError}</AppText> : null}
       </Card>
-    </RefreshableScrollView>
+    </ScrollView>
   );
 }
 
@@ -440,19 +781,132 @@ function formatHeartRate(value?: number | null) {
   return `${Math.round(value)} bpm`;
 }
 
-function buildSuccessMessage(action: ExerciseAction) {
+function normalizeMetric(metric: string) {
+  return String(metric || '').trim().toLowerCase();
+}
+
+function isWatchDistanceMetric(metric: string) {
+  const normalized = normalizeMetric(metric);
+  return normalized === DEVICE_METRICS.distance || normalized.includes('distance') || normalized.endsWith('.km');
+}
+
+function isWatchPaceMetric(metric: string) {
+  const normalized = normalizeMetric(metric);
+  return normalized === DEVICE_METRICS.pace || normalized.includes('pace');
+}
+
+function isWatchSpeedMetric(metric: string) {
+  const normalized = normalizeMetric(metric);
+  return normalized.includes('speed');
+}
+
+function isWatchHeartRateMetric(metric: string) {
+  const normalized = normalizeMetric(metric);
+  return (
+    normalized === DEVICE_METRICS.heartRate ||
+    normalized.includes('heart') ||
+    /(^|[._-])hr($|[._-])/.test(normalized)
+  );
+}
+
+function normalizeDistanceSample(metric: string, value: number) {
+  const normalized = normalizeMetric(metric);
+  if (normalized.includes('mile') || normalized.endsWith('.mi') || normalized.endsWith('_mi')) {
+    return value * 1.60934;
+  }
+  if (
+    normalized.includes('meter') ||
+    normalized.includes('_m') ||
+    normalized.includes('.m') ||
+    normalized.includes('distance_m')
+  ) {
+    return value / 1000;
+  }
+  return value;
+}
+
+function normalizePaceSample(metric: string, value: number) {
+  const normalized = normalizeMetric(metric);
+  if (isWatchSpeedMetric(metric)) {
+    return value > 0 ? 1000 / value : null;
+  }
+  if (
+    normalized.includes('min_per_km') ||
+    normalized.includes('minpkm') ||
+    normalized.includes('minutes_per_km') ||
+    normalized.endsWith('.min')
+  ) {
+    return value > 0 ? value * 60 : null;
+  }
+  return value > 0 ? value : null;
+}
+
+function buildSuccessMessage(action: ExerciseAction, source: 'watch + phone' | 'phone') {
   switch (action) {
     case 'start':
-      return 'Recording started on the watch.';
+      return source === 'watch + phone'
+        ? 'Recording started with watch + phone tracking.'
+        : 'Recording started with phone tracking.';
     case 'pause':
       return 'Workout paused.';
     case 'resume':
       return 'Workout resumed.';
     case 'stop':
-      return 'Workout saved on the watch.';
+      return source === 'watch + phone'
+        ? 'Workout saved from watch + phone tracking.'
+        : 'Workout saved from phone tracking.';
     default:
       return null;
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+    promise
+      .then((result) => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      })
+      .catch((error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+}
+
+function loadExpoLocationModule():
+  | {
+      requestForegroundPermissionsAsync: () => Promise<{ status: string }>;
+      watchPositionAsync: (
+        options: Record<string, unknown>,
+        callback: (location: any) => void
+      ) => Promise<{ remove?: () => void }>;
+      Accuracy?: Record<string, number>;
+    }
+  | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    return require('expo-location');
+  } catch {
+    return null;
+  }
+}
+
+function haversineDistanceMeters(start: PhoneGeoPoint, end: PhoneGeoPoint) {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusMeters = 6371000;
+  const dLat = toRadians(end.latitude - start.latitude);
+  const dLon = toRadians(end.longitude - start.longitude);
+  const lat1 = toRadians(start.latitude);
+  const lat2 = toRadians(end.latitude);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusMeters * c;
 }
 
 function LiveMetric({ label, value, helper }: { label: string; value: string; helper?: string }) {
