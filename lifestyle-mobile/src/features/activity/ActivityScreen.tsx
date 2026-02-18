@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as WebBrowser from 'expo-web-browser';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import {
   AppButton,
   AppInput,
@@ -23,9 +24,11 @@ import { ActivityEffort } from '../../api/types';
 import { ApiError } from '../../api/client';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
+import { useSyncQueue } from '../../providers/SyncProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDecimal, formatDistance, formatMinutes, formatNumber, formatPace } from '../../utils/format';
 import { useActivityGoals } from './useActivityGoals';
+import { pedometer } from '../../shims/expo-pedometer';
 
 function formatKilometers(value?: number | null) {
   const label = formatDecimal(value ?? null, 1);
@@ -47,6 +50,9 @@ function formatWeeklyDuration(minutes?: number | null) {
   return `${Math.round(minutes)} min`;
 }
 
+const AUTO_EXPORT_STEPS_KEY = 'msml.activity.autoExportPhoneSteps';
+const AUTO_EXPORT_INTERVAL_MS = 15 * 60 * 1000;
+
 function formatHeartRateAxis(value: number) {
   if (!Number.isFinite(value)) {
     return '--';
@@ -57,9 +63,16 @@ function formatHeartRateAxis(value: number) {
 export function ActivityScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
+  const { runOrQueue } = useSyncQueue();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const [stravaFeedback, setStravaFeedback] = useState<string | null>(null);
+  const [todayPhoneSteps, setTodayPhoneSteps] = useState<number | null>(null);
+  const [phoneExportFeedback, setPhoneExportFeedback] = useState<string | null>(null);
+  const [autoExportEnabled, setAutoExportEnabled] = useState(false);
+  const [isPhoneExporting, setIsPhoneExporting] = useState(false);
+  const [lastPhoneExportAt, setLastPhoneExportAt] = useState<number | null>(null);
 
   const { data, isLoading, isError, error, refetch, isFetching, isRefetching } = useQuery({
     queryKey: ['activity', requestSubject || user?.id],
@@ -73,6 +86,128 @@ export function ActivityScreen() {
     saveGoals,
     toggleMinimized,
   } = useActivityGoals();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const value = await AsyncStorage.getItem(AUTO_EXPORT_STEPS_KEY);
+        if (!cancelled && value === 'true') {
+          setAutoExportEnabled(true);
+        }
+      } catch {
+        // ignore preference load errors
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const syncPhoneSteps = useCallback(
+    async (showFeedback: boolean) => {
+      setIsPhoneExporting(true);
+      if (showFeedback) {
+        setPhoneExportFeedback(null);
+      }
+
+      try {
+        const available = await pedometer.isAvailableAsync();
+        if (!available) {
+          if (showFeedback) {
+            setPhoneExportFeedback('Step tracking is unavailable on this device.');
+          }
+          return false;
+        }
+
+        const currentPermission = await pedometer.getPermissionsAsync();
+        const permission = currentPermission.granted
+          ? currentPermission
+          : await pedometer.requestPermissionsAsync();
+
+        if (!permission.granted) {
+          if (showFeedback) {
+            setPhoneExportFeedback('Permission is required to access phone step data.');
+          }
+          return false;
+        }
+
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const result = await pedometer.getStepCountAsync(startOfDay, new Date());
+        const steps = Number.isFinite(result.steps) ? result.steps : 0;
+        setTodayPhoneSteps(steps);
+
+        const queued = await runOrQueue({
+          endpoint: '/api/streams',
+          payload: {
+            metric: 'phone.steps',
+            samples: [{ ts: Date.now(), value: steps }],
+          },
+          description: 'Phone steps auto export',
+        });
+
+        if (showFeedback) {
+          setPhoneExportFeedback(
+            queued.status === 'sent'
+              ? `Exported ${formatNumber(steps)} steps from your phone.`
+              : `Saved ${formatNumber(steps)} steps offline. Will sync when online.`
+          );
+        }
+
+        return true;
+      } catch (error) {
+        if (showFeedback) {
+          setPhoneExportFeedback(extractErrorMessage(error, 'Unable to export phone steps right now.'));
+        }
+        return false;
+      } finally {
+        setIsPhoneExporting(false);
+      }
+    },
+    [runOrQueue]
+  );
+
+  const toggleAutoExport = useCallback(async () => {
+    const next = !autoExportEnabled;
+    setAutoExportEnabled(next);
+    await AsyncStorage.setItem(AUTO_EXPORT_STEPS_KEY, next ? 'true' : 'false');
+
+    if (next) {
+      const ok = await syncPhoneSteps(true);
+      if (!ok) {
+        setAutoExportEnabled(false);
+        await AsyncStorage.setItem(AUTO_EXPORT_STEPS_KEY, 'false');
+      }
+    } else {
+      setPhoneExportFeedback('Auto-export turned off.');
+    }
+  }, [autoExportEnabled, syncPhoneSteps]);
+
+  useEffect(() => {
+    if (!autoExportEnabled || !isFocused) {
+      return;
+    }
+
+    syncPhoneSteps(false).then((ok) => {
+      if (!ok) {
+        setAutoExportEnabled(false);
+        AsyncStorage.setItem(AUTO_EXPORT_STEPS_KEY, 'false').catch(() => {});
+      }
+    });
+
+    const id = setInterval(() => {
+      syncPhoneSteps(false).then((ok) => {
+        if (!ok) {
+          setAutoExportEnabled(false);
+          AsyncStorage.setItem(AUTO_EXPORT_STEPS_KEY, 'false').catch(() => {});
+        }
+      });
+    }, AUTO_EXPORT_INTERVAL_MS);
+
+    return () => clearInterval(id);
+  }, [autoExportEnabled, isFocused, syncPhoneSteps]);
 
   const handleConnect = async () => {
     if (!data?.strava?.canManage) return;
@@ -207,6 +342,32 @@ export function ActivityScreen() {
           trend={summary?.longestRunName || 'Awaiting sync'}
         />
       </View>
+      <Card>
+        <SectionHeader title="Phone data export" subtitle="Permission-based" />
+        <View style={styles.phoneExportActions}>
+          <AppButton
+            title={isPhoneExporting ? 'Exporting…' : 'Export now'}
+            onPress={() => syncPhoneSteps(true)}
+            loading={isPhoneExporting}
+            disabled={isPhoneExporting}
+          />
+          <AppButton
+            title={autoExportEnabled ? 'Disable auto-export' : 'Enable auto-export'}
+            variant="ghost"
+            onPress={toggleAutoExport}
+            disabled={isPhoneExporting}
+          />
+        </View>
+        <AppText variant="muted" style={styles.phoneExportHint}>
+          How to sync: 1) Tap Export now and allow motion permission. 2) Enable auto-export to keep syncing every 15 minutes while this Activity screen stays open.
+        </AppText>
+        <StatCard label="Today from phone" value={formatNumber(todayPhoneSteps)} />
+        <AppText variant="muted">
+          Last export: {lastPhoneExportAt ? formatDate(new Date(lastPhoneExportAt).toISOString(), 'MMM D, HH:mm') : 'Not exported yet'}
+        </AppText>
+        {phoneExportFeedback ? <AppText variant="muted">{phoneExportFeedback}</AppText> : null}
+      </Card>
+
       <Card>
         <SectionHeader title="Mileage vs duration" subtitle="Last sessions" />
         <MultiSeriesLineChart series={mileageSeries} yLabel="Volume" />
@@ -506,6 +667,15 @@ const styles = StyleSheet.create({
   },
   stravaFeedback: {
     marginTop: spacing.sm,
+  },
+  phoneExportActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  phoneExportHint: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
   },
   goalContent: {
     gap: spacing.md,
