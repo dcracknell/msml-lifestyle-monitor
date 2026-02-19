@@ -16,7 +16,7 @@
 
 <body>
   <div class="app-shell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="appSidebar">
       <div class="brand">
         <span class="dot"></span>
         <div>
@@ -96,8 +96,18 @@
         <p>Balance hard sessions with mobility work to boost readiness.</p>
       </div>
     </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
 
     <main>
+      <button
+        type="button"
+        class="sidebar-toggle"
+        id="sidebarToggle"
+        aria-controls="appSidebar"
+        aria-expanded="false"
+        aria-haspopup="true">
+        Menu
+      </button>
       <section class="glass login-panel" id="loginPanel">
         <div>
           <p class="eyebrow">Welcome</p>

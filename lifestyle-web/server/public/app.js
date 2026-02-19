@@ -361,6 +361,9 @@ const readinessHeadline = document.getElementById('readinessHeadline');
 const profileCard = document.getElementById('profileCard');
 const pageTitle = document.getElementById('pageTitle');
 const pageSubtitle = document.getElementById('pageSubtitle');
+const appSidebar = document.getElementById('appSidebar');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 const sideNav = document.getElementById('sideNav');
 const pageContainers = document.querySelectorAll('[data-subpage]');
 const authTabs = document.getElementById('authTabs');
@@ -418,6 +421,10 @@ const nutritionAmountInput = document.getElementById('nutritionAmount');
 const nutritionAmountLabel = document.getElementById('nutritionAmountLabel');
 const nutritionAmountReferenceText = document.getElementById('nutritionAmountReference');
 const nutritionUnitSelect = document.getElementById('nutritionUnit');
+
+if (typeof document !== 'undefined' && document.body && sidebarToggle) {
+  document.body.classList.add('sidebar-enhanced');
+}
 const nutritionSuggestions = document.getElementById('nutritionSuggestions');
 const nutritionSuggestionBar = document.getElementById('nutritionSuggestionBar');
 const nutritionPreview = document.getElementById('nutritionPreview');
@@ -943,6 +950,84 @@ function hideChartMessage(canvasId) {
   canvas.classList.remove('hidden');
   hideEmptyState(container);
   return { canvas, container };
+}
+
+let pendingChartResizeFrame = null;
+function resizeAllCharts() {
+  if (!state || !state.charts) {
+    return;
+  }
+  Object.values(state.charts).forEach((chart) => {
+    if (chart && typeof chart.resize === 'function') {
+      try {
+        chart.resize();
+      } catch (error) {
+        console.warn('Unable to resize chart', error);
+      }
+    }
+  });
+}
+
+function queueChartResize() {
+  if (typeof requestAnimationFrame !== 'function') {
+    resizeAllCharts();
+    return;
+  }
+  if (pendingChartResizeFrame) {
+    cancelAnimationFrame(pendingChartResizeFrame);
+  }
+  pendingChartResizeFrame = requestAnimationFrame(() => {
+    pendingChartResizeFrame = null;
+    resizeAllCharts();
+  });
+}
+
+const SIDEBAR_OVERLAY_BREAKPOINT = 1040;
+const SIDEBAR_OPEN_LABEL = 'Close menu';
+const SIDEBAR_CLOSED_LABEL = 'Open menu';
+
+function shouldUseSidebarOverlay() {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia(`(max-width: ${SIDEBAR_OVERLAY_BREAKPOINT}px)`).matches;
+  }
+  return window.innerWidth <= SIDEBAR_OVERLAY_BREAKPOINT;
+}
+
+function setSidebarOpen(open) {
+  if (typeof document === 'undefined' || !document.body) {
+    return;
+  }
+  const enableOverlay = shouldUseSidebarOverlay();
+  const nextState = Boolean(open && enableOverlay);
+  document.body.classList.toggle('sidebar-open', nextState);
+  if (sidebarToggle) {
+    sidebarToggle.setAttribute('aria-expanded', String(nextState));
+    sidebarToggle.textContent = nextState ? SIDEBAR_OPEN_LABEL : SIDEBAR_CLOSED_LABEL;
+    sidebarToggle.setAttribute('aria-label', sidebarToggle.textContent);
+  }
+  if (sidebarBackdrop) {
+    if (nextState) {
+      sidebarBackdrop.removeAttribute('hidden');
+    } else {
+      sidebarBackdrop.setAttribute('hidden', 'hidden');
+    }
+  }
+  if (appSidebar) {
+    if (enableOverlay) {
+      appSidebar.setAttribute('aria-hidden', String(!nextState));
+      if (!nextState) {
+        appSidebar.setAttribute('inert', '');
+      } else {
+        appSidebar.removeAttribute('inert');
+      }
+    } else {
+      appSidebar.removeAttribute('aria-hidden');
+      appSidebar.removeAttribute('inert');
+    }
+  }
 }
 
 function clearShareInputs({ disableSelect = false, clearFeedback = true } = {}) {
@@ -3799,6 +3884,7 @@ function setActivePage(targetPage = 'overview') {
       setWeightDateDefault();
     }
   }
+  queueChartResize();
 }
 
 function resetToAuth(message = '') {
@@ -3827,6 +3913,7 @@ function resetToAuth(message = '') {
   dashboard.classList.add('hidden');
   loginPanel.classList.remove('hidden');
   setActivePage('overview');
+  setSidebarOpen(false);
   setAuthMode('login');
   loginForm?.reset();
   signupForm?.reset();
@@ -3878,8 +3965,41 @@ if (sideNav) {
     const target = event.target.closest('[data-page]');
     if (!target) return;
     setActivePage(target.dataset.page);
+    if (shouldUseSidebarOverlay()) {
+      setSidebarOpen(false);
+    }
   });
 }
+
+sidebarToggle?.addEventListener('click', () => {
+  const isOpen = Boolean(document?.body?.classList.contains('sidebar-open'));
+  setSidebarOpen(!isOpen);
+});
+
+sidebarBackdrop?.addEventListener('click', () => {
+  setSidebarOpen(false);
+});
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const hasOpenSidebar = Boolean(document.body?.classList.contains('sidebar-open'));
+    if (!hasOpenSidebar || !shouldUseSidebarOverlay()) {
+      return;
+    }
+    setSidebarOpen(false);
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => {
+    if (!shouldUseSidebarOverlay()) {
+      setSidebarOpen(false);
+    }
+  });
+}
+
+setSidebarOpen(false);
 
 async function restoreSessionFromStorage() {
   const stored = readPersistedSession();
@@ -4513,6 +4633,7 @@ async function completeAuthentication(session) {
 
   loginPanel.classList.add('hidden');
   dashboard.classList.remove('hidden');
+  queueChartResize();
   loginForm?.reset();
   signupForm?.reset();
   if (loginFeedback) loginFeedback.textContent = '';
@@ -6754,6 +6875,14 @@ function renderStravaPanel(strava = {}) {
       ? 'Only the account owner can manage Strava connections.'
       : '';
   }
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      queueChartResize();
+    }
+  });
 }
 
 updateNutritionFilterButtons();
