@@ -516,31 +516,35 @@ export function NutritionScreen() {
 
   const handleCapturePhoto = async () => {
     setPhotoStatus(null);
-    const imagePicker = getImagePickerModule();
-    if (!imagePicker) {
+    try {
+      const imagePicker = getImagePickerModule();
+      if (!imagePicker) {
+        setPhotoStatus(getImagePickerMissingMessage());
+        return;
+      }
+      const permission = await imagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        setPhotoStatus('Camera permission is required to attach a meal photo.');
+        return;
+      }
+      const result = await imagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
+      if (result.canceled) {
+        setPhotoStatus('Capture cancelled.');
+        return;
+      }
+      const asset = result.assets?.[0];
+      if (asset?.base64) {
+        handleEntryChange('photoData', asset.base64);
+        setPhotoStatus('Photo attached.');
+      } else {
+        setPhotoStatus('Unable to read photo. Try again.');
+      }
+    } catch {
       setPhotoStatus(getImagePickerMissingMessage());
-      return;
-    }
-    const permission = await imagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      setPhotoStatus('Camera permission is required to attach a meal photo.');
-      return;
-    }
-    const result = await imagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.5,
-      base64: true,
-    });
-    if (result.canceled) {
-      setPhotoStatus('Capture cancelled.');
-      return;
-    }
-    const asset = result.assets?.[0];
-    if (asset?.base64) {
-      handleEntryChange('photoData', asset.base64);
-      setPhotoStatus('Photo attached.');
-    } else {
-      setPhotoStatus('Unable to read photo. Try again.');
     }
   };
 

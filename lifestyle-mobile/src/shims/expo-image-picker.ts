@@ -20,10 +20,6 @@ type ImagePickerResult = {
 const UNAVAILABLE_MESSAGE =
   'Image picker is unavailable in this build. Rebuild and reinstall the app.';
 
-function unavailableError(method: string) {
-  return new Error(`expo-image-picker.${method} unavailable: ${UNAVAILABLE_MESSAGE}`);
-}
-
 function deniedPermission(): PermissionResponse {
   return {
     granted: false,
@@ -40,29 +36,6 @@ function canceledResult(): ImagePickerResult {
   };
 }
 
-function getRealModule(): any | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const mod = require('expo-image-picker');
-    return mod?.default ?? mod;
-  } catch {
-    return null;
-  }
-}
-
-async function callReal<TReturn>(method: string, fallback: TReturn, ...args: any[]): Promise<TReturn> {
-  const mod = getRealModule();
-  const fn = mod?.[method];
-  if (typeof fn !== 'function') {
-    return fallback;
-  }
-  try {
-    return await fn(...args);
-  } catch {
-    return fallback;
-  }
-}
-
 export const PermissionStatus = {
   UNDETERMINED: 'undetermined',
   DENIED: 'denied',
@@ -70,49 +43,35 @@ export const PermissionStatus = {
 } as const;
 
 export async function requestCameraPermissionsAsync() {
-  return callReal('requestCameraPermissionsAsync', deniedPermission());
+  return deniedPermission();
 }
 
 export async function requestMediaLibraryPermissionsAsync(writeOnly = false) {
-  return callReal('requestMediaLibraryPermissionsAsync', deniedPermission(), writeOnly);
+  void writeOnly;
+  return deniedPermission();
 }
 
 export async function getCameraPermissionsAsync() {
-  return callReal('getCameraPermissionsAsync', deniedPermission());
+  return deniedPermission();
 }
 
 export async function getMediaLibraryPermissionsAsync(writeOnly = false) {
-  return callReal('getMediaLibraryPermissionsAsync', deniedPermission(), writeOnly);
+  void writeOnly;
+  return deniedPermission();
 }
 
 export async function launchCameraAsync(options: any = {}) {
-  const mod = getRealModule();
-  const fn = mod?.launchCameraAsync;
-  if (typeof fn !== 'function') {
-    throw unavailableError('launchCameraAsync');
-  }
-  try {
-    return await fn(options);
-  } catch {
-    return canceledResult();
-  }
+  void options;
+  return canceledResult();
 }
 
 export async function launchImageLibraryAsync(options: any = {}) {
-  const mod = getRealModule();
-  const fn = mod?.launchImageLibraryAsync;
-  if (typeof fn !== 'function') {
-    throw unavailableError('launchImageLibraryAsync');
-  }
-  try {
-    return await fn(options);
-  } catch {
-    return canceledResult();
-  }
+  void options;
+  return canceledResult();
 }
 
 export async function getPendingResultAsync() {
-  return callReal('getPendingResultAsync', []);
+  return [];
 }
 
 export function useCameraPermissions() {

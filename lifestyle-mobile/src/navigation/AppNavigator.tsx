@@ -1,3 +1,4 @@
+import '../shims/installMissingNativeModules';
 import '../utils/reanimatedCompat';
 import { View, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -193,7 +194,7 @@ function CustomDrawerContent({
         {
           key: 'account',
           items: [
-            drawerItem('Settings', 'Profile'),
+            drawerItem('Settings (v2)', 'Profile'),
             drawerItem('Share', 'Share'),
             drawerItem('Devices', 'Devices'),
             ...(isHeadCoach ? [drawerItem('Admin', 'Admin')] : []),

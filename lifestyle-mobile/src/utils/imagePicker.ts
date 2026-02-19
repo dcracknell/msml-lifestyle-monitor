@@ -1,29 +1,46 @@
-import type * as ExpoImagePicker from 'expo-image-picker';
+import type imagePickerShim from '../shims/expo-image-picker';
 
-type ImagePickerModule = typeof ExpoImagePicker;
-
-let cachedModule: ImagePickerModule | null | undefined;
+type ImagePickerModule = typeof imagePickerShim;
 
 const MISSING_IMAGE_PICKER_MESSAGE =
   'Camera and photo library are unavailable in this build. Rebuild and reinstall the app with `npx expo run:ios --device`.';
 
-export function getImagePickerModule(): ImagePickerModule | null {
-  if (cachedModule !== undefined) {
-    return cachedModule;
+let cachedImagePicker: ImagePickerModule | null | undefined;
+
+function hasNativeImagePickerModule() {
+  const expoRuntime = (globalThis as { expo?: { modules?: Record<string, unknown> } }).expo;
+  return Boolean(expoRuntime?.modules?.ExponentImagePicker);
+}
+
+function resolveImagePickerModule(): ImagePickerModule | null {
+  // Avoid importing `expo-image-picker` unless its native module is already installed.
+  if (!hasNativeImagePickerModule()) {
+    return null;
   }
 
   try {
-    // Loaded lazily so the app does not crash on startup if the native module is missing.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    cachedModule = require('expo-image-picker') as ImagePickerModule;
+    const imagePickerModule = require('expo-image-picker') as Partial<ImagePickerModule>;
+    if (
+      imagePickerModule &&
+      typeof imagePickerModule.launchCameraAsync === 'function' &&
+      typeof imagePickerModule.launchImageLibraryAsync === 'function'
+    ) {
+      return imagePickerModule as ImagePickerModule;
+    }
+    return null;
   } catch {
-    cachedModule = null;
+    return null;
   }
+}
 
-  return cachedModule;
+export function getImagePickerModule(): ImagePickerModule | null {
+  if (cachedImagePicker !== undefined) {
+    return cachedImagePicker;
+  }
+  cachedImagePicker = resolveImagePickerModule();
+  return cachedImagePicker;
 }
 
 export function getImagePickerMissingMessage() {
   return MISSING_IMAGE_PICKER_MESSAGE;
 }
-

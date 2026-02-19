@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View, Image } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { updateProfileRequest } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
 import { useApiConfig } from '../../providers/ApiConfigProvider';
@@ -23,6 +24,7 @@ import { getPedometerMissingMessage, getPedometerModule, isPermissionGranted } f
 type PhoneAccessStatus = 'unknown' | 'granted' | 'denied' | 'unavailable';
 
 const PHONE_STEPS_METRIC = 'activity.steps';
+const PHONE_SYNC_OPT_IN_KEY = 'msml.settings.syncPhoneData';
 
 export function ProfileScreen() {
   const { user, setSessionFromPayload } = useAuth();
@@ -56,13 +58,45 @@ export function ProfileScreen() {
   const [importWindow, setImportWindow] = useState<string | null>(null);
   const [phoneAccessStatus, setPhoneAccessStatus] = useState<PhoneAccessStatus>('unknown');
   const [phoneAccessFeedback, setPhoneAccessFeedback] = useState<string | null>(null);
-  const [phonePermissionLoading, setPhonePermissionLoading] = useState(false);
+  const [phoneSyncEnabled, setPhoneSyncEnabled] = useState<boolean | null>(null);
+  const [phoneSyncPreferenceLoading, setPhoneSyncPreferenceLoading] = useState(true);
   const [phoneSyncLoading, setPhoneSyncLoading] = useState(false);
   const [phoneStepSample, setPhoneStepSample] = useState<{ steps: number; ts: number } | null>(null);
 
   useEffect(() => {
     setApiUrlInput(apiBaseUrl);
   }, [apiBaseUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const storedPreference = await AsyncStorage.getItem(PHONE_SYNC_OPT_IN_KEY);
+        if (cancelled) {
+          return;
+        }
+        if (storedPreference === 'true') {
+          setPhoneSyncEnabled(true);
+        } else if (storedPreference === 'false') {
+          setPhoneSyncEnabled(false);
+        } else {
+          setPhoneSyncEnabled(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setPhoneSyncEnabled(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setPhoneSyncPreferenceLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleChange = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -108,63 +142,71 @@ export function ProfileScreen() {
 
   const handleTakePhoto = async () => {
     setPhotoStatus(null);
-    const imagePicker = getImagePickerModule();
-    if (!imagePicker) {
+    try {
+      const imagePicker = getImagePickerModule();
+      if (!imagePicker) {
+        setPhotoStatus(getImagePickerMissingMessage());
+        return;
+      }
+      const permission = await imagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        setPhotoStatus('Camera permission is required.');
+        return;
+      }
+      const result = await imagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
+      if (result.canceled) {
+        setPhotoStatus('Capture cancelled.');
+        return;
+      }
+      const base64 = result.assets?.[0]?.base64;
+      if (base64) {
+        handleChange('avatarPhoto', base64);
+        handleChange('avatarUrl', '');
+        setPhotoStatus('Profile photo updated.');
+      } else {
+        setPhotoStatus('Unable to attach photo.');
+      }
+    } catch {
       setPhotoStatus(getImagePickerMissingMessage());
-      return;
-    }
-    const permission = await imagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      setPhotoStatus('Camera permission is required.');
-      return;
-    }
-    const result = await imagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.5,
-      base64: true,
-    });
-    if (result.canceled) {
-      setPhotoStatus('Capture cancelled.');
-      return;
-    }
-    const base64 = result.assets?.[0]?.base64;
-    if (base64) {
-      handleChange('avatarPhoto', base64);
-      handleChange('avatarUrl', '');
-      setPhotoStatus('Profile photo updated.');
-    } else {
-      setPhotoStatus('Unable to attach photo.');
     }
   };
 
   const handlePickFromLibrary = async () => {
     setPhotoStatus(null);
-    const imagePicker = getImagePickerModule();
-    if (!imagePicker) {
+    try {
+      const imagePicker = getImagePickerModule();
+      if (!imagePicker) {
+        setPhotoStatus(getImagePickerMissingMessage());
+        return;
+      }
+      const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setPhotoStatus('Photo library permission is required.');
+        return;
+      }
+      const result = await imagePicker.launchImageLibraryAsync({
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
+      if (result.canceled) {
+        setPhotoStatus('Selection cancelled.');
+        return;
+      }
+      const base64 = result.assets?.[0]?.base64;
+      if (base64) {
+        handleChange('avatarPhoto', base64);
+        handleChange('avatarUrl', '');
+        setPhotoStatus('Photo selected.');
+      } else {
+        setPhotoStatus('Unable to attach photo.');
+      }
+    } catch {
       setPhotoStatus(getImagePickerMissingMessage());
-      return;
-    }
-    const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setPhotoStatus('Photo library permission is required.');
-      return;
-    }
-    const result = await imagePicker.launchImageLibraryAsync({
-      allowsEditing: false,
-      quality: 0.5,
-      base64: true,
-    });
-    if (result.canceled) {
-      setPhotoStatus('Selection cancelled.');
-      return;
-    }
-    const base64 = result.assets?.[0]?.base64;
-    if (base64) {
-      handleChange('avatarPhoto', base64);
-      handleChange('avatarUrl', '');
-      setPhotoStatus('Photo selected.');
-    } else {
-      setPhotoStatus('Unable to attach photo.');
     }
   };
 
@@ -255,26 +297,11 @@ export function ProfileScreen() {
     return pedometer;
   };
 
-  const handleGrantPhoneAccess = async () => {
-    setPhoneAccessFeedback(null);
-    setPhonePermissionLoading(true);
-    try {
-      await ensurePhoneAccess(true);
-      setPhoneAccessFeedback('Access granted. You can now sync phone step data.');
-    } catch (error) {
-      setPhoneAccessFeedback(
-        error instanceof Error ? error.message : 'Unable to request phone data access.'
-      );
-    } finally {
-      setPhonePermissionLoading(false);
-    }
-  };
-
-  const handleSyncPhoneSteps = async () => {
+  const handleSyncPhoneSteps = async (requestAccess = true) => {
     setPhoneAccessFeedback(null);
     setPhoneSyncLoading(true);
     try {
-      const pedometer = await ensurePhoneAccess(true);
+      const pedometer = await ensurePhoneAccess(requestAccess);
       if (!pedometer.getStepCountAsync) {
         throw new Error('Step count API is unavailable on this phone.');
       }
@@ -299,10 +326,40 @@ export function ProfileScreen() {
           ? `Read ${steps.toLocaleString()} steps today. Upload queued offline.`
           : `Read ${steps.toLocaleString()} steps today and uploaded.`
       );
+      return true;
     } catch (error) {
       setPhoneAccessFeedback(error instanceof Error ? error.message : 'Unable to sync phone data.');
+      return false;
     } finally {
       setPhoneSyncLoading(false);
+    }
+  };
+
+  const persistPhoneSyncPreference = async (enabled: boolean) => {
+    setPhoneSyncEnabled(enabled);
+    try {
+      await AsyncStorage.setItem(PHONE_SYNC_OPT_IN_KEY, enabled ? 'true' : 'false');
+      return true;
+    } catch {
+      setPhoneAccessFeedback('Unable to save this setting right now.');
+      return false;
+    }
+  };
+
+  const handlePhoneSyncPreference = async (enabled: boolean) => {
+    setPhoneAccessFeedback(null);
+    const saved = await persistPhoneSyncPreference(enabled);
+    if (!saved) {
+      return;
+    }
+    if (!enabled) {
+      setPhoneAccessFeedback('Phone data sync is turned off.');
+      return;
+    }
+    const syncOk = await handleSyncPhoneSteps(true);
+    if (!syncOk) {
+      setPhoneSyncEnabled(false);
+      AsyncStorage.setItem(PHONE_SYNC_OPT_IN_KEY, 'false').catch(() => {});
     }
   };
 
@@ -441,6 +498,72 @@ export function ProfileScreen() {
       showsVerticalScrollIndicator={false}
     >
       <Card>
+        <SectionHeader
+          title="Phone sync setting (v2)"
+          subtitle={`Status: ${formatPhoneAccessStatus(phoneAccessStatus)}`}
+        />
+        <AppText variant="muted">
+          {phoneSyncEnabled === null
+            ? 'Sync step data from this phone?'
+            : phoneSyncEnabled
+            ? 'Phone data sync is enabled.'
+            : 'Phone data sync is currently off.'}
+        </AppText>
+        {phoneSyncPreferenceLoading ? (
+          <AppText variant="muted" style={styles.helperText}>
+            Loading saved preference...
+          </AppText>
+        ) : phoneSyncEnabled === null ? (
+          <View style={styles.importActionsRow}>
+            <AppButton
+              title="Yes, sync now"
+              onPress={() => handlePhoneSyncPreference(true)}
+              loading={phoneSyncLoading}
+              style={styles.importActionButton}
+            />
+            <AppButton
+              title="No thanks"
+              variant="ghost"
+              onPress={() => handlePhoneSyncPreference(false)}
+              disabled={phoneSyncLoading}
+              style={styles.importActionButton}
+            />
+          </View>
+        ) : (
+          <View style={styles.importActionsRow}>
+            <AppButton
+              title={phoneSyncEnabled ? 'Sync today steps' : 'Enable and sync'}
+              onPress={
+                phoneSyncEnabled
+                  ? () => handleSyncPhoneSteps(true)
+                  : () => handlePhoneSyncPreference(true)
+              }
+              loading={phoneSyncLoading}
+              style={styles.importActionButton}
+            />
+            <AppButton
+              title={phoneSyncEnabled ? 'Turn off' : 'Keep off'}
+              variant="ghost"
+              onPress={() => handlePhoneSyncPreference(false)}
+              disabled={phoneSyncLoading}
+              style={styles.importActionButton}
+            />
+          </View>
+        )}
+        {phoneAccessFeedback ? (
+          <AppText variant="muted" style={styles.helperText}>
+            {phoneAccessFeedback}
+          </AppText>
+        ) : null}
+        {phoneStepSample ? (
+          <View style={styles.metricsRow}>
+            <Metric label="Today steps" value={formatNumber(phoneStepSample.steps)} />
+            <Metric label="Metric" value={PHONE_STEPS_METRIC} />
+            <Metric label="Synced" value={formatDate(new Date(phoneStepSample.ts).toISOString(), 'HH:mm')} />
+          </View>
+        ) : null}
+      </Card>
+      <Card>
         <SectionHeader title="Profile photo" subtitle="Show who you are" />
         <View style={styles.avatarRow}>
           {previewUri ? (
@@ -546,37 +669,6 @@ export function ProfileScreen() {
           Export health data to a JSON file on your iPhone, then choose the file here or paste the JSON
           directly. Parsed metrics are uploaded to your stream timeline.
         </AppText>
-        <SectionHeader
-          title="Direct phone access"
-          subtitle={`Status: ${formatPhoneAccessStatus(phoneAccessStatus)}`}
-        />
-        <View style={styles.importActionsRow}>
-          <AppButton
-            title="Grant access"
-            onPress={handleGrantPhoneAccess}
-            loading={phonePermissionLoading}
-            style={styles.importActionButton}
-          />
-          <AppButton
-            title="Sync today steps"
-            onPress={handleSyncPhoneSteps}
-            loading={phoneSyncLoading}
-            style={styles.importActionButton}
-          />
-        </View>
-        {phoneAccessFeedback ? (
-          <AppText variant="muted" style={styles.helperText}>
-            {phoneAccessFeedback}
-          </AppText>
-        ) : null}
-        {phoneStepSample ? (
-          <View style={styles.metricsRow}>
-            <Metric label="Today steps" value={formatNumber(phoneStepSample.steps)} />
-            <Metric label="Metric" value={PHONE_STEPS_METRIC} />
-            <Metric label="Synced" value={formatDate(new Date(phoneStepSample.ts).toISOString(), 'HH:mm')} />
-          </View>
-        ) : null}
-        <View style={styles.importDivider} />
         <SectionHeader title="File / paste import" subtitle="Use exported JSON from iPhone apps" />
         <View style={styles.importActionsRow}>
           <AppButton

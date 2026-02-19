@@ -1,4 +1,5 @@
 import 'react-native-gesture-handler';
+import './src/shims/installMissingNativeModules';
 import { useMemo } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';

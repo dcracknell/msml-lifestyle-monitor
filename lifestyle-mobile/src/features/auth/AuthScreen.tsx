@@ -148,32 +148,36 @@ export function AuthScreen({ navigation }: Props) {
               variant="ghost"
               onPress={async () => {
                 setPhotoStatus(null);
-                const imagePicker = getImagePickerModule();
-                if (!imagePicker) {
+                try {
+                  const imagePicker = getImagePickerModule();
+                  if (!imagePicker) {
+                    setPhotoStatus(getImagePickerMissingMessage());
+                    return;
+                  }
+                  const permission = await imagePicker.requestCameraPermissionsAsync();
+                  if (!permission.granted) {
+                    setPhotoStatus('Camera permission is required.');
+                    return;
+                  }
+                  const result = await imagePicker.launchCameraAsync({
+                    allowsEditing: false,
+                    quality: 0.5,
+                    base64: true,
+                  });
+                  if (result.canceled) {
+                    setPhotoStatus('Capture cancelled.');
+                    return;
+                  }
+                  const base64 = result.assets?.[0]?.base64;
+                  if (base64) {
+                    handleChange('avatarPhoto', base64);
+                    handleChange('avatar', '');
+                    setPhotoStatus('Profile photo attached.');
+                  } else {
+                    setPhotoStatus('Unable to attach photo.');
+                  }
+                } catch {
                   setPhotoStatus(getImagePickerMissingMessage());
-                  return;
-                }
-                const permission = await imagePicker.requestCameraPermissionsAsync();
-                if (!permission.granted) {
-                  setPhotoStatus('Camera permission is required.');
-                  return;
-                }
-                const result = await imagePicker.launchCameraAsync({
-                  allowsEditing: false,
-                  quality: 0.5,
-                  base64: true,
-                });
-                if (result.canceled) {
-                  setPhotoStatus('Capture cancelled.');
-                  return;
-                }
-                const base64 = result.assets?.[0]?.base64;
-                if (base64) {
-                  handleChange('avatarPhoto', base64);
-                  handleChange('avatar', '');
-                  setPhotoStatus('Profile photo attached.');
-                } else {
-                  setPhotoStatus('Unable to attach photo.');
                 }
               }}
             />
