@@ -26,7 +26,7 @@ The mobile app implements the same major surfaces as the web UI:
 - **Authentication + password reset** using the `/api/login`, `/api/signup`, and `/api/password` routes.
 - **Overview dashboard** with readiness ring, hydration, macro targets, and timeline charts from `/api/metrics`.
 - **Activity + Sessions** with Strava connectivity plus best efforts, recent workouts, split breakdowns, and the same mileage/training-load/pace charts from `/api/activity`.
-- **Phone activity export** requests motion/activity permission and can auto-export on-device step counts to `/api/streams` as `phone.steps`.
+how to run - **Phone activity export** requests motion/activity permission and can auto-export on-device step counts to `/api/streams` as `phone.steps`.
 - **Coach subject switching** mirrors the web dashboard with the "My dashboard" chip and roster stats so coaches can bounce between themselves and linked athletes.
 - **Vitals** 14‑day trends and latest readings from `/api/vitals`.
 - **Nutrition** day selector, collapsible macro targets/log entry forms with barcode + weight-aware inputs (with offline queue), and monthly trends from `/api/nutrition`.
