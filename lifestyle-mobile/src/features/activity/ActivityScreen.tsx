@@ -1,9 +1,10 @@
+import { useCallback, useEffect, useState } from 'react';
 import { Component, ReactNode, useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery } from '@tanstack/react-query';
 import * as WebBrowser from 'expo-web-browser';
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import {
   AppButton,
   AppInput,
@@ -65,12 +66,14 @@ export function ActivityScreen() {
   const { user } = useAuth();
   const { runOrQueue } = useSyncQueue();
   const navigation = useNavigation();
+  const isFocused = useIsFocused();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const [stravaFeedback, setStravaFeedback] = useState<string | null>(null);
   const [todayPhoneSteps, setTodayPhoneSteps] = useState<number | null>(null);
   const [phoneExportFeedback, setPhoneExportFeedback] = useState<string | null>(null);
   const [autoExportEnabled, setAutoExportEnabled] = useState(false);
   const [isPhoneExporting, setIsPhoneExporting] = useState(false);
+  const [lastPhoneExportAt, setLastPhoneExportAt] = useState<number | null>(null);
 
   const { data, isLoading, isError, error, refetch, isFetching, isRefetching } = useQuery({
     queryKey: ['activity', requestSubject || user?.id],
@@ -184,6 +187,7 @@ export function ActivityScreen() {
   }, [autoExportEnabled, syncPhoneSteps]);
 
   useEffect(() => {
+    if (!autoExportEnabled || !isFocused) {
     if (!autoExportEnabled) {
       return;
     }
@@ -205,6 +209,7 @@ export function ActivityScreen() {
     }, AUTO_EXPORT_INTERVAL_MS);
 
     return () => clearInterval(id);
+  }, [autoExportEnabled, isFocused, syncPhoneSteps]);
   }, [autoExportEnabled, syncPhoneSteps]);
 
   const handleConnect = async () => {
@@ -357,6 +362,12 @@ export function ActivityScreen() {
           />
         </View>
         <AppText variant="muted" style={styles.phoneExportHint}>
+          How to sync: 1) Tap Export now and allow motion permission. 2) Enable auto-export to keep syncing every 15 minutes while this Activity screen stays open.
+        </AppText>
+        <StatCard label="Today from phone" value={formatNumber(todayPhoneSteps)} />
+        <AppText variant="muted">
+          Last export: {lastPhoneExportAt ? formatDate(new Date(lastPhoneExportAt).toISOString(), 'MMM D, HH:mm') : 'Not exported yet'}
+        </AppText>
           Reads your phone step count after permission and sends it to streams as {`phone.steps`} every 15 minutes while this screen is open.
         </AppText>
         <StatCard label="Today from phone" value={formatNumber(todayPhoneSteps)} />

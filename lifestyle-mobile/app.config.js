@@ -50,6 +50,7 @@ export default ({ config }) => ({
         'Allow MSML Lifestyle to track route distance and pace during your workouts.',
       NSCameraUsageDescription: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
       NSPhotoLibraryUsageDescription: 'Allow MSML Lifestyle to attach meal photos from your library.',
+      NSMotionUsageDescription: 'Allow MSML Lifestyle to read your activity data for step export.',
       NSMotionUsageDescription:
         'Allow MSML Lifestyle to read step and movement data from your phone sensors.',
     },
@@ -63,6 +64,10 @@ export default ({ config }) => ({
     package: androidPackage,
     permissions: [
       'android.permission.CAMERA',
+      'android.permission.ACTIVITY_RECOGNITION',
+      'android.permission.BLUETOOTH_SCAN',
+      'android.permission.BLUETOOTH_CONNECT',
+      'android.permission.ACCESS_FINE_LOCATION',
       'android.permission.ACCESS_COARSE_LOCATION',
       'android.permission.ACCESS_FINE_LOCATION',
       'android.permission.ACTIVITY_RECOGNITION',
