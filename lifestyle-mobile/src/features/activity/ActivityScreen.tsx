@@ -1,7 +1,7 @@
 import { Component, ReactNode, useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as WebBrowser from 'expo-web-browser';
 import { useNavigation } from '@react-navigation/native';
 import {
@@ -19,7 +19,13 @@ import {
   TrendChart,
   RefreshableScrollView,
 } from '../../components';
-import { activityRequest, connectStravaRequest, disconnectStravaRequest, syncStravaRequest } from '../../api/endpoints';
+import {
+  activityRequest,
+  connectStravaRequest,
+  disconnectStravaRequest,
+  streamHistoryRequest,
+  syncStravaRequest,
+} from '../../api/endpoints';
 import { ActivityEffort } from '../../api/types';
 import { ApiError } from '../../api/client';
 import { useSubject } from '../../providers/SubjectProvider';
@@ -28,7 +34,7 @@ import { useSyncQueue } from '../../providers/SyncProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDecimal, formatDistance, formatMinutes, formatNumber, formatPace } from '../../utils/format';
 import { useActivityGoals } from './useActivityGoals';
-import { pedometer } from '../../shims/expo-pedometer';
+import { getPedometerMissingMessage, getPedometerModule, isPermissionGranted } from '../../utils/pedometer';
 
 function formatKilometers(value?: number | null) {
   const label = formatDecimal(value ?? null, 1);
@@ -52,6 +58,7 @@ function formatWeeklyDuration(minutes?: number | null) {
 
 const AUTO_EXPORT_STEPS_KEY = 'msml.activity.autoExportPhoneSteps';
 const AUTO_EXPORT_INTERVAL_MS = 15 * 60 * 1000;
+const ACTIVITY_STREAM_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
 
 function formatHeartRateAxis(value: number) {
   if (!Number.isFinite(value)) {
@@ -60,10 +67,18 @@ function formatHeartRateAxis(value: number) {
   return `${Math.round(value)} bpm`;
 }
 
+function toLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function ActivityScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
   const { runOrQueue } = useSyncQueue();
+  const queryClient = useQueryClient();
   const navigation = useNavigation();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const [stravaFeedback, setStravaFeedback] = useState<string | null>(null);
@@ -75,6 +90,61 @@ export function ActivityScreen() {
   const { data, isLoading, isError, error, refetch, isFetching, isRefetching } = useQuery({
     queryKey: ['activity', requestSubject || user?.id],
     queryFn: () => activityRequest({ athleteId: requestSubject }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: distanceStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.distance', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.distance',
+        athleteId: requestSubject,
+        windowMs: ACTIVITY_STREAM_WINDOW_MS,
+        maxPoints: 800,
+      }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: elapsedTimeStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.elapsed_time', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.elapsed_time',
+        athleteId: requestSubject,
+        windowMs: ACTIVITY_STREAM_WINDOW_MS,
+        maxPoints: 800,
+      }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: trainingLoadStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.training_load', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.training_load',
+        athleteId: requestSubject,
+        windowMs: ACTIVITY_STREAM_WINDOW_MS,
+        maxPoints: 800,
+      }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: paceStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.pace', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.pace',
+        athleteId: requestSubject,
+        windowMs: ACTIVITY_STREAM_WINDOW_MS,
+        maxPoints: 800,
+      }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: heartRateStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.hr', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.hr',
+        athleteId: requestSubject,
+        windowMs: ACTIVITY_STREAM_WINDOW_MS,
+        maxPoints: 800,
+      }),
     enabled: Boolean(user?.id),
   });
   const {
@@ -111,22 +181,38 @@ export function ActivityScreen() {
       }
 
       try {
-        const available = await pedometer.isAvailableAsync();
-        if (!available) {
+        const pedometer = getPedometerModule();
+        if (!pedometer) {
+          if (showFeedback) {
+            setPhoneExportFeedback(getPedometerMissingMessage());
+          }
+          return false;
+        }
+
+        if (pedometer.isAvailableAsync && !(await pedometer.isAvailableAsync())) {
           if (showFeedback) {
             setPhoneExportFeedback('Step tracking is unavailable on this device.');
           }
           return false;
         }
 
-        const currentPermission = await pedometer.getPermissionsAsync();
-        const permission = currentPermission.granted
-          ? currentPermission
-          : await pedometer.requestPermissionsAsync();
+        let permission = null;
+        if (pedometer.getPermissionsAsync) {
+          permission = await pedometer.getPermissionsAsync();
+        }
+        if (!isPermissionGranted(permission) && pedometer.requestPermissionsAsync) {
+          permission = await pedometer.requestPermissionsAsync();
+        }
 
-        if (!permission.granted) {
+        if (!isPermissionGranted(permission)) {
           if (showFeedback) {
             setPhoneExportFeedback('Permission is required to access phone step data.');
+          }
+          return false;
+        }
+        if (!pedometer.getStepCountAsync) {
+          if (showFeedback) {
+            setPhoneExportFeedback('Step count API is unavailable on this device.');
           }
           return false;
         }
@@ -134,17 +220,31 @@ export function ActivityScreen() {
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
         const result = await pedometer.getStepCountAsync(startOfDay, new Date());
-        const steps = Number.isFinite(result.steps) ? result.steps : 0;
+        const rawSteps = Number(result?.steps);
+        const steps = Number.isFinite(rawSteps) ? rawSteps : 0;
         setTodayPhoneSteps(steps);
+        const ts = Date.now();
+        const localDate = toLocalDateKey(new Date(ts));
 
         const queued = await runOrQueue({
           endpoint: '/api/streams',
           payload: {
             metric: 'phone.steps',
-            samples: [{ ts: Date.now(), value: steps }],
+            localDate,
+            samples: [{ ts, value: steps, localDate }],
           },
           description: 'Phone steps auto export',
         });
+        if (queued.status === 'sent') {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['sleep'] }),
+            queryClient.invalidateQueries({ queryKey: ['activity'] }),
+            queryClient.invalidateQueries({ queryKey: ['vitals'] }),
+            queryClient.invalidateQueries({ queryKey: ['roster'] }),
+            queryClient.invalidateQueries({ queryKey: ['stream-history'] }),
+            queryClient.invalidateQueries({ queryKey: ['streamHistory'] }),
+          ]);
+        }
 
         if (showFeedback) {
           setPhoneExportFeedback(
@@ -164,7 +264,7 @@ export function ActivityScreen() {
         setIsPhoneExporting(false);
       }
     },
-    [runOrQueue]
+    [runOrQueue, queryClient]
   );
 
   const toggleAutoExport = useCallback(async () => {
@@ -236,7 +336,17 @@ export function ActivityScreen() {
     try {
       const payload = await syncStravaRequest();
       await refetch();
-      setStravaFeedback(`Imported ${payload.imported} of ${payload.fetched} activities.`);
+      const pageLabel =
+        typeof payload.pages === 'number' && payload.pages > 1
+          ? ` across ${payload.pages} pages`
+          : '';
+      const skippedLabel =
+        typeof payload.skipped === 'number' && payload.skipped > 0
+          ? ` (${payload.skipped} skipped)`
+          : '';
+      setStravaFeedback(
+        `Imported ${payload.imported} of ${payload.fetched} activities${pageLabel}${skippedLabel}.`
+      );
     } catch (syncError) {
       setStravaFeedback(extractErrorMessage(syncError, 'Unable to sync Strava right now.'));
     }
@@ -267,12 +377,39 @@ export function ActivityScreen() {
   const mileageTrend = Array.isArray(data.charts?.mileageTrend) ? data.charts.mileageTrend : [];
   const trainingLoadTrendData = Array.isArray(data.charts?.trainingLoad) ? data.charts.trainingLoad : [];
   const heartRatePaceData = Array.isArray(data.charts?.heartRatePace) ? data.charts.heartRatePace : [];
+  const streamMileageTrend = buildStreamMileageTrend(
+    distanceStreamData?.points || [],
+    elapsedTimeStreamData?.points || []
+  );
+  const streamTrainingLoadTrend = buildDailyStreamTrend(
+    trainingLoadStreamData?.points || [],
+    (value) => value,
+    (values) => values.reduce((sum, value) => sum + value, 0)
+  );
+  const streamPacePoints = buildPaceHeartRateScatter(
+    paceStreamData?.points || [],
+    heartRateStreamData?.points || []
+  );
+  const mileageSource = streamMileageTrend.length ? streamMileageTrend : mileageTrend;
+  const trainingLoadSource = streamTrainingLoadTrend.length
+    ? streamTrainingLoadTrend
+    : trainingLoadTrendData.map((entry) => ({
+        startTime: entry.startTime,
+        value: entry.trainingLoad ?? 0,
+      }));
+  const paceSource = streamPacePoints.length
+    ? streamPacePoints
+    : heartRatePaceData.map((point) => ({
+        x: Number(point.paceSeconds),
+        y: Number(point.heartRate),
+        label: point.label,
+      }));
   const mileageSeries = [
     {
       id: 'distance',
       label: 'Distance (km)',
       color: colors.accent,
-      data: mileageTrend.map((entry) => ({
+      data: mileageSource.map((entry) => ({
         label: formatDate(entry.startTime, 'MMM D'),
         value: entry.distanceKm ?? 0,
       })),
@@ -282,7 +419,7 @@ export function ActivityScreen() {
       label: 'Duration (min)',
       color: colors.accentStrong,
       strokeDasharray: '6,4',
-      data: mileageTrend.map((entry) => ({
+      data: mileageSource.map((entry) => ({
         label: formatDate(entry.startTime, 'MMM D'),
         value: entry.movingMinutes ?? 0,
       })),
@@ -291,15 +428,18 @@ export function ActivityScreen() {
   const legendItems = mileageSeries
     .filter((serie) => serie.data.length)
     .map((serie) => ({ label: serie.label, color: serie.color || colors.accent }));
-  const trainingTrend = trainingLoadTrendData.map((entry) => ({
+  const trainingTrend = trainingLoadSource.map((entry) => ({
     label: formatDate(entry.startTime, 'MMM D'),
-    value: entry.trainingLoad ?? 0,
+    value: entry.value ?? 0,
   }));
-  const pacePoints = heartRatePaceData.map((point) => ({
-    x: Number(point.paceSeconds),
-    y: Number(point.heartRate),
-    label: point.label,
-  }));
+  const pacePoints = paceSource;
+  const chartSummary = buildSummaryFromCharts(mileageSource, trainingLoadSource);
+  const weeklyDistanceKm = chartSummary.weeklyDistanceKm ?? summary?.weeklyDistanceKm ?? null;
+  const weeklyDurationMin = chartSummary.weeklyDurationMin ?? summary?.weeklyDurationMin ?? null;
+  const weeklyTrainingLoad = chartSummary.trainingLoad ?? summary?.trainingLoad ?? null;
+  const averagePaceSeconds = chartSummary.avgPaceSeconds ?? summary?.avgPaceSeconds ?? null;
+  const longestRunKm = chartSummary.longestRunKm ?? summary?.longestRunKm ?? null;
+  const longestRunLabel = chartSummary.longestRunLabel || summary?.longestRunName || 'Awaiting sync';
 
   return (
     <RefreshableScrollView
@@ -315,8 +455,8 @@ export function ActivityScreen() {
       ) : null}
       {goalsReady ? (
         <ActivityGoalCard
-          summaryDistanceKm={summary?.weeklyDistanceKm ?? 0}
-          summaryDurationMin={summary?.weeklyDurationMin ?? 0}
+          summaryDistanceKm={weeklyDistanceKm ?? 0}
+          summaryDurationMin={weeklyDurationMin ?? 0}
           goals={goals}
           minimized={goalsMinimized}
           onSaveGoals={saveGoals}
@@ -325,19 +465,19 @@ export function ActivityScreen() {
       ) : null}
       <SectionHeader title="Training summary" subtitle={data.subject?.name} />
       <View style={styles.statRow}>
-        <StatCard label="Weekly distance" value={formatKilometers(summary?.weeklyDistanceKm)} />
-        <StatCard label="Weekly duration" value={formatWeeklyDuration(summary?.weeklyDurationMin)} />
+        <StatCard label="Weekly distance" value={formatKilometers(weeklyDistanceKm)} />
+        <StatCard label="Weekly duration" value={formatWeeklyDuration(weeklyDurationMin)} />
       </View>
       <View style={styles.statRow}>
-        <StatCard label="Training load" value={formatNumber(summary?.trainingLoad)} />
+        <StatCard label="Training load" value={formatNumber(weeklyTrainingLoad)} />
         <StatCard label="VO₂ max" value={formatDecimal(summary?.vo2maxEstimate ?? null, 1)} />
       </View>
       <View style={styles.statRow}>
-        <StatCard label="Avg pace" value={formatPace(summary?.avgPaceSeconds)} />
+        <StatCard label="Avg pace" value={formatPace(averagePaceSeconds)} />
         <StatCard
           label="Longest run"
-          value={formatKilometers(summary?.longestRunKm)}
-          trend={summary?.longestRunName || 'Awaiting sync'}
+          value={formatKilometers(longestRunKm)}
+          trend={longestRunLabel}
         />
       </View>
       <Card>
@@ -431,7 +571,7 @@ export function ActivityScreen() {
           <AppText variant="muted">
             {data.strava.connected
               ? `Last sync ${data.strava.lastSync ? formatDate(data.strava.lastSync, 'MMM D, HH:mm') : 'pending'}`
-              : 'Link to import outdoor sessions with splits.'}
+              : 'Link to import Strava workouts and sessions with splits.'}
           </AppText>
           <View style={styles.stravaActions}>
             {data.strava.canManage && !data.strava.connected ? (
@@ -632,6 +772,193 @@ function computeProgress(current: number, goal: number) {
 
 function formatPercent(value: number) {
   return `${Math.round(Math.min(value, 999))}%`;
+}
+
+function buildSummaryFromCharts(
+  mileageRows: Array<{ startTime: string; distanceKm?: number | null; movingMinutes?: number | null }>,
+  trainingRows: Array<{ startTime: string; value?: number | null }>
+) {
+  const nowTs = Date.now();
+  const windowStartTs = nowTs - 7 * 24 * 60 * 60 * 1000;
+  const weeklyMileageRows = mileageRows.filter((row) => {
+    const ts = Date.parse(row.startTime);
+    return Number.isFinite(ts) && ts >= windowStartTs && ts <= nowTs;
+  });
+  const weeklyTrainingRows = trainingRows.filter((row) => {
+    const ts = Date.parse(row.startTime);
+    return Number.isFinite(ts) && ts >= windowStartTs && ts <= nowTs;
+  });
+  const weeklyDistanceKm = weeklyMileageRows.length
+    ? weeklyMileageRows.reduce((sum, row) => sum + toFiniteNumberOrZero(row.distanceKm), 0)
+    : null;
+  const weeklyDurationMin = weeklyMileageRows.length
+    ? weeklyMileageRows.reduce((sum, row) => sum + toFiniteNumberOrZero(row.movingMinutes), 0)
+    : null;
+  const trainingLoad = weeklyTrainingRows.length
+    ? weeklyTrainingRows.reduce((sum, row) => sum + toFiniteNumberOrZero(row.value), 0)
+    : null;
+  const avgPaceSeconds =
+    weeklyDistanceKm && weeklyDistanceKm > 0 && weeklyDurationMin && weeklyDurationMin > 0
+      ? Math.round((weeklyDurationMin * 60) / weeklyDistanceKm)
+      : null;
+
+  let longestRunKm: number | null = null;
+  let longestRunLabel: string | null = null;
+  mileageRows.forEach((row) => {
+    const distanceKm = toFiniteNumberOrZero(row.distanceKm);
+    if (distanceKm <= 0) {
+      return;
+    }
+    if (longestRunKm === null || distanceKm > longestRunKm) {
+      longestRunKm = distanceKm;
+      longestRunLabel = formatDate(row.startTime, 'MMM D');
+    }
+  });
+
+  return {
+    weeklyDistanceKm,
+    weeklyDurationMin,
+    trainingLoad,
+    avgPaceSeconds,
+    longestRunKm,
+    longestRunLabel,
+  };
+}
+
+function toFiniteNumberOrZero(value: number | null | undefined) {
+  return Number.isFinite(value) ? Number(value) : 0;
+}
+
+function normalizeDistanceKilometers(value: number) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return value > 500 ? value / 1000 : value;
+}
+
+function buildStreamMileageTrend(
+  distancePoints: Array<{ ts: number; value: number | null }>,
+  elapsedTimePoints: Array<{ ts: number; value: number | null }>
+) {
+  const distanceTrend = buildDailyStreamTrend(
+    distancePoints,
+    normalizeDistanceKilometers,
+    (values) => Math.max(...values)
+  );
+  const durationTrend = buildDailyStreamTrend(
+    elapsedTimePoints,
+    (value) => value / 60,
+    (values) => Math.max(...values)
+  );
+
+  const rowsByDay = new Map<string, { startTime: string; distanceKm: number; movingMinutes: number }>();
+
+  distanceTrend.forEach((entry) => {
+    const row = rowsByDay.get(entry.dayKey) || {
+      startTime: entry.startTime,
+      distanceKm: 0,
+      movingMinutes: 0,
+    };
+    row.startTime = row.startTime > entry.startTime ? row.startTime : entry.startTime;
+    row.distanceKm = entry.value;
+    rowsByDay.set(entry.dayKey, row);
+  });
+
+  durationTrend.forEach((entry) => {
+    const row = rowsByDay.get(entry.dayKey) || {
+      startTime: entry.startTime,
+      distanceKm: 0,
+      movingMinutes: 0,
+    };
+    row.startTime = row.startTime > entry.startTime ? row.startTime : entry.startTime;
+    row.movingMinutes = entry.value;
+    rowsByDay.set(entry.dayKey, row);
+  });
+
+  return Array.from(rowsByDay.values())
+    .sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime))
+    .slice(-20);
+}
+
+function buildDailyStreamTrend(
+  points: Array<{ ts: number; value: number | null }>,
+  normalizeValue: (value: number) => number | null,
+  aggregate: (values: number[]) => number
+) {
+  const buckets = new Map<string, { ts: number; values: number[] }>();
+
+  points.forEach((point) => {
+    if (!Number.isFinite(point?.ts) || !Number.isFinite(point?.value as number)) {
+      return;
+    }
+    const normalizedValue = normalizeValue(point.value as number);
+    if (!Number.isFinite(normalizedValue as number)) {
+      return;
+    }
+    const ts = Math.round(point.ts);
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) {
+      return;
+    }
+    const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+      date.getDate()
+    ).padStart(2, '0')}`;
+    const bucket = buckets.get(dayKey) || { ts, values: [] };
+    bucket.ts = Math.max(bucket.ts, ts);
+    bucket.values.push(normalizedValue as number);
+    buckets.set(dayKey, bucket);
+  });
+
+  return Array.from(buckets.entries())
+    .map(([dayKey, bucket]) => ({
+      dayKey,
+      startTime: new Date(bucket.ts).toISOString(),
+      value: aggregate(bucket.values),
+    }))
+    .filter((entry) => Number.isFinite(entry.value))
+    .sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+}
+
+function buildPaceHeartRateScatter(
+  pacePoints: Array<{ ts: number; value: number | null }>,
+  heartRatePoints: Array<{ ts: number; value: number | null }>
+) {
+  const paceByMinute = new Map<number, number>();
+  pacePoints.forEach((point) => {
+    if (!Number.isFinite(point?.ts) || !Number.isFinite(point?.value as number)) {
+      return;
+    }
+    const paceSeconds = Number(point.value);
+    if (!Number.isFinite(paceSeconds) || paceSeconds <= 0) {
+      return;
+    }
+    const minuteKey = Math.round(point.ts / 60_000);
+    paceByMinute.set(minuteKey, paceSeconds);
+  });
+
+  const scatter = heartRatePoints
+    .map((point) => {
+      if (!Number.isFinite(point?.ts) || !Number.isFinite(point?.value as number)) {
+        return null;
+      }
+      const minuteKey = Math.round(point.ts / 60_000);
+      const pace = paceByMinute.get(minuteKey);
+      const hr = Number(point.value);
+      if (!Number.isFinite(pace as number) || !Number.isFinite(hr) || hr <= 0) {
+        return null;
+      }
+      return {
+        x: pace as number,
+        y: hr,
+        label: formatDate(new Date(point.ts).toISOString(), 'MMM D HH:mm'),
+        ts: point.ts,
+      };
+    })
+    .filter((point): point is { x: number; y: number; label: string; ts: number } => Boolean(point))
+    .sort((a, b) => a.ts - b.ts)
+    .slice(-60);
+
+  return scatter.map(({ x, y, label }) => ({ x, y, label }));
 }
 
 const styles = StyleSheet.create({

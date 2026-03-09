@@ -38,6 +38,7 @@ const vitalsStatement = db.prepare(
           glucose_mg_dl AS glucose
      FROM health_markers
     WHERE user_id = ?
+      AND date <= DATE('now', 'localtime')
     ORDER BY date ASC`
 );
 

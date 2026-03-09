@@ -15,6 +15,329 @@ function createChart(ctx, config) {
   return new Chart(ctx, config);
 }
 
+const SMART_CHART_MAX_VISIBLE_POINTS = 14;
+const SMART_CHART_TARGET_TICKS = 6;
+const SMART_CHART_DRAG_PIXELS_PER_STEP = 30;
+const SMART_CHART_WHEEL_DELTA_PER_STEP = 70;
+const SMART_CHART_Y_PADDING_RATIO = 0.12;
+const AXIS_COMPACT_FORMATTER = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+function clampValue(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function readNumericValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function readDatasetPointValue(point, axis = 'y') {
+  if (point === null || point === undefined) return null;
+  if (typeof point === 'number') return Number.isFinite(point) ? point : null;
+  if (typeof point === 'object') {
+    return readNumericValue(point[axis]);
+  }
+  return readNumericValue(point);
+}
+
+function getNiceNumber(value, round = true) {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const exponent = Math.floor(Math.log10(value));
+  const fraction = value / 10 ** exponent;
+  let niceFraction = 1;
+  if (round) {
+    if (fraction < 1.5) {
+      niceFraction = 1;
+    } else if (fraction < 3) {
+      niceFraction = 2;
+    } else if (fraction < 7) {
+      niceFraction = 5;
+    } else {
+      niceFraction = 10;
+    }
+  } else if (fraction <= 1) {
+    niceFraction = 1;
+  } else if (fraction <= 2) {
+    niceFraction = 2;
+  } else if (fraction <= 5) {
+    niceFraction = 5;
+  } else {
+    niceFraction = 10;
+  }
+  return niceFraction * 10 ** exponent;
+}
+
+function computeNiceAxisRange(values, { targetTicks = SMART_CHART_TARGET_TICKS } = {}) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return null;
+  const allNonNegative = values.every((value) => value >= 0);
+  let workingMin = minValue;
+  let workingMax = maxValue;
+  if (workingMin === workingMax) {
+    const pad = Math.max(Math.abs(workingMin) * 0.1, 1);
+    workingMin -= pad;
+    workingMax += pad;
+  } else {
+    const pad = (workingMax - workingMin) * SMART_CHART_Y_PADDING_RATIO;
+    workingMin -= pad;
+    workingMax += pad;
+  }
+  const safeTargetTicks = Math.max(3, Math.floor(targetTicks));
+  const roughStep = (workingMax - workingMin) / Math.max(safeTargetTicks - 1, 1);
+  const stepSize = getNiceNumber(roughStep, true);
+  let niceMin = Math.floor(workingMin / stepSize) * stepSize;
+  let niceMax = Math.ceil(workingMax / stepSize) * stepSize;
+  if (allNonNegative && niceMin < 0) {
+    niceMin = 0;
+  }
+  if (niceMax <= niceMin) {
+    niceMax = niceMin + stepSize;
+  }
+  return { min: niceMin, max: niceMax, stepSize };
+}
+
+function formatSmartAxisTick(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return value;
+  const abs = Math.abs(numeric);
+  if (abs >= 1000) {
+    return AXIS_COMPACT_FORMATTER.format(numeric);
+  }
+  if (abs >= 10) {
+    return Math.round(numeric);
+  }
+  if (abs >= 1) {
+    return Math.round(numeric * 10) / 10;
+  }
+  return Math.round(numeric * 100) / 100;
+}
+
+function cleanupSmartViewportListeners(chart) {
+  if (typeof chart?.$smartViewportCleanup === 'function') {
+    chart.$smartViewportCleanup();
+  }
+  chart.$smartViewportCleanup = null;
+}
+
+function setSmartViewportStart(chart, nextStart) {
+  const viewport = chart?.$smartViewportState;
+  if (!viewport || !viewport.active) return false;
+  const clamped = clampValue(Math.round(nextStart), 0, viewport.maxStart);
+  if (clamped === viewport.start) return false;
+  viewport.start = clamped;
+  chart.update('none');
+  return true;
+}
+
+function ensureSmartViewportListeners(chart, pluginOptions) {
+  if (!chart?.canvas || chart.$smartViewportCleanup) return;
+  const canvas = chart.canvas;
+  const allowWheel = pluginOptions?.wheelPan !== false;
+  const allowDrag = pluginOptions?.dragPan !== false;
+  const onWheel = (event) => {
+    if (!allowWheel) return;
+    const viewport = chart.$smartViewportState;
+    if (!viewport?.active) return;
+    const delta = event.deltaX || event.deltaY;
+    if (!delta) return;
+    event.preventDefault();
+    const step = Math.max(1, Math.round(Math.abs(delta) / SMART_CHART_WHEEL_DELTA_PER_STEP));
+    const direction = Math.sign(delta);
+    setSmartViewportStart(chart, viewport.start + direction * step);
+  };
+  const onPointerDown = (event) => {
+    if (!allowDrag) return;
+    const viewport = chart.$smartViewportState;
+    if (!viewport?.active) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    viewport.dragging = true;
+    viewport.dragStartX = event.clientX;
+    viewport.dragStartIndex = viewport.start;
+    canvas.style.cursor = 'grabbing';
+    event.preventDefault();
+  };
+  const onPointerMove = (event) => {
+    if (!allowDrag) return;
+    const viewport = chart.$smartViewportState;
+    if (!viewport?.dragging) return;
+    const delta = event.clientX - viewport.dragStartX;
+    const step = Math.round(delta / SMART_CHART_DRAG_PIXELS_PER_STEP);
+    setSmartViewportStart(chart, viewport.dragStartIndex - step);
+    event.preventDefault();
+  };
+  const stopDragging = () => {
+    const viewport = chart.$smartViewportState;
+    if (viewport) {
+      viewport.dragging = false;
+    }
+    if (chart?.$smartViewportState?.active) {
+      canvas.style.cursor = 'grab';
+    } else {
+      canvas.style.cursor = 'default';
+    }
+  };
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', stopDragging);
+  window.addEventListener('pointercancel', stopDragging);
+  chart.$smartViewportCleanup = () => {
+    canvas.removeEventListener('wheel', onWheel);
+    canvas.removeEventListener('pointerdown', onPointerDown);
+    canvas.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', stopDragging);
+    window.removeEventListener('pointercancel', stopDragging);
+    canvas.style.cursor = 'default';
+  };
+}
+
+function getVisibleAxisValues(chart, axisId, viewport) {
+  const datasets = Array.isArray(chart?.data?.datasets) ? chart.data.datasets : [];
+  const values = [];
+  datasets.forEach((dataset) => {
+    const yAxisId = dataset?.yAxisID || 'y';
+    if (yAxisId !== axisId) return;
+    const points = Array.isArray(dataset?.data) ? dataset.data : [];
+    if (!points.length) return;
+    if (viewport?.active && Number.isFinite(viewport.start) && Number.isFinite(viewport.end)) {
+      for (let index = viewport.start; index <= viewport.end; index += 1) {
+        if (index < 0 || index >= points.length) continue;
+        const value = readDatasetPointValue(points[index], 'y');
+        if (Number.isFinite(value)) {
+          values.push(value);
+        }
+      }
+      return;
+    }
+    points.forEach((point) => {
+      const value = readDatasetPointValue(point, 'y');
+      if (Number.isFinite(value)) {
+        values.push(value);
+      }
+    });
+  });
+  return values;
+}
+
+function applySmartYScales(chart, pluginOptions, viewport) {
+  const scales = chart?.options?.scales;
+  if (!scales || typeof scales !== 'object') return;
+  const targetTicks = Math.max(
+    3,
+    Math.floor(Number(pluginOptions?.targetTicks) || SMART_CHART_TARGET_TICKS)
+  );
+  const datasets = Array.isArray(chart?.data?.datasets) ? chart.data.datasets : [];
+  const axisIds = new Set(
+    datasets.map((dataset) => dataset?.yAxisID || 'y').filter((axisId) => typeof axisId === 'string')
+  );
+  if (!axisIds.size && scales.y) {
+    axisIds.add('y');
+  }
+  axisIds.forEach((axisId) => {
+    const axisConfig = scales[axisId];
+    if (!axisConfig || typeof axisConfig !== 'object') return;
+    const axis = axisConfig.axis || (axisId === 'x' ? 'x' : 'y');
+    if (axis !== 'y') return;
+    const values = getVisibleAxisValues(chart, axisId, viewport);
+    if (!values.length) return;
+    const range = computeNiceAxisRange(values, { targetTicks });
+    if (!range) return;
+    axisConfig.min = range.min;
+    axisConfig.max = range.max;
+    axisConfig.ticks = axisConfig.ticks || {};
+    axisConfig.ticks.autoSkip = true;
+    axisConfig.ticks.maxTicksLimit = Math.max(3, targetTicks);
+    axisConfig.ticks.stepSize = range.stepSize;
+    if (typeof axisConfig.ticks.callback !== 'function') {
+      axisConfig.ticks.callback = formatSmartAxisTick;
+    }
+  });
+}
+
+const SMART_VIEWPORT_PLUGIN = {
+  id: 'smartViewport',
+  beforeUpdate(chart, _args, pluginOptions) {
+    if (!pluginOptions || pluginOptions.enabled === false) {
+      cleanupSmartViewportListeners(chart);
+      return;
+    }
+    const scales = chart?.options?.scales || {};
+    const xScale = scales.x;
+    const labels = Array.isArray(chart?.data?.labels) ? chart.data.labels : [];
+    const xType = xScale?.type || 'category';
+    const isCategoryScale = xType === 'category' && labels.length > 0;
+    const maxVisible = Math.max(
+      4,
+      Math.floor(Number(pluginOptions.maxVisiblePoints) || SMART_CHART_MAX_VISIBLE_POINTS)
+    );
+    const totalPoints = labels.length;
+    const visiblePoints = isCategoryScale ? Math.min(totalPoints, maxVisible) : totalPoints;
+    const maxStart = Math.max(totalPoints - visiblePoints, 0);
+    const viewport = chart.$smartViewportState || {};
+    const previousStart = Number(viewport.start);
+    const start = Number.isFinite(previousStart) ? clampValue(previousStart, 0, maxStart) : maxStart;
+    const end = visiblePoints > 0 ? start + visiblePoints - 1 : 0;
+    viewport.start = start;
+    viewport.end = end;
+    viewport.maxStart = maxStart;
+    viewport.active = isCategoryScale && totalPoints > visiblePoints;
+    chart.$smartViewportState = viewport;
+
+    if (xScale && typeof xScale === 'object') {
+      xScale.ticks = xScale.ticks || {};
+      xScale.ticks.autoSkip = true;
+      xScale.ticks.maxTicksLimit = Math.max(
+        4,
+        Math.floor(Number(pluginOptions.targetTicks) || SMART_CHART_TARGET_TICKS) + 1
+      );
+      xScale.ticks.maxRotation = 0;
+      xScale.ticks.minRotation = 0;
+      if (isCategoryScale && totalPoints > visiblePoints) {
+        xScale.min = start;
+        xScale.max = end;
+      } else {
+        delete xScale.min;
+        delete xScale.max;
+      }
+    }
+
+    if (chart.$smartViewportState.active && pluginOptions.panX !== false) {
+      ensureSmartViewportListeners(chart, pluginOptions);
+      if (chart.canvas) {
+        chart.canvas.style.cursor = 'grab';
+      }
+    } else {
+      cleanupSmartViewportListeners(chart);
+    }
+
+    applySmartYScales(chart, pluginOptions, chart.$smartViewportState);
+  },
+  afterDestroy(chart) {
+    cleanupSmartViewportListeners(chart);
+  },
+};
+
+if (Chart) {
+  Chart.register(SMART_VIEWPORT_PLUGIN);
+}
+
+function getSmartViewportOptions(overrides = {}) {
+  return {
+    enabled: true,
+    panX: true,
+    wheelPan: true,
+    dragPan: true,
+    maxVisiblePoints: SMART_CHART_MAX_VISIBLE_POINTS,
+    targetTicks: SMART_CHART_TARGET_TICKS,
+    ...overrides,
+  };
+}
+
 const DEFAULT_HEIGHT_CM = 175;
 const WEIGHT_HEIGHT_STORAGE_KEY = 'msml.weight.height';
 let weightHeightSettings = loadWeightHeightSettings();
@@ -197,14 +520,6 @@ const DEMO_VITALS = {
     glucoseAvg: 94,
   },
 };
-
-const DEMO_SESSIONS = [
-  { date: '2024-03-18', steps: 13540, calories: 2375 },
-  { date: '2024-03-17', steps: 11820, calories: 2104 },
-  { date: '2024-03-16', steps: 20110, calories: 2986 },
-  { date: '2024-03-15', steps: 10240, calories: 1840 },
-  { date: '2024-03-14', steps: 8900, calories: 1720 },
-];
 
 const cloneDemoData = (value) => JSON.parse(JSON.stringify(value));
 
@@ -440,6 +755,7 @@ const nutritionInsightSelect = document.getElementById('nutritionInsightSelect')
 const nutritionInsightSummary = document.getElementById('nutritionInsightSummary');
 const nutritionInsightFlag = document.getElementById('nutritionInsightFlag');
 const defaultScanStatusMessage = nutritionScanStatus?.textContent || '';
+const appLoadingScreen = document.getElementById('appLoadingScreen');
 const forgotForm = document.getElementById('forgotForm');
 const forgotEmailInput = document.getElementById('forgotEmail');
 const forgotFeedback = document.getElementById('forgotFeedback');
@@ -491,6 +807,17 @@ const overviewSyncCalories = document.getElementById('overviewSyncCalories');
 const overviewSyncCaloriesNote = document.getElementById('overviewSyncCaloriesNote');
 const overviewSyncSleep = document.getElementById('overviewSyncSleep');
 const overviewSyncSleepNote = document.getElementById('overviewSyncSleepNote');
+
+let startupReady = false;
+function markStartupReady() {
+  if (startupReady) return;
+  startupReady = true;
+  if (document.body) {
+    document.body.classList.remove('app-loading');
+    document.body.setAttribute('aria-busy', 'false');
+  }
+  appLoadingScreen?.classList.add('hidden');
+}
 
 function decodeBase64Sample(value) {
   if (!value || typeof value !== 'string') {
@@ -632,6 +959,7 @@ const activitySplitsList = document.getElementById('activitySplits');
 const activitySplitTitle = document.getElementById('activitySplitTitle');
 const activityBestEffortsList = document.getElementById('activityBestEfforts');
 const activitySessionHint = document.getElementById('activitySessionHint');
+const stravaExportButton = document.getElementById('stravaExportButton');
 const stravaPanelElement = document.getElementById('stravaPanel');
 const stravaStatusChip = document.getElementById('stravaStatusChip');
 const stravaSummary = document.getElementById('stravaSummary');
@@ -850,14 +1178,17 @@ const NUTRITION_METRICS = {
   fats: { key: 'fats', label: 'Fats', unit: 'g' },
 };
 
-const BARCODE_DETECTOR_FALLBACK_FORMATS = [
+const LINEAR_BARCODE_FORMATS = [
   'ean_13',
   'ean_8',
   'upc_a',
   'upc_e',
   'code_128',
   'code_39',
+  'itf',
+  'codabar',
 ];
+const NUMERIC_BARCODE_FORMATS = new Set(['ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'itf_14']);
 
 const barcodeScanState = {
   detector: null,
@@ -1002,6 +1333,12 @@ function resetActivityState() {
   if (activityTrainingLoad) activityTrainingLoad.textContent = '—';
   if (activityVo2max) activityVo2max.textContent = '—';
   if (stravaFeedback) stravaFeedback.textContent = '';
+  if (stravaExportButton) {
+    stravaExportButton.classList.add('hidden');
+    stravaExportButton.disabled = true;
+    stravaExportButton.textContent = 'Export to Strava';
+  }
+  renderSessions([]);
 }
 
 function resetVitalsState() {
@@ -1377,7 +1714,10 @@ function renderNutritionTrendChart(days = []) {
       datasets,
     },
     options: {
-      plugins: { legend: { labels: { color: '#dfe6ff' } } },
+      plugins: {
+        legend: { labels: { color: '#dfe6ff' } },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
       scales: {
         x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
         y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -1452,7 +1792,10 @@ function renderMacroHistoryChart(days = [], goals = null) {
       datasets,
     },
     options: {
-      plugins: { legend: { labels: { color: '#dfe6ff' } } },
+      plugins: {
+        legend: { labels: { color: '#dfe6ff' } },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
       scales: {
         x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
         y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -1831,11 +2174,14 @@ function renderWeightChart(timeline = [], goalCalories) {
     return;
   }
 
-  const labels = timeline.map((entry) => formatDate(entry.date));
-  const weights = timeline.map((entry) =>
+  const chronological = timeline
+    .slice()
+    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
+  const labels = chronological.map((entry) => formatDate(entry.date));
+  const weights = chronological.map((entry) =>
     Number.isFinite(entry?.weightLbs) ? Math.round(entry.weightLbs * 10) / 10 : null
   );
-  const calories = timeline.map((entry) =>
+  const calories = chronological.map((entry) =>
     Number.isFinite(entry?.calories) ? Math.round(entry.calories) : null
   );
   const hasCalories = calories.some((value) => Number.isFinite(value));
@@ -1907,7 +2253,10 @@ function renderWeightChart(timeline = [], goalCalories) {
       datasets,
     },
     options: {
-      plugins: { legend: { labels: { color: '#dfe6ff' } } },
+      plugins: {
+        legend: { labels: { color: '#dfe6ff' } },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 16 }),
+      },
       scales,
     },
   });
@@ -2495,6 +2844,25 @@ function setScanStatus(message, { isError = false } = {}) {
   nutritionScanStatus.classList.toggle('error', Boolean(isError));
 }
 
+function resolveLinearBarcodeFormats(supportedFormats = []) {
+  if (!Array.isArray(supportedFormats) || !supportedFormats.length) {
+    return [];
+  }
+  return supportedFormats.filter((format) => LINEAR_BARCODE_FORMATS.includes(format));
+}
+
+function normalizeDetectedBarcodeValue(rawValue, format) {
+  const trimmed = typeof rawValue === 'string' ? rawValue.trim() : '';
+  if (!trimmed) {
+    return '';
+  }
+  if (format && NUMERIC_BARCODE_FORMATS.has(format)) {
+    const digitsOnly = trimmed.replace(/\D+/g, '');
+    return digitsOnly || trimmed;
+  }
+  return trimmed;
+}
+
 function isBarcodeScannerSupported() {
   return (
     typeof window !== 'undefined' &&
@@ -2508,18 +2876,33 @@ async function ensureBarcodeDetector() {
     throw new Error('Barcode scanning is not supported in this browser.');
   }
   if (!barcodeScanState.detector) {
-    let formats = BARCODE_DETECTOR_FALLBACK_FORMATS;
+    let formats = [...LINEAR_BARCODE_FORMATS];
     if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
       try {
         const supported = await window.BarcodeDetector.getSupportedFormats();
         if (supported?.length) {
-          formats = supported;
+          const linearFormats = resolveLinearBarcodeFormats(supported);
+          if (!linearFormats.length) {
+            throw new Error('This browser camera supports QR codes only. Enter the barcode manually or use Chrome/Edge.');
+          }
+          formats = linearFormats;
         }
       } catch (error) {
-        // fallback to defaults
+        if (error?.message?.includes('QR codes only')) {
+          throw error;
+        }
+        // fallback to defaults when supported format detection fails
       }
     }
-    barcodeScanState.detector = new window.BarcodeDetector({ formats });
+    try {
+      barcodeScanState.detector = new window.BarcodeDetector({ formats });
+    } catch (error) {
+      if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
+        throw error;
+      }
+      // Some implementations reject explicit format lists but work with defaults.
+      barcodeScanState.detector = new window.BarcodeDetector();
+    }
   }
   return barcodeScanState.detector;
 }
@@ -2578,7 +2961,8 @@ function processBarcodeFrame(detector) {
   detector
     .detect(nutritionScanPreview)
     .then((barcodes) => {
-      const rawValue = barcodes?.[0]?.rawValue?.trim();
+      const match = barcodes?.find((entry) => normalizeDetectedBarcodeValue(entry?.rawValue, entry?.format));
+      const rawValue = normalizeDetectedBarcodeValue(match?.rawValue, match?.format);
       if (rawValue) {
         if (nutritionBarcodeInput) {
           nutritionBarcodeInput.value = rawValue;
@@ -3944,6 +4328,7 @@ activitySessionsList?.addEventListener('click', handleActivitySessionClick);
 stravaConnectButton?.addEventListener('click', handleStravaConnect);
 stravaSyncButton?.addEventListener('click', handleStravaSync);
 stravaDisconnectButton?.addEventListener('click', handleStravaDisconnect);
+stravaExportButton?.addEventListener('click', handleStravaExportSelectedSession);
 window.addEventListener('message', handleStravaMessage);
 sleepGoalInput?.addEventListener('change', handleSleepGoalInputChange);
 const handleRankingSelection = (target) => {
@@ -4704,7 +5089,7 @@ async function loadMetrics(subjectOverrideId) {
     sleepStages: state.overview.sleepStages,
     goalSleep: activeSleepGoal,
   });
-  renderSessions(metrics.timeline);
+  renderSessions(state.activity.sessions);
   renderNutritionDetails(metrics.macros, state.hydrationEntries);
   updateCharts(metrics);
 }
@@ -4794,6 +5179,7 @@ function applyDemoActivityData(feedbackMessage) {
   renderActivityBestEfforts(state.activity.bestEfforts);
   renderActivityCharts(demo.charts || {});
   renderStravaPanel(state.activity.strava || {});
+  renderSessions(state.activity.sessions);
   if (feedbackMessage && stravaFeedback) {
     stravaFeedback.textContent = feedbackMessage;
   }
@@ -4874,6 +5260,7 @@ async function loadActivity(subjectOverrideId) {
     renderActivityBestEfforts(state.activity.bestEfforts);
     renderActivityCharts(charts);
     renderStravaPanel(state.activity.strava || {});
+    renderSessions(state.activity.sessions);
   } catch (error) {
     if (isSelfView) {
       applyDemoActivityData('Showing demo activity data while your tracker syncs.');
@@ -5048,13 +5435,87 @@ async function handleStravaSync(event) {
       throw new Error(payload?.message || 'Unable to sync Strava right now.');
     }
     if (stravaFeedback) {
-      stravaFeedback.textContent = `Imported ${payload.imported} of ${payload.fetched} activities.`;
+      const pageLabel =
+        Number.isFinite(payload?.pages) && payload.pages > 1
+          ? ` across ${payload.pages} pages`
+          : '';
+      const skippedLabel =
+        Number.isFinite(payload?.skipped) && payload.skipped > 0
+          ? ` (${payload.skipped} skipped)`
+          : '';
+      stravaFeedback.textContent = `Imported ${payload.imported} of ${payload.fetched} activities${pageLabel}${skippedLabel}.`;
     }
     await loadActivity(state.activity.subjectId || state.viewing?.id || state.user?.id);
   } catch (error) {
     if (stravaFeedback) {
       stravaFeedback.textContent = error.message;
     }
+  }
+}
+
+async function handleStravaExportSelectedSession(event) {
+  if (event) event.preventDefault();
+  if (!state.token) return;
+
+  const session = getSelectedActivitySession();
+  if (!session) {
+    if (stravaFeedback) {
+      stravaFeedback.textContent = 'Select a session before exporting.';
+    }
+    renderStravaExportButton();
+    return;
+  }
+  if (
+    Number.isFinite(Number(session.stravaActivityId)) &&
+    Number(session.stravaActivityId) > 0
+  ) {
+    if (stravaFeedback) {
+      stravaFeedback.textContent = 'This session is already linked to Strava.';
+    }
+    renderStravaExportButton();
+    return;
+  }
+  if (!canExportSessionToStrava(session)) {
+    if (stravaFeedback) {
+      stravaFeedback.textContent =
+        'Connect Strava with activity write access before exporting sessions.';
+    }
+    renderStravaExportButton();
+    return;
+  }
+
+  if (stravaFeedback) {
+    stravaFeedback.textContent = `Exporting "${session.name || 'session'}" to Strava...`;
+  }
+  if (stravaExportButton) {
+    stravaExportButton.disabled = true;
+    stravaExportButton.textContent = 'Exporting...';
+  }
+
+  try {
+    const response = await fetch('/api/activity/strava/export', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || 'Unable to export session to Strava.');
+    }
+    if (stravaFeedback) {
+      stravaFeedback.textContent =
+        payload?.message || `Exported "${session.name || 'session'}" to Strava.`;
+    }
+    await loadActivity(state.activity.subjectId || state.viewing?.id || state.user?.id);
+  } catch (error) {
+    if (stravaFeedback) {
+      stravaFeedback.textContent = error.message;
+    }
+  } finally {
+    renderStravaExportButton();
   }
 }
 
@@ -5762,10 +6223,6 @@ function formatBloodPressure(entry) {
   return '— mmHg';
 }
 
-const VITALS_CHART_WINDOW = 14;
-const VITALS_CHART_AXIS_MIN = 40;
-const VITALS_CHART_AXIS_MAX = 200;
-
 function sortVitalsTimeline(timeline = []) {
   return timeline
     .slice()
@@ -5776,14 +6233,6 @@ function sortVitalsTimeline(timeline = []) {
       const safeBTime = Number.isFinite(bTime) ? bTime : 0;
       return safeATime - safeBTime;
     });
-}
-
-function getRecentVitalsTimeline(timeline = [], limit = VITALS_CHART_WINDOW) {
-  const chronological = sortVitalsTimeline(timeline);
-  if (!limit || chronological.length <= limit) {
-    return chronological;
-  }
-  return chronological.slice(-limit);
 }
 
 function renderVitalsDashboard(vitals = state.vitals) {
@@ -5885,7 +6334,7 @@ function renderVitalsChart(timeline = []) {
   const canvasId = 'vitalsTrendChart';
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
-  const chronological = getRecentVitalsTimeline(timeline);
+  const chronological = sortVitalsTimeline(timeline);
   if (!chronological.length) {
     state.charts.vitalsTrend?.destroy();
     state.charts.vitalsTrend = null;
@@ -5951,6 +6400,7 @@ function renderVitalsChart(timeline = []) {
       interaction: { intersect: false, mode: 'index' },
       plugins: {
         legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 16 }),
         tooltip: {
           callbacks: {
             label(context) {
@@ -5966,12 +6416,8 @@ function renderVitalsChart(timeline = []) {
       },
       scales: {
         y: {
-          min: VITALS_CHART_AXIS_MIN,
-          max: VITALS_CHART_AXIS_MAX,
           ticks: {
             color: 'rgba(255, 255, 255, 0.7)',
-            stepSize: 10,
-            autoSkip: false,
           },
           grid: { color: 'rgba(255, 255, 255, 0.08)' },
         },
@@ -6131,11 +6577,13 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
     showChartMessage(canvasId, 'No sleep history yet.');
     return;
   }
-  const recent = timeline.slice(-7);
+  const chronological = timeline
+    .slice()
+    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
-  const labels = recent.map((entry) => formatDate(entry.date));
-  const hours = recent.map((entry) => Math.round(entry.sleepHours * 10) / 10);
+  const labels = chronological.map((entry) => formatDate(entry.date));
+  const hours = chronological.map((entry) => Math.round(entry.sleepHours * 10) / 10);
   const datasets = [
     {
       label: 'Sleep hours',
@@ -6167,6 +6615,7 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
         legend: {
           labels: { color: '#dfe6ff' },
         },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
         tooltip: {
           callbacks: {
             label(context) {
@@ -6190,8 +6639,6 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
             },
           },
           grid: { color: 'rgba(255, 255, 255, 0.05)' },
-          suggestedMin: 4,
-          suggestedMax: Number.isFinite(goalSleep) ? Math.max(goalSleep + 1, 9) : 9,
         },
       },
     },
@@ -6231,9 +6678,12 @@ function renderActivityChart(timeline = []) {
   }
   const { canvas: activeCanvas } = hideChartMessage('activityChart') || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
-  const labels = timeline.map((entry) => formatDate(entry.date));
-  const steps = timeline.map((entry) => entry.steps);
-  const calories = timeline.map((entry) => entry.calories);
+  const chronological = timeline
+    .slice()
+    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
+  const labels = chronological.map((entry) => formatDate(entry.date));
+  const steps = chronological.map((entry) => entry.steps);
+  const calories = chronological.map((entry) => entry.calories);
 
   state.charts.activity?.destroy();
   state.charts.activity = createChart(ctx, {
@@ -6259,7 +6709,10 @@ function renderActivityChart(timeline = []) {
       ],
     },
     options: {
-      plugins: { legend: { labels: { color: '#dfe6ff' } } },
+      plugins: {
+        legend: { labels: { color: '#dfe6ff' } },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
       scales: {
         x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
         y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -6300,65 +6753,108 @@ function renderMacroChart(macros) {
   });
 }
 
-function renderSessions(timeline = []) {
+function renderSessions(sessions = []) {
   const list = document.getElementById('sessionsList');
   const summary = document.getElementById('sessionsSummary');
   if (!list) return;
 
-  const hasTimeline = Array.isArray(timeline) && timeline.length > 0;
-  const sourceTimeline = hasTimeline ? timeline : DEMO_SESSIONS;
-  const usingDemoTimeline = !hasTimeline && Array.isArray(sourceTimeline) && sourceTimeline.length > 0;
+  const sourceSessions = Array.isArray(sessions) ? sessions : [];
   list.innerHTML = '';
 
-  if (!sourceTimeline.length) {
+  if (!sourceSessions.length) {
     const li = document.createElement('li');
     li.className = 'session-item';
     li.innerHTML = '<p class="muted">No sessions logged yet.</p>';
     list.appendChild(li);
     if (summary) {
-      summary.textContent = 'Sessions will populate once your tracker syncs activity.';
+      summary.textContent = 'Sessions will populate once your tracker syncs workout data.';
     }
     enforceScrollableList(list);
     return;
   }
 
-  const orderedSessions = sourceTimeline.slice().reverse();
-  const loadBySession = orderedSessions.map((entry) => Math.round(entry.calories / 12 + entry.steps / 500));
+  const orderedSessions = sourceSessions
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(b?.startTime || 0).getTime() - new Date(a?.startTime || 0).getTime()
+    );
+  const rollingWindow = orderedSessions.slice(0, 5);
 
-  orderedSessions.forEach((entry, index) => {
-    const load = loadBySession[index];
+  const estimateSessionLoad = (entry) => {
+    const explicitLoad = Number(entry?.trainingLoad);
+    if (Number.isFinite(explicitLoad) && explicitLoad >= 0) {
+      return Math.round(explicitLoad);
+    }
+    const calories = Number(entry?.calories);
+    if (Number.isFinite(calories) && calories > 0) {
+      return Math.round(calories / 8);
+    }
+    const seconds = Number(entry?.movingTime) || Number(entry?.elapsedTime);
+    const hr = Number(entry?.averageHr);
+    if (Number.isFinite(seconds) && seconds > 0 && Number.isFinite(hr) && hr > 0) {
+      return Math.round((seconds / 60) * (hr / 100));
+    }
+    return null;
+  };
+
+  orderedSessions.forEach((entry) => {
+    const load = estimateSessionLoad(entry);
+    const durationSeconds = Number(entry?.movingTime) || Number(entry?.elapsedTime) || null;
+    const durationMinutes = Number.isFinite(durationSeconds) ? durationSeconds / 60 : null;
+    const effortLabel = Number.isFinite(load)
+      ? load >= 70
+        ? 'High intensity'
+        : load >= 40
+        ? 'Aerobic build'
+        : 'Recovery session'
+      : Number.isFinite(durationMinutes) && durationMinutes >= 60
+      ? 'Long endurance'
+      : 'Steady effort';
     const li = document.createElement('li');
     li.className = 'session-item';
-    const effort =
-      load >= 40 ? 'High output day' : load >= 25 ? 'Solid aerobic effort' : 'Recovery biased';
     li.innerHTML = `
       <div>
-        <p class="session-title">${formatDate(entry.date)}</p>
-        <p class="muted">${effort}</p>
+        <p class="session-title">${formatDate(entry.startTime)} · ${entry.sportType || 'Workout'}</p>
+        <p class="muted">${entry.name || 'Training session'} · ${effortLabel}</p>
       </div>
       <div class="session-metrics">
-        <span>${formatNumber(entry.steps)} steps</span>
-        <span>${formatNumber(entry.calories)} kcal</span>
+        <span>${formatDistance(entry.distance)}</span>
+        <span>${entry.averagePace ? `${formatPace(entry.averagePace)} /km` : '—'}</span>
+        <span>${formatDurationFromMinutes(durationMinutes)}</span>
+        <span>${Number.isFinite(load) ? `${formatNumber(load)} load` : '—'}</span>
       </div>
     `;
     list.appendChild(li);
   });
 
   if (summary) {
-    const summaryWindow = orderedSessions.slice(0, 5);
-    const windowLoad = loadBySession.slice(0, summaryWindow.length).reduce((sum, value) => sum + value, 0);
-    const avgLoad = Math.round(windowLoad / (summaryWindow.length || 1));
+    const totalDistanceKm = rollingWindow.reduce(
+      (sum, session) => sum + (Number(session?.distance) > 0 ? Number(session.distance) / 1000 : 0),
+      0
+    );
+    const totalDurationMinutes = rollingWindow.reduce((sum, session) => {
+      const seconds = Number(session?.movingTime) || Number(session?.elapsedTime);
+      return sum + (Number.isFinite(seconds) && seconds > 0 ? seconds / 60 : 0);
+    }, 0);
+    const loadValues = rollingWindow
+      .map((session) => estimateSessionLoad(session))
+      .filter((value) => Number.isFinite(value));
+    const avgLoad = loadValues.length
+      ? Math.round(loadValues.reduce((sum, value) => sum + value, 0) / loadValues.length)
+      : null;
     const windowLabel =
-      summaryWindow.length >= 5
-        ? 'last five days'
-        : `${summaryWindow.length} recent day${summaryWindow.length === 1 ? '' : 's'}`;
-    const baseCopy =
-      avgLoad >= 40
-        ? `Dial in parasympathetic work—pair tough days with breath work or easy spins (${windowLabel}).`
-        : avgLoad >= 25
-          ? `Load is balanced (${windowLabel}). Keep two intensity waves and anchor sleep before peak sessions.`
-          : `Volume is light (${windowLabel}). Layer in one longer aerobic builder plus a short strength primer.`;
-    summary.textContent = usingDemoTimeline ? `Demo block · ${baseCopy}` : baseCopy;
+      rollingWindow.length >= 5
+        ? 'last 5 sessions'
+        : `${rollingWindow.length} recent session${rollingWindow.length === 1 ? '' : 's'}`;
+    const distanceLabel =
+      totalDistanceKm > 0 ? `${formatDecimal(totalDistanceKm, 1)} km` : 'no distance logged';
+    const durationLabel =
+      totalDurationMinutes > 0 ? formatDurationFromMinutes(totalDurationMinutes) : 'no duration logged';
+    const loadLabel = Number.isFinite(avgLoad)
+      ? `Average load ${formatNumber(avgLoad)}.`
+      : 'Load will appear as pace, HR, and calories sync.';
+    summary.textContent = `${windowLabel}: ${distanceLabel} across ${durationLabel}. ${loadLabel}`;
   }
   enforceScrollableList(list);
 }
@@ -6494,6 +6990,38 @@ function renderActivitySessions(sessions = []) {
   enforceScrollableList(activitySessionsList);
 }
 
+function getSelectedActivitySession() {
+  const sessionId = state.activity.selectedSessionId;
+  if (!sessionId) return null;
+  return state.activity.sessions.find((item) => item.id === sessionId) || null;
+}
+
+function canExportSessionToStrava(session) {
+  if (!session) return false;
+  if (Number.isFinite(Number(session.stravaActivityId)) && Number(session.stravaActivityId) > 0) {
+    return false;
+  }
+  const strava = state.activity.strava || {};
+  return Boolean(strava.canManage && strava.connected);
+}
+
+function renderStravaExportButton() {
+  if (!stravaExportButton) return;
+  const session = getSelectedActivitySession();
+  const strava = state.activity.strava || {};
+  const shouldShow = Boolean(session && strava.canManage && strava.connected);
+  stravaExportButton.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) {
+    stravaExportButton.disabled = true;
+    stravaExportButton.textContent = 'Export to Strava';
+    return;
+  }
+  const alreadyLinked =
+    Number.isFinite(Number(session?.stravaActivityId)) && Number(session?.stravaActivityId) > 0;
+  stravaExportButton.disabled = !canExportSessionToStrava(session);
+  stravaExportButton.textContent = alreadyLinked ? 'Already in Strava' : 'Export to Strava';
+}
+
 function renderActivitySplits() {
   if (!activitySplitsList) return;
   activitySplitsList.innerHTML = '';
@@ -6505,6 +7033,7 @@ function renderActivitySplits() {
     empty.className = 'empty-row';
     empty.textContent = 'Choose a session to review splits.';
     activitySplitsList.appendChild(empty);
+    renderStravaExportButton();
     enforceScrollableList(activitySplitsList);
     return;
   }
@@ -6515,6 +7044,7 @@ function renderActivitySplits() {
     empty.className = 'empty-row';
     empty.textContent = 'Splits not available for this run.';
     activitySplitsList.appendChild(empty);
+    renderStravaExportButton();
     enforceScrollableList(activitySplitsList);
     return;
   }
@@ -6547,6 +7077,7 @@ function renderActivitySplits() {
     li.appendChild(metrics);
     activitySplitsList.appendChild(li);
   });
+  renderStravaExportButton();
   enforceScrollableList(activitySplitsList);
 }
 
@@ -6600,9 +7131,12 @@ function renderActivityMileageChart(trend = []) {
   }
   const { canvas: activeCanvas } = hideChartMessage('activityMileageChart') || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
-  const labels = trend.map((entry) => formatDate(entry.startTime));
-  const distances = trend.map((entry) => Number(entry.distanceKm) || 0);
-  const durations = trend.map((entry) => Number(entry.movingMinutes) || 0);
+  const chronological = trend
+    .slice()
+    .sort((a, b) => new Date(a?.startTime || 0).getTime() - new Date(b?.startTime || 0).getTime());
+  const labels = chronological.map((entry) => formatDate(entry.startTime));
+  const distances = chronological.map((entry) => Number(entry.distanceKm) || 0);
+  const durations = chronological.map((entry) => Number(entry.movingMinutes) || 0);
   state.charts.activityMileage?.destroy();
   state.charts.activityMileage = createChart(ctx, {
     type: 'line',
@@ -6627,7 +7161,10 @@ function renderActivityMileageChart(trend = []) {
       ],
     },
     options: {
-      plugins: { legend: { labels: { color: '#dfe6ff' } } },
+      plugins: {
+        legend: { labels: { color: '#dfe6ff' } },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
       scales: {
         x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
         y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -6672,6 +7209,7 @@ function renderActivityPaceChart(points = []) {
     options: {
       plugins: {
         legend: { display: false },
+        smartViewport: getSmartViewportOptions({ panX: false }),
         tooltip: {
           callbacks: {
             title(items) {
@@ -6731,7 +7269,7 @@ function renderStravaPanel(strava = {}) {
     } else if (!connected && usingServerDefaults) {
       stravaSummary.textContent = 'Connect Strava using the shared credentials configured by your coach.';
     } else {
-      stravaSummary.textContent = 'Connect Strava to automatically import runs, rides, and hikes.';
+      stravaSummary.textContent = 'Connect Strava to automatically import activities and workouts.';
     }
   }
 
@@ -6745,6 +7283,7 @@ function renderStravaPanel(strava = {}) {
   if (stravaDisconnectButton) {
     stravaDisconnectButton.classList.toggle('hidden', !(canManage && connected));
   }
+  renderStravaExportButton();
   if (stravaFeedback) {
     stravaFeedback.textContent = !enabled
       ? 'Ask the server operator to configure STRAVA_CLIENT_ID/SECRET/REDIRECT_URI.'
@@ -6757,4 +7296,8 @@ function renderStravaPanel(strava = {}) {
 }
 
 updateNutritionFilterButtons();
-restoreSessionFromStorage();
+restoreSessionFromStorage()
+  .catch((error) => {
+    console.error('Unexpected startup restore failure.', error);
+  })
+  .finally(markStartupReady);

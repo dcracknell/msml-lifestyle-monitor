@@ -7,11 +7,13 @@ import {
   NutritionResponse,
   NutritionSuggestionsResponse,
   NutritionLookupResponse,
+  NutritionLookupBatchResponse,
   SessionPayload,
   ShareCoachesResponse,
   StreamHistoryResponse,
   StreamPublishResponse,
   StravaConnectResponse,
+  StravaExportResponse,
   StravaSyncResponse,
   VitalsResponse,
   WeightResponse,
@@ -95,6 +97,9 @@ export const lookupNutritionRequest = (params: { barcode?: string; query?: strin
     `/api/nutrition/lookup${buildQuery({ barcode: params.barcode, q: params.query })}`
   );
 
+export const lookupNutritionBatchRequest = (barcodes: string[]) =>
+  apiClient.post<NutritionLookupBatchResponse>('/api/nutrition/lookup/batch', { barcodes });
+
 export const searchNutritionRequest = (query: string) =>
   apiClient.get<NutritionSuggestionsResponse>(`/api/nutrition/search${buildQuery({ q: query })}`);
 
@@ -141,6 +146,9 @@ export const connectStravaRequest = () => apiClient.post<StravaConnectResponse>(
 export const disconnectStravaRequest = () => apiClient.post<MessageResponse>('/api/activity/strava/disconnect');
 
 export const syncStravaRequest = () => apiClient.post<StravaSyncResponse>('/api/activity/strava/sync');
+
+export const exportSessionToStravaRequest = (sessionId: number) =>
+  apiClient.post<StravaExportResponse>('/api/activity/strava/export', { sessionId });
 
 export const publishStreamSamplesRequest = (payload: {
   metric: string;

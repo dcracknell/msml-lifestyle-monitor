@@ -1,7 +1,7 @@
 const STRAVA_AUTH_URL = process.env.STRAVA_AUTH_URL || 'https://www.strava.com/oauth/authorize';
 const STRAVA_TOKEN_URL = process.env.STRAVA_TOKEN_URL || 'https://www.strava.com/oauth/token';
 const STRAVA_API_BASE = process.env.STRAVA_API_BASE || 'https://www.strava.com/api/v3';
-const STRAVA_SCOPE = process.env.STRAVA_SCOPE || 'read,activity:read_all';
+const STRAVA_SCOPE = process.env.STRAVA_SCOPE || 'read,activity:read_all,activity:write';
 
 function resolveConfig(overrides = {}) {
   return {
@@ -131,6 +131,67 @@ async function fetchActivityDetails(accessToken, activityId) {
   return payload;
 }
 
+function buildStravaFaultMessage(payload, fallback) {
+  if (payload?.message) {
+    const firstError = Array.isArray(payload.errors) && payload.errors.length ? payload.errors[0] : null;
+    if (firstError?.field && firstError?.code) {
+      return `${payload.message} (${firstError.field}: ${firstError.code})`;
+    }
+    return payload.message;
+  }
+  return fallback;
+}
+
+async function createManualActivity(accessToken, activity = {}) {
+  if (!accessToken) {
+    throw new Error('Missing Strava access token.');
+  }
+  const name = String(activity?.name || '').trim();
+  const sportType = String(activity?.sportType || '').trim();
+  const startDateLocal = String(activity?.startDateLocal || '').trim();
+  const elapsedTime = Number.parseInt(String(activity?.elapsedTime || ''), 10);
+  if (!name || !sportType || !startDateLocal || !Number.isFinite(elapsedTime) || elapsedTime <= 0) {
+    throw new Error('Invalid Strava activity payload.');
+  }
+
+  const body = new URLSearchParams({
+    name,
+    sport_type: sportType,
+    start_date_local: startDateLocal,
+    elapsed_time: String(elapsedTime),
+  });
+  const distance = Number(activity?.distance);
+  if (Number.isFinite(distance) && distance > 0) {
+    body.set('distance', String(distance));
+  }
+  const description = String(activity?.description || '').trim();
+  if (description) {
+    body.set('description', description);
+  }
+  const trainer = Number(activity?.trainer);
+  if (trainer === 0 || trainer === 1) {
+    body.set('trainer', String(trainer));
+  }
+  const commute = Number(activity?.commute);
+  if (commute === 0 || commute === 1) {
+    body.set('commute', String(commute));
+  }
+
+  const response = await requireFetch()(`${STRAVA_API_BASE}/activities`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload) {
+    throw new Error(buildStravaFaultMessage(payload, 'Unable to create Strava activity.'));
+  }
+  return payload;
+}
+
 module.exports = {
   hasStravaConfig,
   resolveConfig,
@@ -139,5 +200,6 @@ module.exports = {
   refreshAccessToken,
   fetchAthleteActivities,
   fetchActivityDetails,
+  createManualActivity,
   STRAVA_SCOPE,
 };

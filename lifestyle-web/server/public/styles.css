@@ -24,8 +24,63 @@ body {
   min-height: 100vh;
 }
 
+body.app-loading {
+  overflow: hidden;
+}
+
+body.app-loading .app-shell {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .hidden {
   display: none !important;
+}
+
+.startup-loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background:
+    radial-gradient(circle at top, rgba(53, 123, 255, 0.34), rgba(1, 9, 21, 0.96) 45%),
+    var(--bg);
+}
+
+body.app-loading .startup-loading-screen {
+  display: flex;
+}
+
+.startup-loading-content {
+  display: grid;
+  place-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.startup-loading-spinner {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 999px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent);
+  animation: startup-spin 0.85s linear infinite;
+}
+
+.startup-loading-label {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+@keyframes startup-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .app-shell {

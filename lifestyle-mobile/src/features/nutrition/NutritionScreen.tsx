@@ -63,6 +63,37 @@ type EntryFormState = {
   photoData: string | null;
 };
 
+const NUMERIC_BARCODE_TYPE_HINTS = [
+  'ean13',
+  'ean_13',
+  'ean8',
+  'ean_8',
+  'upc_a',
+  'upca',
+  'upc_e',
+  'upce',
+  'itf14',
+  'itf_14',
+  'itf',
+  'codabar',
+];
+
+function normalizeScannedBarcode(rawValue: unknown, type?: unknown) {
+  const trimmed = typeof rawValue === 'string' ? rawValue.trim() : '';
+  if (!trimmed) {
+    return '';
+  }
+  const typeToken = String(type || '').toLowerCase();
+  const digitsOnly = trimmed.replace(/\D+/g, '');
+  const likelyNumericType = NUMERIC_BARCODE_TYPE_HINTS.some((hint) => typeToken.includes(hint));
+  if (likelyNumericType && digitsOnly.length >= 8) {
+    return digitsOnly;
+  }
+  if (digitsOnly.length >= 8 && digitsOnly.length >= trimmed.length - 4) {
+    return digitsOnly;
+  }
+  return trimmed;
+}
 
 export function NutritionScreen() {
   const { subjectId } = useSubject();
@@ -99,6 +130,7 @@ export function NutritionScreen() {
   const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeSuggestionRequest = useRef<symbol | null>(null);
   const mountedRef = useRef(true);
+  const scannerLockRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -172,12 +204,15 @@ export function NutritionScreen() {
       setScannerFeedback('Camera permission is required to scan barcodes.');
       return;
     }
+    scannerLockRef.current = false;
+    setScannerProcessing(false);
     setScannerActive(true);
   };
 
   const handleCloseScanner = () => {
     setScannerActive(false);
     setScannerProcessing(false);
+    scannerLockRef.current = false;
   };
 
   const scheduleSuggestionFetch = (value: string) => {
@@ -326,7 +361,10 @@ export function NutritionScreen() {
       return false;
     }
     const signals = [product.calories, product.protein, product.carbs, product.fats];
-    return signals.some((value) => typeof value === 'number' && Number.isFinite(value) && value > 0);
+    if (signals.some((value) => typeof value === 'number' && Number.isFinite(value))) {
+      return true;
+    }
+    return Boolean(product.barcode?.trim());
   };
 
   const formatSuggestionMeta = (suggestion: NutritionSuggestion) => {
@@ -350,15 +388,16 @@ export function NutritionScreen() {
     }
   };
 
-  const handleBarcodeDetected = async ({ data }: BarcodeScanningResult) => {
-    if (scannerProcessing) {
+  const handleBarcodeDetected = async ({ data, type }: BarcodeScanningResult) => {
+    if (scannerLockRef.current || scannerProcessing) {
       return;
     }
-    const trimmed = data?.trim();
+    const trimmed = normalizeScannedBarcode(data, type);
     if (!trimmed) {
       setScannerFeedback('Unable to read barcode. Try again.');
       return;
     }
+    scannerLockRef.current = true;
     setScannerProcessing(true);
     setScannerFeedback('Barcode detected. Looking up nutrition info...');
     handleEntryChange('barcode', trimmed);
@@ -379,6 +418,7 @@ export function NutritionScreen() {
       );
     } finally {
       setScannerProcessing(false);
+      scannerLockRef.current = false;
     }
   };
 
@@ -694,6 +734,13 @@ export function NutritionScreen() {
                     facing="back"
                     barcodeScannerSettings={{ barcodeTypes: SUPPORTED_BARCODE_TYPES }}
                     onBarcodeScanned={scannerProcessing ? undefined : handleBarcodeDetected}
+                    onMountError={(error) => {
+                      setScannerFeedback(
+                        error?.message || 'Unable to start the camera scanner on this device.'
+                      );
+                      setScannerProcessing(false);
+                      scannerLockRef.current = false;
+                    }}
                   />
                   {scannerProcessing ? (
                     <View style={styles.scannerOverlay}>
@@ -702,7 +749,8 @@ export function NutritionScreen() {
                   ) : null}
                 </View>
                 <AppText variant="muted" style={styles.scannerHelper}>
-                  Align a food barcode within the frame and hold still.
+                  Align a food barcode within the frame and hold still. If scan fails, type the code
+                  manually.
                 </AppText>
               </View>
             ) : null}

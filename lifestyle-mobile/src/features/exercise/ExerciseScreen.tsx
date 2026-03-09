@@ -10,13 +10,14 @@ import {
   Card,
   ProgressRing,
   SectionHeader,
+  TrendChart,
 } from '../../components';
-import { activityRequest } from '../../api/endpoints';
+import { activityRequest, streamHistoryRequest } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useBluetooth } from '../../providers/BluetoothProvider';
 import { colors, spacing } from '../../theme';
-import { formatDateTime, formatDistance, formatPace, titleCase } from '../../utils/format';
+import { formatDate, formatDateTime, formatDistance, formatPace, titleCase } from '../../utils/format';
 
 type SportId = 'run' | 'ride' | 'walk';
 
@@ -60,6 +61,7 @@ const PHONE_MIN_STEP_METERS = 1;
 const PHONE_MAX_STEP_METERS = 300;
 const WATCH_AUTO_START_FRESH_WINDOW_MS = 15_000;
 const EXERCISE_BUILD_MARKER = 'run-fix-2026-02-18-b';
+const EXERCISE_STREAM_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
 
 export function ExerciseScreen() {
   const navigation = useNavigation();
@@ -86,6 +88,28 @@ export function ExerciseScreen() {
   const { data, isFetching } = useQuery({
     queryKey: ['exercise', requestSubject || user?.id],
     queryFn: () => activityRequest({ athleteId: requestSubject }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: exerciseHrStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.hr', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.hr',
+        athleteId: requestSubject,
+        windowMs: EXERCISE_STREAM_WINDOW_MS,
+        maxPoints: 240,
+      }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: exerciseDistanceStreamData } = useQuery({
+    queryKey: ['stream-history', 'exercise.distance', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'exercise.distance',
+        athleteId: requestSubject,
+        windowMs: EXERCISE_STREAM_WINDOW_MS,
+        maxPoints: 240,
+      }),
     enabled: Boolean(user?.id),
   });
 
@@ -372,6 +396,32 @@ export function ExerciseScreen() {
   ]
     .filter(Boolean)
     .join(' + ');
+  const heartRateTrend = useMemo(
+    () =>
+      (exerciseHrStreamData?.points || [])
+        .filter((point) => point.value !== null && Number.isFinite(point.value as number))
+        .slice(-32)
+        .map((point) => ({
+          label: formatDate(new Date(point.ts).toISOString(), 'MMM D HH:mm'),
+          value: Math.round(point.value as number),
+        })),
+    [exerciseHrStreamData?.points]
+  );
+  const distanceTrend = useMemo(
+    () =>
+      (exerciseDistanceStreamData?.points || [])
+        .filter((point) => point.value !== null && Number.isFinite(point.value as number))
+        .slice(-32)
+        .map((point) => {
+          const raw = point.value as number;
+          const km = raw > 500 ? raw / 1000 : raw;
+          return {
+            label: formatDate(new Date(point.ts).toISOString(), 'MMM D HH:mm'),
+            value: Math.round(km * 100) / 100,
+          };
+        }),
+    [exerciseDistanceStreamData?.points]
+  );
 
   useEffect(() => {
     sessionStateRef.current = sessionState;
@@ -679,6 +729,18 @@ export function ExerciseScreen() {
           {DEVICE_METRICS.pace}, and {DEVICE_METRICS.heartRate}.
         </AppText>
         {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
+      </Card>
+
+      <Card>
+        <SectionHeader title="Exercise trends" subtitle="Direct stream sync" />
+        {heartRateTrend.length ? <TrendChart data={heartRateTrend} yLabel="bpm" /> : <AppText variant="muted">Heart-rate samples will appear after sync.</AppText>}
+        {distanceTrend.length ? (
+          <View style={styles.trendSpacing}>
+            <TrendChart data={distanceTrend} yLabel="km" />
+          </View>
+        ) : (
+          <AppText variant="muted">Distance samples will appear after sync.</AppText>
+        )}
       </Card>
 
       <Card>
@@ -1038,6 +1100,9 @@ const styles = StyleSheet.create({
   },
   liveHint: {
     marginTop: spacing.sm,
+  },
+  trendSpacing: {
+    marginTop: spacing.md,
   },
   lastSession: {
     gap: spacing.sm,

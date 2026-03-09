@@ -41,9 +41,14 @@ export default ({ config }) => ({
     bundleIdentifier: iosBundleIdentifier,
     icon: './assets/icon.png',
     ...(appleTeamId ? { appleTeamId } : {}),
+    entitlements: {
+      'com.apple.developer.healthkit': true,
+    },
     infoPlist: {
       NSBluetoothAlwaysUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
       NSBluetoothPeripheralUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
+      NSBluetoothWhileInUseUsageDescription:
+        'Allow MSML Lifestyle to connect to Bluetooth health sensors while you use the app.',
       NSLocationWhenInUseUsageDescription:
         'Allow MSML Lifestyle to track route distance and pace during your workouts.',
       NSLocationAlwaysAndWhenInUseUsageDescription:
@@ -52,6 +57,14 @@ export default ({ config }) => ({
       NSPhotoLibraryUsageDescription: 'Allow MSML Lifestyle to attach meal photos from your library.',
       NSMotionUsageDescription:
         'Allow MSML Lifestyle to read step and movement data from your phone sensors.',
+      NSHealthClinicalHealthRecordsShareUsageDescription:
+        'Allow MSML Lifestyle to read clinical health records if you choose to share them.',
+      NSHealthShareUsageDescription:
+        'Allow MSML Lifestyle to read Apple Health data such as steps, heart rate, and sleep.',
+      NSHealthUpdateUsageDescription:
+        'Allow MSML Lifestyle to write approved training metrics to Apple Health if enabled.',
+      NSSensorKitUsageDescription:
+        'Allow MSML Lifestyle to access supported sensor data when available.',
     },
   },
   android: {

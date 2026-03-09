@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { activityRequest } from '../../api/endpoints';
+import { activityRequest, exportSessionToStravaRequest } from '../../api/endpoints';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import {
   LoadingView,
   ErrorView,
+  AppButton,
   Card,
   AppText,
   SectionHeader,
@@ -27,6 +28,8 @@ export function SessionsScreen() {
   });
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
 
   if (isLoading || !data) {
     return <LoadingView />;
@@ -39,6 +42,28 @@ export function SessionsScreen() {
   const sessions = data.sessions || [];
   const activeSession = sessions.find((session) => session.id === selectedId) || sessions[0];
   const splits = activeSession ? data.splits[activeSession.id] || [] : [];
+  const canExportToStrava = Boolean(
+    data.strava?.canManage &&
+      data.strava?.connected &&
+      activeSession &&
+      !activeSession.stravaActivityId
+  );
+
+  const handleExportToStrava = async () => {
+    if (!activeSession) return;
+    setExportFeedback(null);
+    setIsExporting(true);
+    try {
+      const payload = await exportSessionToStravaRequest(activeSession.id);
+      await refetch();
+      setExportFeedback(payload.message || `Exported "${activeSession.name}" to Strava.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to export session to Strava.';
+      setExportFeedback(message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <RefreshableScrollView
@@ -68,6 +93,20 @@ export function SessionsScreen() {
         <Card>
           <AppText variant="heading">{activeSession.name}</AppText>
           <AppText variant="muted">{formatDate(activeSession.startTime, 'MMM D, HH:mm')} · {activeSession.sportType}</AppText>
+          {data.strava?.canManage && data.strava?.connected ? (
+            <View style={styles.exportRow}>
+              <AppButton
+                title={activeSession.stravaActivityId ? 'Already in Strava' : 'Export to Strava'}
+                variant="ghost"
+                onPress={handleExportToStrava}
+                loading={isExporting}
+                disabled={!canExportToStrava || isExporting}
+              />
+            </View>
+          ) : null}
+          {exportFeedback ? (
+            <AppText variant="muted">{exportFeedback}</AppText>
+          ) : null}
           <View style={styles.metricsRow}>
             <Metric label="Distance" value={formatDistance(activeSession.distance || 0)} />
             <Metric label="Pace" value={formatPace(activeSession.averagePace)} />
@@ -144,5 +183,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  exportRow: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
   },
 });

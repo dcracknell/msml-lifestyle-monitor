@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, View, Image } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { StyleSheet, View, Image, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { updateProfileRequest } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
@@ -12,24 +12,31 @@ import {
   Card,
   SectionHeader,
   RefreshableScrollView,
-  TrendChart,
 } from '../../components';
 import { colors, spacing } from '../../theme';
 import { getImagePickerMissingMessage, getImagePickerModule } from '../../utils/imagePicker';
-import { getDocumentPickerMissingMessage, getDocumentPickerModule } from '../../utils/documentPicker';
 import { formatDate, formatNumber } from '../../utils/format';
-import { parseIPhoneExportPayload, StreamBatch } from '../devices/iphoneImport';
 import { getPedometerMissingMessage, getPedometerModule, isPermissionGranted } from '../../utils/pedometer';
+import { useQueryClient } from '@tanstack/react-query';
+import { getAppleHealthMissingMessage, readAppleHealthPayload } from '../../utils/appleHealth';
+import { AppleHealthWorkoutImport, parseAppleHealthPayload } from './appleHealthImport';
 
 type PhoneAccessStatus = 'unknown' | 'granted' | 'denied' | 'unavailable';
+type StreamBatch = { metric: string; samples: Array<{ ts: number; value: number | null }> };
 
-const PHONE_STEPS_METRIC = 'activity.steps';
+const PHONE_STEPS_METRIC = 'phone.steps';
 const PHONE_SYNC_OPT_IN_KEY = 'msml.settings.syncPhoneData';
+const APPLE_HEALTH_LAST_SYNC_KEY = 'msml.settings.appleHealthLastSyncTs';
+const STREAM_UPLOAD_CHUNK_SIZE = 1000;
+const WORKOUT_UPLOAD_CHUNK_SIZE = 120;
+const APPLE_HEALTH_INITIAL_LOOKBACK_DAYS = 30;
+const APPLE_HEALTH_RESYNC_BUFFER_HOURS = 24;
 
 export function ProfileScreen() {
   const { user, setSessionFromPayload } = useAuth();
   const { apiBaseUrl, updateBaseUrl, resetBaseUrl } = useApiConfig();
   const { runOrQueue } = useSyncQueue();
+  const queryClient = useQueryClient();
   const [form, setForm] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -48,20 +55,15 @@ export function ProfileScreen() {
   const [apiUrlInput, setApiUrlInput] = useState(apiBaseUrl);
   const [apiUrlFeedback, setApiUrlFeedback] = useState<string | null>(null);
   const [apiUrlSaving, setApiUrlSaving] = useState(false);
-  const [iphonePayload, setIphonePayload] = useState('');
-  const [iphoneBatches, setIphoneBatches] = useState<StreamBatch[]>([]);
-  const [iphoneImportFeedback, setIphoneImportFeedback] = useState<string | null>(null);
-  const [iphonePickLoading, setIphonePickLoading] = useState(false);
-  const [iphoneParseLoading, setIphoneParseLoading] = useState(false);
-  const [iphoneUploadLoading, setIphoneUploadLoading] = useState(false);
-  const [selectedImportMetric, setSelectedImportMetric] = useState<string | null>(null);
-  const [importWindow, setImportWindow] = useState<string | null>(null);
   const [phoneAccessStatus, setPhoneAccessStatus] = useState<PhoneAccessStatus>('unknown');
   const [phoneAccessFeedback, setPhoneAccessFeedback] = useState<string | null>(null);
   const [phoneSyncEnabled, setPhoneSyncEnabled] = useState<boolean | null>(null);
   const [phoneSyncPreferenceLoading, setPhoneSyncPreferenceLoading] = useState(true);
   const [phoneSyncLoading, setPhoneSyncLoading] = useState(false);
   const [phoneStepSample, setPhoneStepSample] = useState<{ steps: number; ts: number } | null>(null);
+  const [appleHealthSyncLoading, setAppleHealthSyncLoading] = useState(false);
+  const [appleHealthFeedback, setAppleHealthFeedback] = useState<string | null>(null);
+  const [appleHealthLastSyncTs, setAppleHealthLastSyncTs] = useState<number | null>(null);
 
   useEffect(() => {
     setApiUrlInput(apiBaseUrl);
@@ -71,7 +73,10 @@ export function ProfileScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const storedPreference = await AsyncStorage.getItem(PHONE_SYNC_OPT_IN_KEY);
+        const [storedPreference, storedAppleHealthSyncTs] = await Promise.all([
+          AsyncStorage.getItem(PHONE_SYNC_OPT_IN_KEY),
+          AsyncStorage.getItem(APPLE_HEALTH_LAST_SYNC_KEY),
+        ]);
         if (cancelled) {
           return;
         }
@@ -82,9 +87,16 @@ export function ProfileScreen() {
         } else {
           setPhoneSyncEnabled(null);
         }
+        const parsedAppleHealthTs = Number(storedAppleHealthSyncTs);
+        if (Number.isFinite(parsedAppleHealthTs) && parsedAppleHealthTs > 0) {
+          setAppleHealthLastSyncTs(parsedAppleHealthTs);
+        } else {
+          setAppleHealthLastSyncTs(null);
+        }
       } catch {
         if (!cancelled) {
           setPhoneSyncEnabled(null);
+          setAppleHealthLastSyncTs(null);
         }
       } finally {
         if (!cancelled) {
@@ -112,33 +124,6 @@ export function ProfileScreen() {
   const previewUri = derivedAvatarPhoto
     ? `data:image/jpeg;base64,${derivedAvatarPhoto}`
     : form.avatarUrl || user?.avatar_url || null;
-
-  const importedSampleCount = useMemo(
-    () => iphoneBatches.reduce((total, batch) => total + batch.samples.length, 0),
-    [iphoneBatches]
-  );
-
-  const selectedImportBatch = useMemo(
-    () =>
-      iphoneBatches.find((batch) => batch.metric === selectedImportMetric) ||
-      iphoneBatches[0] ||
-      null,
-    [iphoneBatches, selectedImportMetric]
-  );
-
-  const selectedImportTrend = useMemo(
-    () =>
-      (selectedImportBatch?.samples || [])
-        .filter((sample) => sample.value !== null && Number.isFinite(sample.value))
-        .slice(-40)
-        .map((sample) => ({
-          label: formatDate(new Date(sample.ts).toISOString(), 'MMM D HH:mm'),
-          value: sample.value as number,
-        })),
-    [selectedImportBatch]
-  );
-
-  const visibleImportBatches = useMemo(() => iphoneBatches.slice(0, 8), [iphoneBatches]);
 
   const handleTakePhoto = async () => {
     setPhotoStatus(null);
@@ -274,6 +259,7 @@ export function ProfileScreen() {
       setPhoneAccessStatus('unavailable');
       throw new Error(getPedometerMissingMessage());
     }
+
     if (pedometer.isAvailableAsync) {
       const isAvailable = await pedometer.isAvailableAsync();
       if (!isAvailable) {
@@ -315,9 +301,14 @@ export function ProfileScreen() {
       }
       const steps = Math.max(0, Math.round(rawSteps));
       const ts = Date.now();
+      const localDate = toLocalDateKey(new Date(ts));
       const upload = await runOrQueue({
         endpoint: '/api/streams',
-        payload: { metric: PHONE_STEPS_METRIC, samples: [{ ts, value: steps }] },
+        payload: {
+          metric: PHONE_STEPS_METRIC,
+          localDate,
+          samples: [{ ts, value: steps, localDate }],
+        },
         description: 'Phone step count sync',
       });
       setPhoneStepSample({ steps, ts });
@@ -326,6 +317,14 @@ export function ProfileScreen() {
           ? `Read ${steps.toLocaleString()} steps today. Upload queued offline.`
           : `Read ${steps.toLocaleString()} steps today and uploaded.`
       );
+      if (upload.status === 'sent') {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['sleep'] }),
+          queryClient.invalidateQueries({ queryKey: ['activity'] }),
+          queryClient.invalidateQueries({ queryKey: ['vitals'] }),
+          queryClient.invalidateQueries({ queryKey: ['roster'] }),
+        ]);
+      }
       return true;
     } catch (error) {
       setPhoneAccessFeedback(error instanceof Error ? error.message : 'Unable to sync phone data.');
@@ -363,130 +362,177 @@ export function ProfileScreen() {
     }
   };
 
-  const parseIphonePayload = (payloadText: string) => {
-    const parsed = parseIPhoneExportPayload(payloadText);
-    setIphoneBatches(parsed.batches);
-    setSelectedImportMetric(parsed.batches[0]?.metric || null);
-    setImportWindow(formatImportWindow(parsed.startTs, parsed.endTs));
-    return parsed;
-  };
+  const uploadStreamBatches = useCallback(
+    async (batches: StreamBatch[]) => {
+      let queuedCount = 0;
+      let sentCount = 0;
+      let uploadedSampleCount = 0;
 
-  const handlePickIphoneExport = async () => {
-    setIphoneImportFeedback(null);
-    setIphonePickLoading(true);
-    try {
-      const documentPicker = getDocumentPickerModule();
-      if (!documentPicker) {
-        throw new Error(getDocumentPickerMissingMessage());
-      }
-      const result = await documentPicker.getDocumentAsync({
-        multiple: false,
-        copyToCacheDirectory: true,
-        type: ['application/json', 'text/plain', 'text/*'],
-      });
-      if (result.canceled) {
-        setIphoneImportFeedback('Import cancelled.');
-        return;
-      }
-      const asset = result.assets?.[0];
-      if (!asset?.uri) {
-        throw new Error('Unable to read the selected file.');
-      }
-
-      let payloadText: string | null = null;
-      if (asset.file && typeof asset.file.text === 'function') {
-        payloadText = await asset.file.text();
-      }
-      if (!payloadText) {
-        payloadText = await readTextFromUri(asset.uri);
-      }
-      if (!payloadText.trim()) {
-        throw new Error('Selected file is empty.');
-      }
-
-      setIphonePayload(payloadText);
-      const parsed = parseIphonePayload(payloadText);
-      setIphoneImportFeedback(
-        `Loaded ${asset.name || 'export file'}: ${parsed.sampleCount} samples across ${parsed.metricCount} metrics.`
-      );
-    } catch (error) {
-      setIphoneBatches([]);
-      setSelectedImportMetric(null);
-      setImportWindow(null);
-      setIphoneImportFeedback(
-        error instanceof Error
-          ? error.message
-          : 'Unable to import this file. You can still paste JSON manually.'
-      );
-    } finally {
-      setIphonePickLoading(false);
-    }
-  };
-
-  const handleParseIphonePayload = () => {
-    const trimmed = iphonePayload.trim();
-    if (!trimmed) {
-      setIphoneImportFeedback('Paste your iPhone export JSON before parsing.');
-      return;
-    }
-    setIphoneParseLoading(true);
-    setIphoneImportFeedback(null);
-    try {
-      const parsed = parseIphonePayload(trimmed);
-      setIphoneImportFeedback(
-        `Parsed ${parsed.sampleCount} samples across ${parsed.metricCount} metrics.`
-      );
-    } catch (error) {
-      setIphoneBatches([]);
-      setSelectedImportMetric(null);
-      setImportWindow(null);
-      setIphoneImportFeedback(error instanceof Error ? error.message : 'Unable to parse iPhone export.');
-    } finally {
-      setIphoneParseLoading(false);
-    }
-  };
-
-  const handleUploadIphoneImport = async () => {
-    if (!iphoneBatches.length) {
-      setIphoneImportFeedback('Parse an export before uploading.');
-      return;
-    }
-
-    setIphoneUploadLoading(true);
-    setIphoneImportFeedback(null);
-    try {
-      const uploadResults = await Promise.all(
-        iphoneBatches.map((batch) =>
-          runOrQueue({
+      for (const batch of batches) {
+        const chunks = chunkSamples(batch.samples, STREAM_UPLOAD_CHUNK_SIZE);
+        for (const chunk of chunks) {
+          const samplesWithLocalDate = chunk.map((sample) => {
+            const localDate = toLocalDateKey(new Date(sample.ts));
+            return { ...sample, localDate };
+          });
+          uploadedSampleCount += samplesWithLocalDate.length;
+          // eslint-disable-next-line no-await-in-loop
+          const result = await runOrQueue({
             endpoint: '/api/streams',
-            payload: { metric: batch.metric, samples: batch.samples },
-            description: `iPhone import (${batch.metric})`,
-          })
-        )
-      );
-      const queuedCount = uploadResults.filter((result) => result.status === 'queued').length;
-      const sentCount = uploadResults.length - queuedCount;
-      setIphoneImportFeedback(
-        queuedCount > 0
-          ? `Imported ${importedSampleCount} samples. Uploaded ${sentCount} metrics and queued ${queuedCount}.`
-          : `Imported ${importedSampleCount} samples across ${sentCount} metrics.`
-      );
-    } catch (error) {
-      setIphoneImportFeedback(
-        error instanceof Error ? error.message : 'Unable to upload imported samples.'
-      );
-    } finally {
-      setIphoneUploadLoading(false);
-    }
-  };
+            payload: {
+              metric: batch.metric,
+              localDate: samplesWithLocalDate[0]?.localDate || undefined,
+              samples: samplesWithLocalDate,
+            },
+            description: `Health stream import (${batch.metric})`,
+          });
+          if (result.status === 'queued') {
+            queuedCount += 1;
+          } else {
+            sentCount += 1;
+          }
+        }
+      }
 
-  const handleClearIphoneImport = () => {
-    setIphonePayload('');
-    setIphoneBatches([]);
-    setSelectedImportMetric(null);
-    setImportWindow(null);
-    setIphoneImportFeedback(null);
-  };
+      if (sentCount > 0) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['sleep'] }),
+          queryClient.invalidateQueries({ queryKey: ['activity'] }),
+          queryClient.invalidateQueries({ queryKey: ['vitals'] }),
+          queryClient.invalidateQueries({ queryKey: ['roster'] }),
+          queryClient.invalidateQueries({ queryKey: ['stream-history'] }),
+          queryClient.invalidateQueries({ queryKey: ['streamHistory'] }),
+        ]);
+      }
+
+      return {
+        queuedCount,
+        sentCount,
+        uploadedSampleCount,
+      };
+    },
+    [queryClient, runOrQueue]
+  );
+
+  const uploadWorkoutSessions = useCallback(
+    async (workouts: AppleHealthWorkoutImport[]) => {
+      let queuedCount = 0;
+      let sentCount = 0;
+      let uploadedWorkoutCount = 0;
+
+      const chunks = chunkSamples(workouts, WORKOUT_UPLOAD_CHUNK_SIZE);
+      for (const chunk of chunks) {
+        uploadedWorkoutCount += chunk.length;
+        // eslint-disable-next-line no-await-in-loop
+        const result = await runOrQueue({
+          endpoint: '/api/streams/workouts',
+          payload: { workouts: chunk },
+          description: 'Apple Health workout session import',
+        });
+        if (result.status === 'queued') {
+          queuedCount += 1;
+        } else {
+          sentCount += 1;
+        }
+      }
+
+      if (sentCount > 0) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['activity'] }),
+          queryClient.invalidateQueries({ queryKey: ['roster'] }),
+        ]);
+      }
+
+      return {
+        queuedCount,
+        sentCount,
+        uploadedWorkoutCount,
+      };
+    },
+    [queryClient, runOrQueue]
+  );
+
+  const syncAppleHealth = useCallback(
+    async (showFeedback: boolean) => {
+      setAppleHealthSyncLoading(true);
+      if (showFeedback) {
+        setAppleHealthFeedback(null);
+      }
+
+      try {
+        const endDate = new Date();
+        const startDate = new Date(endDate);
+        const previousSyncTs =
+          appleHealthLastSyncTs && Number.isFinite(appleHealthLastSyncTs) && appleHealthLastSyncTs > 0
+            ? appleHealthLastSyncTs
+            : null;
+        if (previousSyncTs) {
+          startDate.setTime(
+            previousSyncTs - APPLE_HEALTH_RESYNC_BUFFER_HOURS * 60 * 60 * 1000
+          );
+        } else {
+          startDate.setDate(startDate.getDate() - APPLE_HEALTH_INITIAL_LOOKBACK_DAYS);
+        }
+
+        const payload = await readAppleHealthPayload({ startDate, endDate });
+        const parsed = parseAppleHealthPayload(payload);
+        const hasStreamSamples = parsed.sampleCount > 0;
+        const hasWorkouts = parsed.workoutCount > 0;
+        if (!hasStreamSamples && !hasWorkouts) {
+          if (showFeedback) {
+            setAppleHealthFeedback(
+              previousSyncTs
+                ? 'No new Apple Health samples were found since your last sync.'
+                : `No Apple Health samples were found in the last ${APPLE_HEALTH_INITIAL_LOOKBACK_DAYS} days.`
+            );
+          }
+          return false;
+        }
+
+        const streamSummary = hasStreamSamples
+          ? await uploadStreamBatches(parsed.batches)
+          : { queuedCount: 0, sentCount: 0, uploadedSampleCount: 0 };
+        const workoutSummary = hasWorkouts
+          ? await uploadWorkoutSessions(parsed.workouts)
+          : { queuedCount: 0, sentCount: 0, uploadedWorkoutCount: 0 };
+        const syncCompletedAt = Date.now();
+        setAppleHealthLastSyncTs(syncCompletedAt);
+        AsyncStorage.setItem(APPLE_HEALTH_LAST_SYNC_KEY, String(syncCompletedAt)).catch(() => {});
+
+        if (showFeedback) {
+          const importedSegments: string[] = [];
+          if (streamSummary.uploadedSampleCount > 0) {
+            importedSegments.push(`${streamSummary.uploadedSampleCount} samples`);
+          }
+          if (workoutSummary.uploadedWorkoutCount > 0) {
+            importedSegments.push(`${workoutSummary.uploadedWorkoutCount} workouts`);
+          }
+          const sentBatchCount = streamSummary.sentCount + workoutSummary.sentCount;
+          const queuedBatchCount = streamSummary.queuedCount + workoutSummary.queuedCount;
+          const importedLabel = importedSegments.join(' and ');
+          setAppleHealthFeedback(
+            queuedBatchCount > 0
+              ? `Apple Health sync imported ${importedLabel}. Uploaded ${sentBatchCount} batches and queued ${queuedBatchCount}.`
+              : `Apple Health sync uploaded ${importedLabel} across ${sentBatchCount} batches.`
+          );
+        }
+
+        return true;
+      } catch (error) {
+        if (showFeedback) {
+          const fallbackMessage =
+            Platform.OS !== 'ios'
+              ? 'Apple Health sync is only available on iOS devices.'
+              : getAppleHealthMissingMessage();
+          setAppleHealthFeedback(error instanceof Error ? error.message : fallbackMessage);
+        }
+        return false;
+      } finally {
+        setAppleHealthSyncLoading(false);
+      }
+    },
+    [appleHealthLastSyncTs, uploadStreamBatches, uploadWorkoutSessions]
+  );
 
   return (
     <RefreshableScrollView
@@ -561,6 +607,40 @@ export function ProfileScreen() {
             <Metric label="Metric" value={PHONE_STEPS_METRIC} />
             <Metric label="Synced" value={formatDate(new Date(phoneStepSample.ts).toISOString(), 'HH:mm')} />
           </View>
+        ) : null}
+      </Card>
+      <Card>
+        <SectionHeader title="Apple Health sync" subtitle="One button, direct from your phone" />
+        <AppText variant="muted">
+          Tap once to request Apple Health permission and sync data automatically. No export files or
+          other apps are needed.
+        </AppText>
+        <View style={styles.importActionsRow}>
+          <AppButton
+            title="Sync Apple Health"
+            onPress={() => syncAppleHealth(true)}
+            loading={appleHealthSyncLoading}
+            disabled={appleHealthSyncLoading}
+            style={styles.importActionButton}
+          />
+        </View>
+        <AppText variant="muted" style={styles.helperText}>
+          First sync imports up to {APPLE_HEALTH_INITIAL_LOOKBACK_DAYS} days. Later syncs import new
+          samples plus a {APPLE_HEALTH_RESYNC_BUFFER_HOURS}-hour overlap for reliability.
+        </AppText>
+        <AppText variant="muted" style={styles.helperText}>
+          Sync updates sleep/vitals trends and now imports individual Apple Health workouts into
+          Sessions, including distance, calories, and duration.
+        </AppText>
+        {appleHealthLastSyncTs ? (
+          <AppText variant="muted" style={styles.helperText}>
+            Last sync: {formatDate(new Date(appleHealthLastSyncTs).toISOString(), 'MMM D, HH:mm')}
+          </AppText>
+        ) : null}
+        {appleHealthFeedback ? (
+          <AppText variant="muted" style={styles.helperText}>
+            {appleHealthFeedback}
+          </AppText>
         ) : null}
       </Card>
       <Card>
@@ -663,89 +743,6 @@ export function ProfileScreen() {
           />
         </View>
       </Card>
-      <Card>
-        <SectionHeader title="Phone data import" subtitle="Import Auto Export / Health JSON from your iPhone" />
-        <AppText variant="muted" style={styles.importHint}>
-          Export health data to a JSON file on your iPhone, then choose the file here or paste the JSON
-          directly. Parsed metrics are uploaded to your stream timeline.
-        </AppText>
-        <SectionHeader title="File / paste import" subtitle="Use exported JSON from iPhone apps" />
-        <View style={styles.importActionsRow}>
-          <AppButton
-            title="Choose file"
-            variant="ghost"
-            onPress={handlePickIphoneExport}
-            loading={iphonePickLoading}
-            style={styles.importActionButton}
-          />
-          <AppButton
-            title="Parse JSON"
-            onPress={handleParseIphonePayload}
-            loading={iphoneParseLoading}
-            style={styles.importActionButton}
-          />
-          <AppButton
-            title="Upload"
-            onPress={handleUploadIphoneImport}
-            loading={iphoneUploadLoading}
-            disabled={!iphoneBatches.length}
-            style={styles.importActionButton}
-          />
-          <AppButton title="Clear" variant="ghost" onPress={handleClearIphoneImport} />
-        </View>
-        <AppInput
-          label="Import JSON"
-          placeholder='{"samples":[{"metric":"exercise.hr","ts":1739836800000,"value":72}]}'
-          value={iphonePayload}
-          onChangeText={setIphonePayload}
-          multiline
-          numberOfLines={8}
-          autoCapitalize="none"
-          style={styles.importInput}
-        />
-        {iphoneImportFeedback ? (
-          <AppText variant="muted" style={styles.helperText}>
-            {iphoneImportFeedback}
-          </AppText>
-        ) : null}
-        {iphoneBatches.length ? (
-          <>
-            <View style={styles.metricsRow}>
-              <Metric label="Metrics" value={formatNumber(iphoneBatches.length)} />
-              <Metric label="Samples" value={formatNumber(importedSampleCount)} />
-              <Metric
-                label="Preview"
-                value={selectedImportBatch ? toMetricLabel(selectedImportBatch.metric) : '--'}
-              />
-            </View>
-            {importWindow ? (
-              <AppText variant="muted" style={styles.helperText}>
-                Time window: {importWindow}
-              </AppText>
-            ) : null}
-            <View style={styles.importMetricRow}>
-              {visibleImportBatches.map((batch) => (
-                <AppButton
-                  key={batch.metric}
-                  title={toMetricLabel(batch.metric)}
-                  variant={selectedImportMetric === batch.metric ? 'secondary' : 'ghost'}
-                  onPress={() => setSelectedImportMetric(batch.metric)}
-                  style={styles.importMetricButton}
-                />
-              ))}
-            </View>
-            {iphoneBatches.length > visibleImportBatches.length ? (
-              <AppText variant="muted" style={styles.helperText}>
-                +{iphoneBatches.length - visibleImportBatches.length} more metrics parsed.
-              </AppText>
-            ) : null}
-            <TrendChart
-              data={selectedImportTrend}
-              yLabel={selectedImportBatch ? toMetricLabel(selectedImportBatch.metric) : 'Value'}
-            />
-          </>
-        ) : null}
-      </Card>
       {feedback ? (
         <AppText variant="muted" style={styles.feedback}>
           {feedback}
@@ -765,20 +762,11 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatImportWindow(startTs: number | null, endTs: number | null) {
-  if (!startTs || !endTs) {
-    return null;
-  }
-  return `${formatDate(new Date(startTs).toISOString(), 'MMM D, HH:mm')} - ${formatDate(
-    new Date(endTs).toISOString(),
-    'MMM D, HH:mm'
-  )}`;
-}
-
-function toMetricLabel(metric: string) {
-  const tail = metric.split('.').pop() || metric;
-  const pretty = tail.replace(/_/g, ' ');
-  return pretty.length > 18 ? `${pretty.slice(0, 16)}..` : pretty;
+function toLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function formatPhoneAccessStatus(status: PhoneAccessStatus) {
@@ -794,13 +782,13 @@ function formatPhoneAccessStatus(status: PhoneAccessStatus) {
   return 'Not requested';
 }
 
-async function readTextFromUri(uri: string) {
-  try {
-    const response = await fetch(uri);
-    return await response.text();
-  } catch {
-    throw new Error('Unable to read the selected file. Paste JSON manually if needed.');
+function chunkSamples<T>(items: T[], chunkSize: number) {
+  const size = Math.max(1, Math.floor(chunkSize));
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
   }
+  return chunks;
 }
 
 const styles = StyleSheet.create({
@@ -810,9 +798,6 @@ const styles = StyleSheet.create({
   },
   feedback: {
     textAlign: 'center',
-  },
-  importHint: {
-    marginBottom: spacing.sm,
   },
   avatarRow: {
     flexDirection: 'row',
@@ -855,15 +840,6 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     minWidth: 100,
   },
-  importInput: {
-    minHeight: 140,
-    textAlignVertical: 'top',
-  },
-  importDivider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginVertical: spacing.md,
-  },
   metricsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -872,16 +848,5 @@ const styles = StyleSheet.create({
   },
   metric: {
     flex: 1,
-  },
-  importMetricRow: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-    flexWrap: 'wrap',
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  importMetricButton: {
-    flexGrow: 1,
-    minWidth: 96,
   },
 });

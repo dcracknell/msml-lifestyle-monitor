@@ -170,7 +170,19 @@ export interface StravaConnectResponse {
 export interface StravaSyncResponse {
   imported: number;
   fetched: number;
+  skipped?: number;
+  pages?: number;
   lastSync: string;
+}
+
+export interface StravaExportResponse {
+  message: string;
+  sessionId: number;
+  stravaActivityId: number;
+  stravaActivityUrl?: string | null;
+  name?: string | null;
+  sportType?: string | null;
+  startTime?: string | null;
 }
 
 export interface VitalsEntry {
@@ -349,6 +361,22 @@ export interface NutritionLookupProduct {
 
 export interface NutritionLookupResponse {
   product: NutritionLookupProduct | null;
+}
+
+export interface NutritionLookupBatchResult {
+  barcode: string;
+  found: boolean;
+  product: NutritionLookupProduct | null;
+  code?: string;
+  message?: string;
+}
+
+export interface NutritionLookupBatchResponse {
+  requested: number;
+  resolved: number;
+  truncated?: number;
+  max?: number;
+  results: NutritionLookupBatchResult[];
 }
 
 export interface StreamSample {

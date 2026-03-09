@@ -10,11 +10,17 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
-  <script src="vendor/chart.umd.js" defer></script>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/vendor/chart.umd.js" defer></script>
 </head>
 
-<body>
+<body class="app-loading" aria-busy="true">
+  <div class="startup-loading-screen" id="appLoadingScreen" role="status" aria-live="polite">
+    <div class="startup-loading-content">
+      <span class="startup-loading-spinner" aria-hidden="true"></span>
+      <p class="startup-loading-label">Loading MSML Lifestyle Monitor...</p>
+    </div>
+  </div>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
@@ -459,9 +465,14 @@
             </article>
 
             <article class="glass activity-panel">
-              <div class="card-header">
-                <p class="eyebrow">Splits</p>
-                <h3 id="activitySplitTitle">Select a session</h3>
+              <div class="card-header split">
+                <div>
+                  <p class="eyebrow">Splits</p>
+                  <h3 id="activitySplitTitle">Select a session</h3>
+                </div>
+                <button type="button" class="outline-btn secondary hidden" id="stravaExportButton">
+                  Export to Strava
+                </button>
               </div>
               <ul class="activity-split-list" id="activitySplits"></ul>
             </article>
@@ -1227,7 +1238,7 @@
     </main>
   </div>
 
-  <script src="app.js" type="module"></script>
+  <script src="/app.js" type="module"></script>
 </body>
 
 </html>

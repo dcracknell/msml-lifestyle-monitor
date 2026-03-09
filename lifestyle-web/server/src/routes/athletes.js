@@ -16,6 +16,7 @@ const rosterByCoachStatement = db.prepare(`
     INNER JOIN (
       SELECT user_id, MAX(date) AS max_date
       FROM daily_metrics
+      WHERE date <= DATE('now', 'localtime')
       GROUP BY user_id
     ) grouped
       ON grouped.user_id = dm.user_id AND grouped.max_date = dm.date
@@ -52,6 +53,7 @@ const rosterAllStatement = db.prepare(`
     INNER JOIN (
       SELECT user_id, MAX(date) AS max_date
       FROM daily_metrics
+      WHERE date <= DATE('now', 'localtime')
       GROUP BY user_id
     ) grouped
       ON grouped.user_id = dm.user_id AND grouped.max_date = dm.date
@@ -83,6 +85,7 @@ const latestForUser = db.prepare(
           readiness_score AS readiness_score
    FROM daily_metrics
    WHERE user_id = ?
+     AND date <= DATE('now', 'localtime')
    ORDER BY date DESC
    LIMIT 1`
 );

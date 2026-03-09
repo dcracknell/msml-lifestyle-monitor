@@ -26,7 +26,8 @@ The mobile app implements the same major surfaces as the web UI:
 - **Authentication + password reset** using the `/api/login`, `/api/signup`, and `/api/password` routes.
 - **Overview dashboard** with readiness ring, hydration, macro targets, and timeline charts from `/api/metrics`.
 - **Activity + Sessions** with Strava connectivity plus best efforts, recent workouts, split breakdowns, and the same mileage/training-load/pace charts from `/api/activity`.
-how to run - **Phone activity export** requests motion/activity permission and can auto-export on-device step counts to `/api/streams` as `phone.steps`.
+- **Phone activity export** requests motion/activity permission and can auto-export on-device step counts to `/api/streams` as `phone.steps`.
+- **Apple Health direct sync (iOS)** can pull recent steps, heart rate, resting heart rate, and sleep totals directly from HealthKit and upload to `/api/streams` without manual file export.
 - **Coach subject switching** mirrors the web dashboard with the "My dashboard" chip and roster stats so coaches can bounce between themselves and linked athletes.
 - **Vitals** 14‑day trends and latest readings from `/api/vitals`.
 - **Nutrition** day selector, collapsible macro targets/log entry forms with barcode + weight-aware inputs (with offline queue), and monthly trends from `/api/nutrition`.
@@ -88,6 +89,22 @@ npx expo run:ios
 npx expo run:android
 ```
 
+### Apple Health direct sync setup (iOS)
+
+To use the Profile screen's **Apple Health sync** buttons:
+
+1. Add the native HealthKit bridge dependency:
+   ```bash
+   npm install react-native-health
+   ```
+2. Regenerate native projects / install pods:
+   ```bash
+   npx expo prebuild
+   cd ios && pod install
+   ```
+3. In Xcode, enable the **HealthKit** capability for the app target.
+4. Build and run with `npx expo run:ios` (Expo Go cannot access HealthKit native modules).
+
 ### Build with Xcode (installable app)
 
 1. Install pods:
@@ -106,3 +123,23 @@ On Android 12+ the app requests the `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and `
 ## Running on devices
 
 The app is managed by Expo, so you can develop on any platform (no macOS required). Use the Expo Go app or `npx expo run:ios` / `npx expo run:android` when native builds are needed. All network calls go to the same API origin you configure in `.env`.
+
+## Troubleshooting
+
+If iOS shows `No script URL provided`, launch through the dev client so Metro is attached:
+
+```bash
+npm run ios:dev
+```
+
+If that still fails, clear Metro cache and relaunch:
+
+```bash
+npm run ios:dev:clear
+```
+
+If you launched from Xcode, start Metro first in `lifestyle-mobile`:
+
+```bash
+npm run dev-client
+```

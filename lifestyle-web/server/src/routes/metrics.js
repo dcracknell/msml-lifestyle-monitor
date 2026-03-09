@@ -72,6 +72,7 @@ const summaryStatement = db.prepare(
           readiness_score AS readiness
      FROM daily_metrics
     WHERE user_id = ?
+      AND date <= DATE('now', 'localtime')
     ORDER BY date DESC
     LIMIT 1`
 );
@@ -84,6 +85,7 @@ const timelineStatement = db.prepare(
           readiness_score AS readiness
      FROM daily_metrics
     WHERE user_id = ?
+      AND date <= DATE('now', 'localtime')
     ORDER BY date ASC`
 );
 
@@ -118,6 +120,7 @@ const sleepStagesStatement = db.prepare(
           light_minutes AS light
      FROM sleep_stages
     WHERE user_id = ?
+      AND date <= DATE('now', 'localtime')
     ORDER BY date DESC
     LIMIT 1`
 );
@@ -127,6 +130,7 @@ const readinessTrendStatement = db.prepare(
           readiness_score AS readiness
      FROM daily_metrics
     WHERE user_id = ?
+      AND date <= DATE('now', 'localtime')
     ORDER BY date ASC`
 );
 

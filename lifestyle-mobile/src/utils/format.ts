@@ -31,8 +31,9 @@ export function formatPace(seconds?: number | null) {
   if (seconds === null || seconds === undefined || Number.isNaN(seconds)) {
     return '--';
   }
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60)
+  const totalSeconds = Math.max(0, Math.round(seconds));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = (totalSeconds % 60)
     .toString()
     .padStart(2, '0');
   return `${mins}:${secs} /km`;

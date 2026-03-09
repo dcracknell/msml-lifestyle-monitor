@@ -6,12 +6,30 @@ const { coerceRole, isHeadCoach } = require('../utils/role');
 
 const router = express.Router();
 const UPC_LOOKUP_URL = 'https://world.openfoodfacts.org/api/v2';
+const UK_UPC_LOOKUP_URL = 'https://uk.openfoodfacts.org/api/v2';
 const SEARCH_URL = 'https://world.openfoodfacts.org/cgi/search.pl';
+const UK_SEARCH_URL = 'https://uk.openfoodfacts.org/cgi/search.pl';
 const REMOTE_SEARCH_CACHE_TTL_MS = 1000 * 60 * 5; // 5 minutes
 const REMOTE_SEARCH_CACHE_LIMIT = 50;
 const REMOTE_SEARCH_TIMEOUT_MS = 400;
 const BARCODE_LOOKUP_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
-const BARCODE_LOOKUP_CACHE_LIMIT = 250;
+const BARCODE_LOOKUP_CACHE_LIMIT = 5000;
+const BARCODE_BATCH_LOOKUP_MAX = 250;
+const BARCODE_BATCH_LOOKUP_CONCURRENCY = 8;
+const LOOKUP_PRODUCT_FIELDS = [
+  'code',
+  'product_name',
+  'generic_name',
+  'brands',
+  'serving_size',
+  'serving_quantity',
+  'quantity',
+  'portion_display_name',
+  'nutrition_data_per',
+  'nutriments',
+].join(',');
+const BARCODE_LOOKUP_SOURCES = [UK_UPC_LOOKUP_URL, UPC_LOOKUP_URL];
+const BARCODE_SEARCH_SOURCES = [UK_SEARCH_URL, SEARCH_URL];
 const keepAliveAgent = new https.Agent({
   keepAlive: true,
   keepAliveMsecs: 1000 * 15,
@@ -20,14 +38,67 @@ const keepAliveAgent = new https.Agent({
 });
 const remoteSuggestionCache = new Map();
 const barcodeLookupCache = new Map();
+const barcodeLookupInflight = new Map();
+
+const LOOKUP_NETWORK_ERROR_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+]);
+
+class LookupServiceError extends Error {
+  constructor(message, { status = 502, code = 'LOOKUP_FAILED' } = {}) {
+    super(message);
+    this.name = 'LookupServiceError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function readFirstFiniteNumber(...values) {
+  for (const value of values) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function kjToKcal(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return value / 4.184;
+}
 
 function fetchJson(targetUrl) {
   return new Promise((resolve, reject) => {
     const request = https.get(targetUrl, { agent: keepAliveAgent }, (response) => {
       const { statusCode } = response;
+      if (statusCode === 404) {
+        response.resume();
+        resolve(null);
+        return;
+      }
       if (statusCode && statusCode >= 400) {
         response.resume();
-        reject(new Error(`Lookup service returned ${statusCode}`));
+        const isUnavailable = statusCode >= 500 || statusCode === 429;
+        reject(
+          new LookupServiceError(
+            isUnavailable
+              ? 'Nutrition lookup service is temporarily unavailable. Try again in a moment.'
+              : `Lookup service returned ${statusCode}`,
+            {
+              status: isUnavailable ? 503 : 502,
+              code: isUnavailable ? 'LOOKUP_UNAVAILABLE' : 'LOOKUP_FAILED',
+            }
+          )
+        );
         return;
       }
       let raw = '';
@@ -40,15 +111,49 @@ function fetchJson(targetUrl) {
           const parsed = JSON.parse(raw);
           resolve(parsed);
         } catch (error) {
-          reject(new Error('Invalid response from lookup service.'));
+          reject(
+            new LookupServiceError('Invalid response from lookup service.', {
+              status: 502,
+              code: 'LOOKUP_INVALID_RESPONSE',
+            })
+          );
         }
       });
     });
     request.on('error', (error) => {
-      reject(new Error(`Lookup failed: ${error.message}`));
+      if (error instanceof LookupServiceError) {
+        reject(error);
+        return;
+      }
+      if (error?.code && LOOKUP_NETWORK_ERROR_CODES.has(error.code)) {
+        reject(
+          new LookupServiceError(
+            'Nutrition lookup service is unreachable right now. You can still log calories manually.',
+            {
+              status: 503,
+              code: 'LOOKUP_UNREACHABLE',
+            }
+          )
+        );
+        return;
+      }
+      reject(
+        new LookupServiceError(`Lookup failed: ${error.message}`, {
+          status: 502,
+          code: 'LOOKUP_FAILED',
+        })
+      );
     });
     request.setTimeout(5000, () => {
-      request.destroy(new Error('Lookup timed out.'));
+      request.destroy(
+        new LookupServiceError(
+          'Nutrition lookup timed out. Try again shortly.',
+          {
+            status: 504,
+            code: 'LOOKUP_TIMEOUT',
+          }
+        )
+      );
     });
   });
 }
@@ -1204,10 +1309,22 @@ function guessUnitFromNutritionData(nutritionPer = '') {
 function parseNutritionFromProduct(product = {}) {
   if (!product) return null;
   const nutriments = product.nutriments || {};
-  const caloriesServing = Number.parseFloat(nutriments['energy-kcal_serving']);
-  const caloriesPer100g = Number.parseFloat(nutriments['energy-kcal_100g']);
-  const caloriesPer100ml = Number.parseFloat(nutriments['energy-kcal_100ml']);
-  const caloriesGeneric = Number.parseFloat(nutriments['energy-kcal']);
+  const caloriesServing = readFirstFiniteNumber(
+    nutriments['energy-kcal_serving'],
+    kjToKcal(readFirstFiniteNumber(nutriments['energy-kj_serving']))
+  );
+  const caloriesPer100g = readFirstFiniteNumber(
+    nutriments['energy-kcal_100g'],
+    kjToKcal(readFirstFiniteNumber(nutriments['energy-kj_100g']))
+  );
+  const caloriesPer100ml = readFirstFiniteNumber(
+    nutriments['energy-kcal_100ml'],
+    kjToKcal(readFirstFiniteNumber(nutriments['energy-kj_100ml']))
+  );
+  const caloriesGeneric = readFirstFiniteNumber(
+    nutriments['energy-kcal'],
+    kjToKcal(readFirstFiniteNumber(nutriments['energy-kj']))
+  );
   const rawServing =
     product.serving_size ||
     product.serving_quantity ||
@@ -1236,18 +1353,18 @@ function parseNutritionFromProduct(product = {}) {
     macroSource = 'generic';
   }
 
-  const protein =
-    Number.parseFloat(nutriments.proteins_serving) ||
-    Number.parseFloat(nutriments.proteins_100g) ||
-    null;
-  const carbs =
-    Number.parseFloat(nutriments.carbohydrates_serving) ||
-    Number.parseFloat(nutriments.carbohydrates_100g) ||
-    null;
-  const fats =
-    Number.parseFloat(nutriments.fat_serving) ||
-    Number.parseFloat(nutriments.fat_100g) ||
-    null;
+  const protein = readFirstFiniteNumber(
+    nutriments.proteins_serving,
+    nutriments.proteins_100g
+  );
+  const carbs = readFirstFiniteNumber(
+    nutriments.carbohydrates_serving,
+    nutriments.carbohydrates_100g
+  );
+  const fats = readFirstFiniteNumber(
+    nutriments.fat_serving,
+    nutriments.fat_100g
+  );
 
   if (![calories, protein, carbs, fats].some((value) => Number.isFinite(value))) {
     return null;
@@ -1303,7 +1420,7 @@ function parseNutritionFromProduct(product = {}) {
   return {
     name: product.product_name || product.generic_name || product.brands || 'Unknown item',
     barcode: product.code || null,
-    calories: calories ? Math.round(calories) : null,
+    calories: Number.isFinite(calories) ? Math.round(calories) : null,
     protein: Number.isFinite(protein) ? Math.round(protein) : null,
     carbs: Number.isFinite(carbs) ? Math.round(carbs) : null,
     fats: Number.isFinite(fats) ? Math.round(fats) : null,
@@ -1315,36 +1432,193 @@ function parseNutritionFromProduct(product = {}) {
 }
 
 async function lookupByBarcode(barcode, options = {}) {
-  const normalizedBarcode = normalizeBarcodeValue(barcode);
-  if (!normalizedBarcode) {
+  const candidates = buildBarcodeCandidates(barcode);
+  if (!candidates.length) {
     return null;
   }
-  const cached = getCachedBarcodeResult(normalizedBarcode);
-  if (cached) {
-    return cached;
-  }
-  if (options.userId) {
-    const localProduct = lookupLocalProductByBarcode(options.userId, normalizedBarcode);
-    if (localProduct) {
-      setCachedBarcodeResult(normalizedBarcode, localProduct);
-      return localProduct;
+
+  for (const candidate of candidates) {
+    const cached = getCachedBarcodeResult(candidate);
+    if (cached) {
+      return cached;
     }
   }
+
+  if (options.userId) {
+    for (const candidate of candidates) {
+      const localProduct = lookupLocalProductByBarcode(options.userId, candidate);
+      if (localProduct) {
+        candidates.forEach((value) => setCachedBarcodeResult(value, localProduct));
+        return localProduct;
+      }
+    }
+  }
+
+  const inflightKey = candidates[0];
+  const inflightRequest = barcodeLookupInflight.get(inflightKey);
+  if (inflightRequest) {
+    return inflightRequest;
+  }
+
+  const lookupPromise = (async () => {
+    for (const candidate of candidates) {
+      for (const sourceUrl of BARCODE_LOOKUP_SOURCES) {
+        // eslint-disable-next-line no-await-in-loop
+        const parsed = await fetchBarcodeProductByEndpoint(candidate, sourceUrl);
+        if (parsed) {
+          return cacheResolvedBarcodeProduct(candidates, candidate, parsed);
+        }
+      }
+      for (const searchUrl of BARCODE_SEARCH_SOURCES) {
+        // eslint-disable-next-line no-await-in-loop
+        const parsed = await fetchBarcodeProductBySearch(candidate, searchUrl);
+        if (parsed) {
+          return cacheResolvedBarcodeProduct(candidates, candidate, parsed);
+        }
+      }
+    }
+    return null;
+  })();
+
+  barcodeLookupInflight.set(inflightKey, lookupPromise);
+  try {
+    return await lookupPromise;
+  } finally {
+    const active = barcodeLookupInflight.get(inflightKey);
+    if (active === lookupPromise) {
+      barcodeLookupInflight.delete(inflightKey);
+    }
+  }
+}
+
+function cacheResolvedBarcodeProduct(candidates = [], candidate = '', parsed = null) {
+  if (!parsed) {
+    return null;
+  }
+  const canonicalBarcode = normalizeBarcodeValue(parsed.barcode || candidate);
+  if (canonicalBarcode && !parsed.barcode) {
+    parsed.barcode = canonicalBarcode;
+  }
+  candidates.forEach((value) => setCachedBarcodeResult(value, parsed));
+  if (canonicalBarcode) {
+    setCachedBarcodeResult(canonicalBarcode, parsed);
+  }
+  return parsed;
+}
+
+async function fetchBarcodeProductByEndpoint(candidate, sourceUrl) {
   const productUrl = new URL(
-    `/product/${encodeURIComponent(normalizedBarcode)}.json`,
-    UPC_LOOKUP_URL
+    `/product/${encodeURIComponent(candidate)}.json`,
+    sourceUrl
   );
-  productUrl.searchParams.set('fields', 'code,product_name,generic_name,brands,nutriments');
+  productUrl.searchParams.set('fields', LOOKUP_PRODUCT_FIELDS);
+  productUrl.searchParams.set('lc', 'en');
 
   const data = await fetchJson(productUrl);
   if (!data?.product) {
     return null;
   }
-  const parsed = parseNutritionFromProduct(data.product);
-  if (parsed) {
-    setCachedBarcodeResult(normalizedBarcode, parsed);
+  return parseNutritionFromProduct(data.product);
+}
+
+async function fetchBarcodeProductBySearch(candidate, searchUrl) {
+  const barcodeVariants = new Set(buildBarcodeCandidates(candidate).map((value) => normalizeBarcodeValue(value)));
+  const searchParams = new URLSearchParams({
+    search_terms: candidate,
+    search_simple: '1',
+    action: 'process',
+    json: '1',
+    page_size: '12',
+    fields: LOOKUP_PRODUCT_FIELDS,
+  });
+  if (searchUrl === UK_SEARCH_URL) {
+    searchParams.set('countries_tags_en', 'united-kingdom');
   }
-  return parsed;
+  const data = await fetchJson(`${searchUrl}?${searchParams.toString()}`);
+  const products = Array.isArray(data?.products) ? data.products : [];
+  if (!products.length) {
+    return null;
+  }
+
+  let fallbackMatch = null;
+  let parsedCount = 0;
+  for (const product of products) {
+    const parsed = parseNutritionFromProduct(product);
+    if (!parsed) {
+      continue;
+    }
+    parsedCount += 1;
+    const normalizedCode = normalizeBarcodeValue(product?.code || parsed.barcode);
+    if (normalizedCode && barcodeVariants.has(normalizedCode)) {
+      return parsed;
+    }
+    if (!fallbackMatch) {
+      fallbackMatch = parsed;
+    }
+  }
+  if (parsedCount === 1) {
+    return fallbackMatch;
+  }
+  return null;
+}
+
+async function lookupByBarcodeBatch(rawBarcodes, options = {}) {
+  const maxBatchSize =
+    Number.isFinite(options.maxBatchSize) && options.maxBatchSize > 0
+      ? Math.floor(options.maxBatchSize)
+      : BARCODE_BATCH_LOOKUP_MAX;
+  const parseOutcome = parseBarcodeListInput(rawBarcodes, { max: maxBatchSize });
+  const barcodes = parseOutcome.barcodes;
+  if (!barcodes.length) {
+    return {
+      requested: 0,
+      resolved: 0,
+      truncated: parseOutcome.truncated,
+      results: [],
+    };
+  }
+
+  const desiredConcurrency =
+    Number.isFinite(options.concurrency) && options.concurrency > 0
+      ? Math.floor(options.concurrency)
+      : BARCODE_BATCH_LOOKUP_CONCURRENCY;
+  const workerCount = Math.max(1, Math.min(desiredConcurrency, barcodes.length, 24));
+  const results = new Array(barcodes.length);
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < barcodes.length) {
+      const index = cursor;
+      cursor += 1;
+      const normalizedBarcode = barcodes[index];
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const product = await lookupByBarcode(normalizedBarcode, options);
+        results[index] = {
+          barcode: normalizedBarcode,
+          found: Boolean(product),
+          product: product || null,
+        };
+      } catch (error) {
+        results[index] = {
+          barcode: normalizedBarcode,
+          found: false,
+          product: null,
+          code: error?.code || 'LOOKUP_FAILED',
+          message: error?.message || 'Lookup failed.',
+        };
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  const resolved = results.reduce((acc, entry) => (entry?.found ? acc + 1 : acc), 0);
+  return {
+    requested: barcodes.length,
+    resolved,
+    truncated: parseOutcome.truncated,
+    results,
+  };
 }
 
 async function lookupByQuery(query) {
@@ -1354,7 +1628,8 @@ async function lookupByQuery(query) {
     action: 'process',
     json: '1',
     page_size: '1',
-    fields: 'code,product_name,generic_name,brands,nutriments',
+    fields: LOOKUP_PRODUCT_FIELDS,
+    lc: 'en',
   });
   const data = await fetchJson(`${SEARCH_URL}?${searchParams.toString()}`);
   const firstHit = data?.products?.[0];
@@ -1384,7 +1659,73 @@ function normalizeText(value = '') {
 }
 
 function normalizeBarcodeValue(value = '') {
-  return value ? value.toString().trim() : '';
+  const trimmed = value ? value.toString().trim() : '';
+  if (!trimmed) {
+    return '';
+  }
+  const digits = trimmed.replace(/\D+/g, '');
+  if (digits.length >= 8) {
+    return digits;
+  }
+  return trimmed;
+}
+
+function buildBarcodeCandidates(value = '') {
+  const normalized = normalizeBarcodeValue(value);
+  if (!normalized) {
+    return [];
+  }
+
+  const candidates = new Set([normalized]);
+  const digits = normalized.replace(/\D+/g, '');
+  if (digits.length >= 8) {
+    candidates.add(digits);
+    if (digits.length === 14 && digits.startsWith('0')) {
+      const as13 = digits.slice(1);
+      candidates.add(as13);
+      if (as13.startsWith('0') && as13.length === 13) {
+        candidates.add(as13.slice(1));
+      }
+    } else if (digits.length === 13 && digits.startsWith('0')) {
+      candidates.add(digits.slice(1));
+    } else if (digits.length === 12) {
+      candidates.add(`0${digits}`);
+    }
+  }
+
+  return Array.from(candidates).filter(Boolean);
+}
+
+function parseBarcodeListInput(rawValue, options = {}) {
+  const max =
+    Number.isFinite(options.max) && options.max > 0
+      ? Math.floor(options.max)
+      : BARCODE_BATCH_LOOKUP_MAX;
+  let sourceValues = [];
+  if (Array.isArray(rawValue)) {
+    sourceValues = rawValue;
+  } else if (typeof rawValue === 'string') {
+    sourceValues = rawValue.split(/[\s,;]+/g);
+  } else if (rawValue !== undefined && rawValue !== null) {
+    sourceValues = [rawValue];
+  }
+  const seen = new Set();
+  const normalized = [];
+  sourceValues.forEach((value) => {
+    const parsed = normalizeBarcodeValue(value);
+    if (!parsed || seen.has(parsed)) {
+      return;
+    }
+    seen.add(parsed);
+    normalized.push(parsed);
+  });
+  if (normalized.length <= max) {
+    return { barcodes: normalized, truncated: 0 };
+  }
+  return {
+    barcodes: normalized.slice(0, max),
+    truncated: normalized.length - max,
+  };
 }
 
 function parseNullableNumber(value) {
@@ -1703,7 +2044,8 @@ async function searchProducts(query) {
     action: 'process',
     json: '1',
     page_size: '8',
-    fields: 'code,product_name,generic_name,brands,serving_size,nutriments',
+    fields: LOOKUP_PRODUCT_FIELDS,
+    lc: 'en',
   });
   const data = await fetchJson(`${SEARCH_URL}?${searchParams.toString()}`);
   const products = data?.products || [];
@@ -2081,9 +2423,96 @@ router.delete('/:entryId', authenticate, (req, res) => {
   });
 });
 
+router.post('/lookup/batch', authenticate, async (req, res) => {
+  const rawBarcodes = req.body?.barcodes;
+  const parseOutcome = parseBarcodeListInput(rawBarcodes, { max: BARCODE_BATCH_LOOKUP_MAX });
+  if (!parseOutcome.barcodes.length) {
+    return res.status(400).json({
+      message: 'Provide at least one barcode in the barcodes array.',
+      max: BARCODE_BATCH_LOOKUP_MAX,
+    });
+  }
+
+  try {
+    const batch = await lookupByBarcodeBatch(parseOutcome.barcodes, {
+      userId: req.user.id,
+      maxBatchSize: BARCODE_BATCH_LOOKUP_MAX,
+      concurrency: BARCODE_BATCH_LOOKUP_CONCURRENCY,
+    });
+    return res.json({
+      requested: batch.requested,
+      resolved: batch.resolved,
+      truncated: parseOutcome.truncated || batch.truncated || 0,
+      max: BARCODE_BATCH_LOOKUP_MAX,
+      results: batch.results,
+    });
+  } catch (error) {
+    const status =
+      Number.isFinite(Number(error?.status)) && Number(error.status) >= 400
+        ? Number(error.status)
+        : 502;
+    const fallbackMessage =
+      status >= 500
+        ? 'Nutrition lookup is temporarily unavailable. You can still enter calories manually.'
+        : 'Lookup failed. Try again later.';
+    return res.status(status).json({
+      message: error?.message || fallbackMessage,
+      code: error?.code || 'LOOKUP_FAILED',
+    });
+  }
+});
+
 router.get('/lookup', authenticate, async (req, res) => {
-  const barcode = (req.query.barcode || '').toString().trim();
+  const rawBarcode = req.query.barcode;
+  const barcode =
+    typeof rawBarcode === 'string'
+      ? rawBarcode.trim()
+      : Array.isArray(rawBarcode)
+        ? ''
+        : '';
   const query = (req.query.q || req.query.query || '').toString().trim();
+  const barcodeListInput =
+    req.query.barcodes ||
+    req.query.barcodeList ||
+    (Array.isArray(rawBarcode) ? rawBarcode : null) ||
+    (typeof rawBarcode === 'string' && /[,;\n\r]/.test(rawBarcode) ? rawBarcode : null);
+
+  if (barcodeListInput) {
+    const parseOutcome = parseBarcodeListInput(barcodeListInput, { max: BARCODE_BATCH_LOOKUP_MAX });
+    if (!parseOutcome.barcodes.length) {
+      return res.status(400).json({
+        message: 'Provide a valid list of barcodes.',
+        max: BARCODE_BATCH_LOOKUP_MAX,
+      });
+    }
+    try {
+      const batch = await lookupByBarcodeBatch(parseOutcome.barcodes, {
+        userId: req.user.id,
+        maxBatchSize: BARCODE_BATCH_LOOKUP_MAX,
+        concurrency: BARCODE_BATCH_LOOKUP_CONCURRENCY,
+      });
+      return res.json({
+        requested: batch.requested,
+        resolved: batch.resolved,
+        truncated: parseOutcome.truncated || batch.truncated || 0,
+        max: BARCODE_BATCH_LOOKUP_MAX,
+        results: batch.results,
+      });
+    } catch (error) {
+      const status =
+        Number.isFinite(Number(error?.status)) && Number(error.status) >= 400
+          ? Number(error.status)
+          : 502;
+      const fallbackMessage =
+        status >= 500
+          ? 'Nutrition lookup is temporarily unavailable. You can still enter calories manually.'
+          : 'Lookup failed. Try again later.';
+      return res.status(status).json({
+        message: error?.message || fallbackMessage,
+        code: error?.code || 'LOOKUP_FAILED',
+      });
+    }
+  }
 
   if (!barcode && !query) {
     return res.status(400).json({ message: 'Provide a barcode or search term.' });
@@ -2096,7 +2525,18 @@ router.get('/lookup', authenticate, async (req, res) => {
     }
     return res.json({ product });
   } catch (error) {
-    return res.status(502).json({ message: error.message || 'Lookup failed. Try again later.' });
+    const status =
+      Number.isFinite(Number(error?.status)) && Number(error.status) >= 400
+        ? Number(error.status)
+        : 502;
+    const fallbackMessage =
+      status >= 500
+        ? 'Nutrition lookup is temporarily unavailable. You can still enter calories manually.'
+        : 'Lookup failed. Try again later.';
+    return res.status(status).json({
+      message: error?.message || fallbackMessage,
+      code: error?.code || 'LOOKUP_FAILED',
+    });
   }
 });
 
@@ -2181,6 +2621,10 @@ router.__private__ = {
   getRemoteSuggestions,
   clearRemoteSuggestionCache,
   REMOTE_SEARCH_TIMEOUT_MS,
+  normalizeBarcodeValue,
+  buildBarcodeCandidates,
+  parseBarcodeListInput,
+  BARCODE_BATCH_LOOKUP_MAX,
 };
 
 module.exports = router;

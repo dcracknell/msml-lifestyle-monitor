@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { metricsRequest, updateProfileRequest } from '../../api/endpoints';
+import { metricsRequest, streamHistoryRequest, updateProfileRequest } from '../../api/endpoints';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import {
@@ -19,6 +19,8 @@ import {
 import { colors, spacing } from '../../theme';
 import { formatDate } from '../../utils/format';
 
+const SLEEP_STREAM_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
+
 export function SleepScreen() {
   const { subjectId } = useSubject();
   const { user, setSessionFromPayload } = useAuth();
@@ -28,6 +30,17 @@ export function SleepScreen() {
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ['sleep', requestSubject || user?.id],
     queryFn: () => metricsRequest({ athleteId: requestSubject }),
+    enabled: Boolean(user?.id),
+  });
+  const { data: sleepStreamData } = useQuery({
+    queryKey: ['stream-history', 'sleep.total_hours', requestSubject || user?.id],
+    queryFn: () =>
+      streamHistoryRequest({
+        metric: 'sleep.total_hours',
+        athleteId: requestSubject,
+        windowMs: SLEEP_STREAM_WINDOW_MS,
+        maxPoints: 600,
+      }),
     enabled: Boolean(user?.id),
   });
 
@@ -45,6 +58,14 @@ export function SleepScreen() {
   }, [data?.subject?.goal_sleep]);
 
   const sleepTrend = useMemo(() => {
+    const streamTrend = buildDailyTrendFromStream(
+      sleepStreamData?.points || [],
+      (values) => Math.max(...values)
+    );
+    if (streamTrend.length) {
+      return streamTrend.slice(-14);
+    }
+
     const timeline = data?.timeline ?? [];
     return timeline
       .slice(-14)
@@ -53,7 +74,7 @@ export function SleepScreen() {
         value: entry.sleepHours ?? 0,
       }))
       .filter((entry) => Number.isFinite(entry.value));
-  }, [data?.timeline]);
+  }, [data?.timeline, sleepStreamData?.points]);
 
   if (isLoading || !data) {
     return <LoadingView />;
@@ -63,7 +84,9 @@ export function SleepScreen() {
     return <ErrorView message="Unable to load sleep data" onRetry={refetch} />;
   }
 
-  const nightlyAverage = data.summary?.sleepHours ?? 0;
+  const nightlyAverage = sleepTrend.length
+    ? sleepTrend.reduce((sum, entry) => sum + entry.value, 0) / sleepTrend.length
+    : data.summary?.sleepHours ?? 0;
   const sleepGoal = data.subject?.goal_sleep ?? 8;
 
   const recentWindow = sleepTrend.slice(-7);
@@ -314,6 +337,40 @@ function computeGoalStreak(
     }
   }
   return streak;
+}
+
+function buildDailyTrendFromStream(
+  points: Array<{ ts: number; value: number | null }>,
+  aggregate: (values: number[]) => number
+) {
+  const perDay = new Map<string, { ts: number; values: number[] }>();
+  points.forEach((point) => {
+    if (!Number.isFinite(point?.ts) || !Number.isFinite(point?.value as number)) {
+      return;
+    }
+    const ts = Math.round(point.ts);
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) {
+      return;
+    }
+    const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+      date.getDate()
+    ).padStart(2, '0')}`;
+    const bucket = perDay.get(dayKey) || { ts, values: [] };
+    bucket.ts = Math.max(bucket.ts, ts);
+    bucket.values.push(point.value as number);
+    perDay.set(dayKey, bucket);
+  });
+
+  return Array.from(perDay.values())
+    .map((bucket) => ({
+      label: formatDate(new Date(bucket.ts).toISOString(), 'MMM D'),
+      value: aggregate(bucket.values),
+      ts: bucket.ts,
+    }))
+    .filter((entry) => Number.isFinite(entry.value))
+    .sort((a, b) => a.ts - b.ts)
+    .map((entry) => ({ label: entry.label, value: entry.value }));
 }
 
 const styles = StyleSheet.create({

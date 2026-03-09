@@ -545,6 +545,26 @@ function ensureActivityTables() {
 
 ensureActivityTables();
 
+function ensureSleepStagesTable() {
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS sleep_stages (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      date TEXT NOT NULL,
+      deep_minutes INTEGER,
+      rem_minutes INTEGER,
+      light_minutes INTEGER,
+      FOREIGN KEY (user_id) REFERENCES users (id)
+    )`
+  ).run();
+  db.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_sleep_stages_user_date
+     ON sleep_stages(user_id, date)`
+  ).run();
+}
+
+ensureSleepStagesTable();
+
 function ensureHealthMarkersTable() {
   db.prepare(
     `CREATE TABLE IF NOT EXISTS health_markers (

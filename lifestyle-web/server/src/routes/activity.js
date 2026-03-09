@@ -11,6 +11,7 @@ const {
   refreshAccessToken,
   fetchAthleteActivities,
   fetchActivityDetails,
+  createManualActivity,
   STRAVA_SCOPE,
 } = require('../services/strava');
 
@@ -18,7 +19,20 @@ const router = express.Router();
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const ALLOWED_SPORTS = new Set(['run', 'trailrun', 'virtualrun', 'walk', 'hike']);
+
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const STRAVA_SYNC_PAGE_SIZE = Math.max(
+  1,
+  Math.min(200, parsePositiveInt(process.env.STRAVA_SYNC_PAGE_SIZE, 100))
+);
+const STRAVA_SYNC_MAX_PAGES = Math.max(
+  1,
+  Math.min(20, parsePositiveInt(process.env.STRAVA_SYNC_MAX_PAGES, 5))
+);
 
 const subjectStatement = db.prepare(
   `SELECT id,
@@ -213,6 +227,31 @@ const sessionByStravaStatement = db.prepare(
       AND strava_activity_id = ?`
 );
 
+const sessionForExportStatement = db.prepare(
+  `SELECT id,
+          user_id AS userId,
+          source,
+          source_id AS sourceId,
+          name,
+          sport_type AS sportType,
+          start_time AS startTime,
+          distance_m AS distance,
+          moving_time_s AS movingTime,
+          elapsed_time_s AS elapsedTime,
+          strava_activity_id AS stravaActivityId
+     FROM activity_sessions
+    WHERE id = ?
+      AND user_id = ?
+    LIMIT 1`
+);
+
+const updateSessionStravaLinkStatement = db.prepare(
+  `UPDATE activity_sessions
+      SET strava_activity_id = ?
+    WHERE id = ?
+      AND user_id = ?`
+);
+
 const deleteSplitsStatement = db.prepare('DELETE FROM activity_splits WHERE session_id = ?');
 const insertSplitStatement = db.prepare(
   `INSERT INTO activity_splits (
@@ -313,6 +352,93 @@ function computePace(distanceMeters, movingTimeSeconds) {
   return seconds / distanceKm;
 }
 
+function parseIsoTimestamp(value) {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseScopeList(scope) {
+  if (!scope) {
+    return [];
+  }
+  if (Array.isArray(scope)) {
+    return scope
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return String(scope)
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function hasScope(scope, requiredScope) {
+  const required = String(requiredScope || '').trim().toLowerCase();
+  if (!required) {
+    return true;
+  }
+  return parseScopeList(scope).includes(required);
+}
+
+function mapSessionSportTypeToStrava(sportType) {
+  const normalized = String(sportType || '').trim().toLowerCase();
+  if (!normalized) return 'Workout';
+  if (normalized.includes('virtual') && normalized.includes('run')) return 'VirtualRun';
+  if (normalized.includes('virtual') && (normalized.includes('ride') || normalized.includes('bike')))
+    return 'VirtualRide';
+  if (normalized.includes('trail')) return 'TrailRun';
+  if (normalized.includes('run') || normalized.includes('jog') || normalized.includes('treadmill'))
+    return 'Run';
+  if (normalized.includes('walk')) return 'Walk';
+  if (normalized.includes('hike')) return 'Hike';
+  if (normalized.includes('ride') || normalized.includes('bike') || normalized.includes('cycle'))
+    return 'Ride';
+  if (normalized.includes('swim')) return 'Swim';
+  if (normalized.includes('row')) return 'Rowing';
+  if (normalized.includes('elliptical')) return 'Elliptical';
+  if (normalized.includes('yoga')) return 'Yoga';
+  if (normalized.includes('strength') || normalized.includes('weight')) return 'WeightTraining';
+  return 'Workout';
+}
+
+function deriveElapsedSeconds(session) {
+  const moving = coerceNumber(session?.movingTime);
+  if (Number.isFinite(moving) && moving > 0) {
+    return Math.round(moving);
+  }
+  const elapsed = coerceNumber(session?.elapsedTime);
+  if (Number.isFinite(elapsed) && elapsed > 0) {
+    return Math.round(elapsed);
+  }
+  return null;
+}
+
+function buildStravaExportPayload(session) {
+  const startTs = parseIsoTimestamp(session?.startTime);
+  if (!Number.isFinite(startTs)) {
+    throw new Error('Session start time is invalid for Strava export.');
+  }
+  const elapsed = deriveElapsedSeconds(session);
+  if (!elapsed) {
+    throw new Error('Session duration is required to export to Strava.');
+  }
+  const distance = coerceNumber(session?.distance);
+  const sourceLabel = session?.source ? `source=${session.source}` : null;
+  const sourceIdLabel = session?.sourceId ? `sourceId=${session.sourceId}` : null;
+  const extra = [sourceLabel, sourceIdLabel].filter(Boolean).join(', ');
+  return {
+    name: String(session?.name || 'Workout').slice(0, 140),
+    sportType: mapSessionSportTypeToStrava(session?.sportType),
+    startDateLocal: new Date(startTs).toISOString(),
+    elapsedTime: elapsed,
+    distance: Number.isFinite(distance) && distance > 0 ? Math.round(distance) : undefined,
+    description: extra ? `Exported from Lifestyle (${extra}).` : 'Exported from Lifestyle.',
+  };
+}
+
 function normalizeSession(row) {
   return {
     id: row.id,
@@ -343,9 +469,14 @@ function computeSummary(sessions) {
   if (!sessions.length) {
     return null;
   }
-  const sorted = sessions.slice().sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
-  const latestDate = new Date(sorted[0].startTime || Date.now());
-  const windowStart = new Date(latestDate.getTime() - WEEK_WINDOW_MS);
+  const sorted = sessions
+    .slice()
+    .sort(
+      (a, b) =>
+        (parseIsoTimestamp(b.startTime) || 0) - (parseIsoTimestamp(a.startTime) || 0)
+    );
+  const nowTs = Date.now();
+  const windowStartTs = nowTs - WEEK_WINDOW_MS;
 
   let weeklyDistance = 0;
   let weeklyDuration = 0;
@@ -356,13 +487,15 @@ function computeSummary(sessions) {
   let maxDistanceSession = null;
 
   sorted.forEach((session) => {
-    const sessionDate = new Date(session.startTime || 0);
-    if (sessionDate >= windowStart) {
+    const sessionTs = parseIsoTimestamp(session.startTime);
+    const inCurrentWindow =
+      Number.isFinite(sessionTs) && sessionTs >= windowStartTs && sessionTs <= nowTs;
+    if (inCurrentWindow) {
       weeklyDistance += session.distance || 0;
-      weeklyDuration += session.movingTime || 0;
+      weeklyDuration += session.movingTime || session.elapsedTime || 0;
       weeklyElevation += session.elevationGain || 0;
       trainingLoad += session.trainingLoad || 0;
-      if (session.vo2maxEstimate) {
+      if (vo2maxEstimate === null && session.vo2maxEstimate) {
         vo2maxEstimate = session.vo2maxEstimate;
       }
     }
@@ -604,28 +737,44 @@ async function syncStravaActivitiesForUser(userId) {
   const { accessToken } = await ensureValidAccessToken(connection);
   const since = connection.lastSync ? new Date(connection.lastSync).getTime() : null;
   const afterSeconds = since ? Math.max(0, Math.floor(since / 1000) - 120) : undefined;
-
-  const activities = await fetchAthleteActivities(accessToken, {
-    perPage: 20,
-    after: afterSeconds,
-  });
+  const activities = [];
+  let fetchedPages = 0;
+  for (let page = 1; page <= STRAVA_SYNC_MAX_PAGES; page += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const pageActivities = await fetchAthleteActivities(accessToken, {
+      page,
+      perPage: STRAVA_SYNC_PAGE_SIZE,
+      after: afterSeconds,
+    });
+    fetchedPages = page;
+    if (!pageActivities.length) {
+      break;
+    }
+    activities.push(...pageActivities);
+    if (pageActivities.length < STRAVA_SYNC_PAGE_SIZE) {
+      break;
+    }
+  }
 
   let imported = 0;
+  let skipped = 0;
   for (const activity of activities) {
-    const sport = (activity.sport_type || '').toLowerCase();
-    if (!ALLOWED_SPORTS.has(sport)) {
+    if (!activity?.id) {
+      skipped += 1;
       continue; // eslint-disable-line no-continue
     }
     // eslint-disable-next-line no-await-in-loop
     const sessionId = await saveStravaActivity(userId, activity, accessToken);
     if (sessionId) {
       imported += 1;
+    } else {
+      skipped += 1;
     }
   }
 
   const timestamp = new Date().toISOString();
   updateStravaSyncStatement.run(timestamp, userId);
-  return { imported, fetched: activities.length, lastSync: timestamp };
+  return { imported, fetched: activities.length, skipped, pages: fetchedPages, lastSync: timestamp };
 }
 
 router.get('/', authenticate, (req, res) => {
@@ -703,6 +852,58 @@ router.post('/strava/sync', authenticate, async (req, res) => {
   }
 });
 
+router.post('/strava/export', authenticate, async (req, res) => {
+  const sessionId = Number.parseInt(req.body?.sessionId, 10);
+  if (!Number.isFinite(sessionId) || sessionId <= 0) {
+    return res.status(400).json({ message: 'A valid sessionId is required.' });
+  }
+
+  const session = sessionForExportStatement.get(sessionId, req.user.id);
+  if (!session) {
+    return res.status(404).json({ message: 'Session not found.' });
+  }
+  if (Number.isFinite(Number(session.stravaActivityId)) && Number(session.stravaActivityId) > 0) {
+    return res
+      .status(409)
+      .json({ message: 'This session is already linked to a Strava activity.' });
+  }
+
+  try {
+    const connection = privateStravaConnectionStatement.get(req.user.id);
+    if (!connection) {
+      return res.status(400).json({ message: 'Connect Strava before exporting sessions.' });
+    }
+    if (!hasScope(connection.scope, 'activity:write')) {
+      return res.status(403).json({
+        message:
+          'Strava connection is missing activity:write scope. Disconnect and reconnect Strava to enable exports.',
+      });
+    }
+
+    const { accessToken } = await ensureValidAccessToken(connection);
+    const payload = buildStravaExportPayload(session);
+    const created = await createManualActivity(accessToken, payload);
+    if (!created?.id) {
+      throw new Error('Strava did not return an activity id.');
+    }
+    updateSessionStravaLinkStatement.run(created.id, session.id, req.user.id);
+
+    return res.status(201).json({
+      message: `Exported "${session.name || 'session'}" to Strava.`,
+      sessionId: session.id,
+      stravaActivityId: created.id,
+      stravaActivityUrl: `https://www.strava.com/activities/${created.id}`,
+      name: created.name || session.name || null,
+      sportType: created.sport_type || payload.sportType,
+      startTime: created.start_date || session.startTime,
+    });
+  } catch (error) {
+    return res
+      .status(400)
+      .json({ message: error.message || 'Unable to export this session to Strava right now.' });
+  }
+});
+
 router.get('/strava/callback', async (req, res) => {
   const { code, state, error } = req.query;
   if (error) {
@@ -764,14 +965,9 @@ router.get('/strava/callback', async (req, res) => {
           <div class="card">
             <h2>Strava connected ✅</h2>
             <p>You can return to the Lifestyle dashboard. This window will close automatically.</p>
-            <button type="button" onclick="window.close()">Close window</button>
+            <button type="button" id="closeWindowButton">Close window</button>
           </div>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'strava:connected' }, '*');
-              setTimeout(() => window.close(), 1500);
-            }
-          </script>
+          <script src="/strava-callback.js" defer></script>
         </body>
       </html>`);
   } catch (err) {
