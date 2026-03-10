@@ -2,6 +2,10 @@ const express = require('express');
 const https = require('https');
 const db = require('../db');
 const { authenticate } = require('../services/session-store');
+const {
+  analyzeNutritionPhoto,
+  verifyNutritionPhotoModelSetup,
+} = require('../services/nutrition-photo-analyzer');
 const { coerceRole, isHeadCoach } = require('../utils/role');
 
 const router = express.Router();
@@ -39,6 +43,24 @@ const keepAliveAgent = new https.Agent({
 const remoteSuggestionCache = new Map();
 const barcodeLookupCache = new Map();
 const barcodeLookupInflight = new Map();
+const MAX_PHOTO_BASE64_LENGTH = 5 * 1024 * 1024;
+const PHOTO_ANALYSIS_EXCLUDED_LABELS = new Set(['other ingredients', 'other ingredient', 'background']);
+const PHOTO_ANALYSIS_LOOKUP_OVERRIDES = new Map([
+  ['hamburg', 'hamburger'],
+  ['hamburg steak', 'hamburger steak'],
+  ['cheese butter', 'cheese'],
+  ['chicken duck', 'chicken'],
+  ['white button mushroom', 'mushroom'],
+  ['king oyster mushroom', 'oyster mushroom'],
+  ['hanamaki baozi', 'baozi'],
+  ['wonton dumplings', 'dumplings'],
+  ['cilantro mint', 'mint'],
+  ['french beans', 'green beans'],
+  ['spring onion', 'scallion'],
+  ['bean sprouts', 'beansprouts'],
+  ['ascida', 'asida'],
+  ['crema', 'cream dessert'],
+]);
 
 const LOOKUP_NETWORK_ERROR_CODES = new Set([
   'ENOTFOUND',
@@ -1172,6 +1194,51 @@ function resolveDate(input) {
   return todayIso();
 }
 
+function normalizePhotoDataInput(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = trimmed.startsWith('data:image') ? trimmed.split(',').pop() : trimmed;
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length > MAX_PHOTO_BASE64_LENGTH) {
+    throw new Error('Photo is too large. Try a smaller image or lower quality capture.');
+  }
+  return normalized;
+}
+
+function normalizePositiveNumber(value, { decimals = 1 } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+  const multiplier = 10 ** decimals;
+  return Math.round(numeric * multiplier) / multiplier;
+}
+
+function resolvePhotoAnalysisQuery(photoAnalysis) {
+  const candidates = [
+    photoAnalysis?.name,
+    ...(Array.isArray(photoAnalysis?.topMatches)
+      ? photoAnalysis.topMatches.map((entry) => entry?.name)
+      : []),
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeText(candidate);
+    if (!normalized || PHOTO_ANALYSIS_EXCLUDED_LABELS.has(normalized)) {
+      continue;
+    }
+    return PHOTO_ANALYSIS_LOOKUP_OVERRIDES.get(normalized) || candidate.trim();
+  }
+  return '';
+}
+
 function canViewSubject(viewerId, viewerRole, subjectId) {
   if (viewerId === subjectId) {
     return true;
@@ -2230,6 +2297,28 @@ router.get('/', authenticate, (req, res) => {
   });
 });
 
+router.get('/photo/health', authenticate, async (req, res) => {
+  try {
+    const setup = await verifyNutritionPhotoModelSetup({
+      forceRefresh: req.query.refresh === 'true',
+    });
+    return res.json({
+      ready: true,
+      setup,
+    });
+  } catch (error) {
+    const status =
+      Number.isFinite(Number(error?.status)) && Number(error.status) >= 400
+        ? Number(error.status)
+        : 503;
+    return res.status(status).json({
+      ready: false,
+      message: error?.message || 'Unable to verify the NUT model setup.',
+      code: error?.code || 'NUT_SETUP_FAILED',
+    });
+  }
+});
+
 router.post('/macros', authenticate, (req, res) => {
   const viewerRole = coerceRole(req.user.role);
   const requestedId = Number.parseInt(req.body?.athleteId, 10);
@@ -2295,11 +2384,42 @@ router.post('/', authenticate, async (req, res) => {
     photoData,
   } = req.body || {};
 
-  const trimmedName = typeof name === 'string' ? name.trim() : '';
-  const trimmedBarcode = typeof barcode === 'string' ? barcode.trim() : '';
+  let normalizedPhotoData = null;
+  try {
+    normalizedPhotoData = normalizePhotoDataInput(photoData);
+  } catch (error) {
+    return res.status(413).json({
+      message: error.message || 'Photo is too large. Try a smaller image or lower quality capture.',
+    });
+  }
 
-  if (!trimmedName && !trimmedBarcode) {
-    return res.status(400).json({ message: 'Provide a food name or barcode.' });
+  let trimmedName = typeof name === 'string' ? name.trim() : '';
+  const trimmedBarcode = typeof barcode === 'string' ? barcode.trim() : '';
+  let photoAnalysis = null;
+
+  if (!trimmedName && !trimmedBarcode && !normalizedPhotoData) {
+    return res.status(400).json({ message: 'Provide a food name, barcode, or meal photo.' });
+  }
+
+  if (!trimmedName && !trimmedBarcode && normalizedPhotoData) {
+    try {
+      photoAnalysis = await analyzeNutritionPhoto({ photoData: normalizedPhotoData });
+    } catch (error) {
+      const status =
+        Number.isFinite(Number(error?.status)) && Number(error.status) >= 400
+          ? Number(error.status)
+          : 502;
+      return res.status(status).json({
+        message:
+          error?.message ||
+          'Unable to analyze the meal photo. Try a clearer image or enter the food manually.',
+        code: error?.code || 'PHOTO_ANALYSIS_FAILED',
+      });
+    }
+  }
+  const detectedPhotoName = resolvePhotoAnalysisQuery(photoAnalysis);
+  if (!trimmedName && detectedPhotoName) {
+    trimmedName = detectedPhotoName;
   }
 
   let calorieValue = Number.parseInt(calories, 10);
@@ -2307,7 +2427,6 @@ router.post('/', authenticate, async (req, res) => {
   let carbValue = Number.parseInt(carbs, 10);
   let fatValue = Number.parseInt(fats, 10);
   let productData = null;
-  const needsLookup = !Number.isFinite(calorieValue);
   const normalizedType = type === 'Liquid' ? 'Liquid' : 'Food';
   const defaultUnit = normalizedType === 'Liquid' ? 'ml' : 'g';
   const requestedUnit = typeof weightUnit === 'string' ? weightUnit.trim().toLowerCase() : null;
@@ -2320,11 +2439,36 @@ router.post('/', authenticate, async (req, res) => {
     normalizedWeightAmount = 1;
   }
 
+  if (!Number.isFinite(calorieValue) && Number.isFinite(Number(photoAnalysis?.calories))) {
+    calorieValue = Number.parseInt(photoAnalysis.calories, 10);
+  }
+  if (!Number.isFinite(proteinValue) && Number.isFinite(Number(photoAnalysis?.protein))) {
+    proteinValue = Number(photoAnalysis.protein);
+  }
+  if (!Number.isFinite(carbValue) && Number.isFinite(Number(photoAnalysis?.carbs))) {
+    carbValue = Number(photoAnalysis.carbs);
+  }
+  if (!Number.isFinite(fatValue) && Number.isFinite(Number(photoAnalysis?.fats))) {
+    fatValue = Number(photoAnalysis.fats);
+  }
+  if (!normalizedWeightAmount && Number.isFinite(Number(photoAnalysis?.weightAmount))) {
+    normalizedWeightAmount = normalizePositiveNumber(photoAnalysis.weightAmount, { decimals: 1 });
+  }
+  if (
+    (!requestedUnit || !['g', 'ml', 'portion'].includes(requestedUnit)) &&
+    typeof photoAnalysis?.weightUnit === 'string' &&
+    ['g', 'ml', 'portion'].includes(photoAnalysis.weightUnit)
+  ) {
+    normalizedUnit = photoAnalysis.weightUnit;
+  }
+
+  const needsLookup = !Number.isFinite(calorieValue);
   if (needsLookup) {
+    const lookupQuery = trimmedName || detectedPhotoName;
     try {
       productData = await lookupProduct({
         barcode: trimmedBarcode,
-        query: trimmedName,
+        query: lookupQuery,
         userId: req.user.id,
       });
     } catch (error) {
@@ -2347,7 +2491,10 @@ router.post('/', authenticate, async (req, res) => {
   if (!Number.isFinite(calorieValue) || calorieValue < 0) {
     return res
       .status(400)
-      .json({ message: 'Unable to log without calories. Try adding a value or scanning a barcode.' });
+      .json({
+        message:
+          'Unable to log without calories. Try adding a value, scanning a barcode, or using a clearer food photo.',
+      });
   }
 
   const payload = {
@@ -2357,21 +2504,12 @@ router.post('/', authenticate, async (req, res) => {
   };
 
   const entryDate = resolveDate(date);
-  const displayName = trimmedName || productData?.name || (trimmedBarcode ? `Barcode ${trimmedBarcode}` : 'Logged item');
+  const displayName =
+    trimmedName ||
+    productData?.name ||
+    detectedPhotoName ||
+    (trimmedBarcode ? `Barcode ${trimmedBarcode}` : 'Logged item');
   const storedBarcode = trimmedBarcode || productData?.barcode || null;
-  let normalizedPhotoData = null;
-  if (typeof photoData === 'string' && photoData.trim()) {
-    normalizedPhotoData = photoData.trim();
-    if (normalizedPhotoData.startsWith('data:image')) {
-      normalizedPhotoData = normalizedPhotoData.split(',').pop();
-    }
-    const MAX_BYTES = 5 * 1024 * 1024; // ~5MB base64 string length
-    if (normalizedPhotoData.length > MAX_BYTES) {
-      return res
-        .status(413)
-        .json({ message: 'Photo is too large. Try a smaller image or lower quality capture.' });
-    }
-  }
 
   insertEntryStatement.run(
     userId,
@@ -2389,9 +2527,16 @@ router.post('/', authenticate, async (req, res) => {
   );
 
   return res.json({
-    message: `${displayName} logged.`,
+    message: normalizedPhotoData ? `${displayName} logged from photo.` : `${displayName} logged.`,
     date: entryDate,
     autoLookup: Boolean(productData),
+    photoAnalysis: photoAnalysis
+      ? {
+          name: photoAnalysis.name || displayName,
+          confidence: photoAnalysis.confidence,
+          topMatches: photoAnalysis.topMatches || [],
+        }
+      : null,
   });
 });
 

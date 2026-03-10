@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "test": "jest",
-    "reset-db": "node scripts/reset-db.js"
+    "reset-db": "node scripts/reset-db.js",
+    "check:nut-model": "python NUT_model/predict.py --self-check --model NUT_model/canet_NUT.pth --labels NUT_model/foodseg103_labels.json"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",

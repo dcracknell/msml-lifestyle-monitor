@@ -87,6 +87,7 @@ export const createNutritionEntryRequest = (payload: {
   weightAmount?: number;
   weightUnit?: string;
   date?: string;
+  photoData?: string;
 }) => apiClient.post<MessageResponse>('/api/nutrition', payload);
 
 export const deleteNutritionEntryRequest = (entryId: number) =>

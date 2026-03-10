@@ -484,8 +484,8 @@ export function NutritionScreen() {
   const handleAddEntry = async () => {
     const trimmedName = entryForm.name.trim();
     const trimmedBarcode = entryForm.barcode.trim();
-    if (!trimmedName && !trimmedBarcode) {
-      setEntryFeedback('Enter a food name or a barcode before logging.');
+    if (!trimmedName && !trimmedBarcode && !entryForm.photoData) {
+      setEntryFeedback('Enter a food name, barcode, or meal photo before logging.');
       return;
     }
     const payload = {
@@ -503,12 +503,12 @@ export function NutritionScreen() {
     };
     setEntryFeedback('Logging entry...');
     try {
-      const result = await runOrQueue({ endpoint: '/api/nutrition', payload });
+      const result = await runOrQueue<{ message?: string }>({ endpoint: '/api/nutrition', payload });
       if (result.status === 'sent') {
-        setEntryFeedback('Entry saved.');
+        setEntryFeedback(result.result?.message || 'Entry saved.');
         refetch();
       } else {
-        setEntryFeedback('Offline detected—entry queued and will sync automatically.');
+        setEntryFeedback('Offline detected - entry queued and will sync automatically.');
       }
       setEntryForm({
         name: '',
@@ -585,6 +585,62 @@ export function NutritionScreen() {
       }
     } catch {
       setPhotoStatus(getImagePickerMissingMessage());
+    }
+  };
+
+  const handleImportPhoto = async () => {
+    setPhotoStatus(null);
+    setEntryFeedback(null);
+    try {
+      const imagePicker = getImagePickerModule();
+      if (!imagePicker) {
+        setPhotoStatus(getImagePickerMissingMessage());
+        return;
+      }
+      const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        setPhotoStatus('Photo library permission is required to import a meal photo.');
+        return;
+      }
+      const result = await imagePicker.launchImageLibraryAsync({
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
+      if (result.canceled) {
+        setPhotoStatus('Import cancelled.');
+        return;
+      }
+      const asset = result.assets?.[0];
+      if (!asset?.base64) {
+        setPhotoStatus('Unable to read the selected photo. Try another image.');
+        return;
+      }
+
+      setEntryFeedback('Importing photo...');
+      const upload = await runOrQueue<{ message?: string }>({
+        endpoint: '/api/nutrition',
+        payload: {
+          type: entryForm.type,
+          date: selectedDate,
+          photoData: asset.base64,
+        },
+        description: 'Imported meal photo',
+      });
+
+      if (upload.status === 'sent') {
+        setEntryFeedback(upload.result?.message || 'Photo imported into the food register.');
+        setPhotoStatus('Imported photo logged.');
+        refetch();
+        return;
+      }
+
+      setEntryFeedback('Offline detected - photo import queued and will sync automatically.');
+      setPhotoStatus('Imported photo queued for analysis.');
+    } catch (error) {
+      setEntryFeedback(
+        error instanceof Error ? error.message : 'Unable to import meal photo right now.'
+      );
     }
   };
 
@@ -806,6 +862,7 @@ export function NutritionScreen() {
               variant="ghost"
               onPress={handleCapturePhoto}
             />
+            <AppButton title="Import meal photo" variant="ghost" onPress={handleImportPhoto} />
             {previewUri ? (
               <View style={styles.photoPreviewRow}>
                 <Image source={{ uri: previewUri }} style={styles.photoPreview} />
@@ -824,8 +881,8 @@ export function NutritionScreen() {
               </AppText>
             ) : null}
             <AppText variant="muted" style={styles.helperText}>
-              Entries sync to the `/api/nutrition` endpoint automatically—even offline logs are replayed
-              when you reconnect.
+              Entries sync to the `/api/nutrition` endpoint automatically; meal photos can be
+              attached manually or imported straight into the food register.
             </AppText>
           </>
         ) : (

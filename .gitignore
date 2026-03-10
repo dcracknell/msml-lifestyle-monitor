@@ -3,6 +3,7 @@
 
 # Logs
 *.log
+*.pyc
 
 # Node dependencies and cache
 node_modules/
@@ -24,3 +25,7 @@ lifestyle-mobile/.env
 lifestyle-mobile/.expo/
 lifestyle-mobile/android/
 lifestyle-mobile/ios/
+
+# Python cache and local model artifacts
+__pycache__/
+lifestyle-web/server/NUT_model/*.pth

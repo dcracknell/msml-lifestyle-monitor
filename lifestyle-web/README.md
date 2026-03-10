@@ -113,6 +113,11 @@ The server reads environment variables from `.env` (copy from `.env.example`). B
 | `PASSWORD_ENCRYPTION_KEY` | Secret used to derive the AES-256-GCM key that encrypts stored password digests | `msml-lifestyle-monitor-passwords` |
 | `DB_STORAGE_DIR` | Optional override for writable SQLite directory | `./database/storage` |
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
+| `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference | `python` |
+| `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/predict.py` |
+| `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/canet_NUT.pth` |
+| `NUT_MODEL_LABELS` | Path to the FoodSeg103 label map JSON | `./server/NUT_model/foodseg103_labels.json` |
+| `NUT_MODEL_TIMEOUT_MS` | Max server wait for meal photo inference | `15000` |
 | `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach password baked into the SQL seed | `Password` |
 | `COACH_SEED_PASSWORD` | Optional override for the coach password baked into the SQL seed | `Password` |
 | `ATHLETE_SEED_PASSWORD` | Optional override for the athlete password baked into the SQL seed | `Password` |
@@ -162,6 +167,22 @@ cd lifestyle-web/server
 npm run reset-db
 ```
 This deletes `database/storage/lifestyle_monitor.db*`, replays the SQL seed, and reapplies runtime migrations defined in `src/db.js`.
+
+### Enabling NUT meal-photo logging
+The nutrition route can now accept a photo-only payload and create a food-register entry from the server-side NUT model. To enable that path:
+```bash
+cd lifestyle-web/server
+python -m pip install -r NUT_model/requirements.txt
+npm run check:nut-model
+```
+Keep `NUT_model/canet_NUT.pth`, `NUT_model/predict.py`, and `NUT_model/foodseg103_labels.json` together, or point the `NUT_MODEL_*` environment variables at your custom locations. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
+
+You can also verify readiness through the API after signing in:
+```bash
+curl http://localhost:4000/api/nutrition/photo/health \
+  -H "Authorization: Bearer <token>"
+```
+The response includes the resolved checkpoint path, filename, size, and SHA-256 so you can confirm the server is using your exact `canet_NUT.pth` file. Add `?refresh=true` to force the server to rerun the Python self-check instead of using the recent cached result.
 
 ### Metrics payload filters
 `GET /api/metrics` accepts an `include` query parameter so clients can pull only the sections they need: `summary`, `timeline`, `macros`, `heartRate`, `hydration`, `sleepStages`, and/or `readiness`.
