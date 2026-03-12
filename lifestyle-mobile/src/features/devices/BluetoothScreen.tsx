@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { StyleSheet, View, Switch } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
-import { Card, SectionHeader, AppText, AppButton, AppInput, TrendChart, RefreshableScrollView } from '../../components';
+import { Card, SectionHeader, AppText, AppButton, AppInput, TrendChart } from '../../components';
 import { colors, spacing } from '../../theme';
 import { useBluetooth } from '../../providers/BluetoothProvider';
 import { formatDate, formatNumber } from '../../utils/format';
@@ -11,7 +11,7 @@ import { useSubject } from '../../providers/SubjectProvider';
 import { useSyncQueue } from '../../providers/SyncProvider';
 import { parseIPhoneExportPayload, StreamBatch } from './iphoneImport';
 
-export function BluetoothScreen() {
+export function BluetoothSection() {
   const { user } = useAuth();
   const { subjectId } = useSubject();
   const { runOrQueue } = useSyncQueue();
@@ -236,12 +236,7 @@ export function BluetoothScreen() {
   };
 
   return (
-    <RefreshableScrollView
-      contentContainerStyle={styles.container}
-      refreshing={isRefetching}
-      onRefresh={refetch}
-      showsVerticalScrollIndicator={false}
-    >
+    <View style={styles.container}>
       <Card>
         <SectionHeader title="Bluetooth bridge" subtitle={`Adapter: ${bluetoothState}`} />
         <View style={styles.statusRow}>
@@ -482,7 +477,7 @@ export function BluetoothScreen() {
           </AppText>
         )}
       </Card>
-    </RefreshableScrollView>
+    </View>
   );
 }
 

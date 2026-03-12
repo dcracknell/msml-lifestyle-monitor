@@ -11,7 +11,6 @@ import {
   AppText,
   Card,
   SectionHeader,
-  RefreshableScrollView,
 } from '../../components';
 import { colors, spacing } from '../../theme';
 import { getImagePickerMissingMessage, getImagePickerModule } from '../../utils/imagePicker';
@@ -32,7 +31,7 @@ const WORKOUT_UPLOAD_CHUNK_SIZE = 120;
 const APPLE_HEALTH_INITIAL_LOOKBACK_DAYS = 30;
 const APPLE_HEALTH_RESYNC_BUFFER_HOURS = 24;
 
-export function ProfileScreen() {
+export function ProfileSection() {
   const { user, setSessionFromPayload } = useAuth();
   const { apiBaseUrl, updateBaseUrl, resetBaseUrl } = useApiConfig();
   const { runOrQueue } = useSyncQueue();
@@ -529,14 +528,7 @@ export function ProfileScreen() {
   );
 
   return (
-    <RefreshableScrollView
-      contentContainerStyle={styles.container}
-      refreshing={false}
-      onRefresh={() => {
-        // no-op: profile data is already live through auth session
-      }}
-      showsVerticalScrollIndicator={false}
-    >
+    <View style={styles.container}>
       <Card>
         <SectionHeader
           title="Phone sync setting (v2)"
@@ -721,7 +713,7 @@ export function ProfileScreen() {
         </AppText>
       ) : null}
       <AppButton title="Save changes" onPress={handleSubmit} loading={loading} />
-    </RefreshableScrollView>
+    </View>
   );
 }
 

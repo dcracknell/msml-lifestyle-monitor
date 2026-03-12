@@ -7,7 +7,6 @@ import {
   ErrorView,
   LoadingView,
   SectionHeader,
-  RefreshableScrollView,
 } from '../../components';
 import { useAuth } from '../../providers/AuthProvider';
 import {
@@ -18,12 +17,12 @@ import {
   resetUserPasswordRequest,
 } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
-import { colors, spacing } from '../../theme';
+import { spacing } from '../../theme';
 
-export function AdminScreen() {
+export function AdminSection() {
   const { user } = useAuth();
   const isHeadCoach = user?.role === 'Head Coach';
-  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['roster'],
     queryFn: athletesRequest,
     enabled: isHeadCoach,
@@ -61,28 +60,19 @@ export function AdminScreen() {
   };
 
   if (!isHeadCoach) {
-    return (
-      <View style={styles.centered}>
-        <AppText variant="muted">Admin tools available to Head Coach only.</AppText>
-      </View>
-    );
+    return null;
   }
 
   if (isLoading || !data) {
-    return <LoadingView />;
+    return <View style={styles.container}><LoadingView /></View>;
   }
 
   if (isError) {
-    return <ErrorView message="Unable to load users" onRetry={refetch} />;
+    return <View style={styles.container}><ErrorView message="Unable to load users" onRetry={refetch} /></View>;
   }
 
   return (
-    <RefreshableScrollView
-      contentContainerStyle={styles.container}
-      refreshing={isRefetching}
-      onRefresh={refetch}
-      showsVerticalScrollIndicator={false}
-    >
+    <View style={styles.container}>
       <SectionHeader title="Admin" subtitle="Manage access" />
       {data.athletes.map((athlete) => (
         <Card key={athlete.id}>
@@ -108,7 +98,7 @@ export function AdminScreen() {
           </View>
         </Card>
       ))}
-    </RefreshableScrollView>
+    </View>
   );
 }
 
@@ -131,11 +121,5 @@ const styles = StyleSheet.create({
   },
   resetButton: {
     flex: 1,
-  },
-  centered: {
-    flex: 1,
-    backgroundColor: colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 });

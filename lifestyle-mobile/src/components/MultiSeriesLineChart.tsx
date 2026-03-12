@@ -20,9 +20,10 @@ interface Props {
   series: LineSeries[];
   height?: number;
   yLabel?: string;
+  tickEvery?: number;
 }
 
-export function MultiSeriesLineChart({ series, height = 220, yLabel }: Props) {
+export function MultiSeriesLineChart({ series, height = 220, yLabel, tickEvery }: Props) {
   const { width } = useWindowDimensions();
   const horizontalPadding = spacing.lg * 2 + 32;
   const chartWidth = Math.max(240, width - horizontalPadding);
@@ -55,6 +56,11 @@ export function MultiSeriesLineChart({ series, height = 220, yLabel }: Props) {
           tickLabels: { fill: colors.muted, fontSize: 10, angle: -30 },
           grid: { stroke: 'transparent' },
         }}
+        tickFormat={
+          tickEvery
+            ? (tick: string, index: number) => (index % tickEvery === 0 ? tick : '')
+            : undefined
+        }
       />
       <VictoryAxis
         dependentAxis
