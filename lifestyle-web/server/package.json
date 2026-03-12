@@ -9,7 +9,7 @@
     "start": "node src/server.js",
     "test": "jest",
     "reset-db": "node scripts/reset-db.js",
-    "check:nut-model": "bash -lc 'PY=\"${NUT_MODEL_PYTHON_BIN:-}\"; if [ -z \"$PY\" ]; then if [ -x NUT_model/.venv/bin/python ]; then PY=\"NUT_model/.venv/bin/python\"; else PY=\"python\"; fi; fi; \"$PY\" NUT_model/nut_estimator.py --self-check --model NUT_model/canet_NUT.pth'"
+    "check:nut-model": "bash -lc 'PY=\"${NUT_MODEL_PYTHON_BIN:-}\"; if [ -z \"$PY\" ]; then if [ -x NUT_model/.venv/bin/python ]; then PY=\"NUT_model/.venv/bin/python\"; else PY=\"python\"; fi; fi; \"$PY\" NUT_model/nut_estimator.py --self-check --model NUT_model/checkpoint/canet_NUT.pth'"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.0",

@@ -601,6 +601,7 @@ const state = {
   nutritionDeletingEntries: new Set(),
   nutritionPhotoData: null,
   nutritionPhotoPreparing: false,
+  nutritionPhotoAnalysis: null,
   suggestionTimer: null,
   suggestionQuery: '',
   suggestions: [],
@@ -967,6 +968,7 @@ const nutritionCaloriesInput = document.getElementById('nutritionCalories');
 const nutritionProteinInput = document.getElementById('nutritionProtein');
 const nutritionCarbsInput = document.getElementById('nutritionCarbs');
 const nutritionFatsInput = document.getElementById('nutritionFats');
+const nutritionFiberInput = document.getElementById('nutritionFiber');
 const nutritionFormHint = document.getElementById('nutritionFormHint');
 const nutritionLookupButton = document.getElementById('nutritionLookupButton');
 const nutritionAmountInput = document.getElementById('nutritionAmount');
@@ -991,6 +993,7 @@ const nutritionPhotoClearButton = document.getElementById('nutritionPhotoClearBu
 const nutritionPhotoStatus = document.getElementById('nutritionPhotoStatus');
 const nutritionPhotoPreviewWrapper = document.getElementById('nutritionPhotoPreviewWrapper');
 const nutritionPhotoPreview = document.getElementById('nutritionPhotoPreview');
+const nutritionPhotoAnalysis = document.getElementById('nutritionPhotoAnalysis');
 const nutritionPhotoDropZone = document.getElementById('nutritionPhotoDropZone');
 const macroTargetToggleButton = document.getElementById('macroTargetToggle');
 const macroTargetForm = document.getElementById('macroTargetForm');
@@ -1290,13 +1293,187 @@ function renderNutritionPhotoPreview() {
   nutritionPhotoClearButton?.classList.toggle('hidden', !photoUri);
 }
 
-function clearNutritionPhotoSelection({ keepStatus = false } = {}) {
+function normalizeNutritionMealAnalysis(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return null;
+  }
+
+  const items = Array.isArray(source.items)
+    ? source.items
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return null;
+          }
+          const name = typeof entry.name === 'string' ? entry.name.trim() : '';
+          if (!name) {
+            return null;
+          }
+          const confidence = Number(entry.confidence);
+          return {
+            name,
+            confidence: Number.isFinite(confidence) ? Number(confidence.toFixed(4)) : null,
+            calories: Number.isFinite(Number(entry.calories)) ? Number(entry.calories) : null,
+            protein: Number.isFinite(Number(entry.protein)) ? Number(entry.protein) : null,
+            carbs: Number.isFinite(Number(entry.carbs)) ? Number(entry.carbs) : null,
+            fats: Number.isFinite(Number(entry.fats)) ? Number(entry.fats) : null,
+            fiber: Number.isFinite(Number(entry.fiber)) ? Number(entry.fiber) : null,
+            weightAmount: Number.isFinite(Number(entry.weightAmount)) ? Number(entry.weightAmount) : null,
+            weightUnit: typeof entry.weightUnit === 'string' ? entry.weightUnit : 'g',
+            portionPercent:
+              Number.isFinite(Number(entry.portionPercent)) ? Number(entry.portionPercent) : null,
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  if (!items.length && !Number.isFinite(Number(source.totalCalories))) {
+    return null;
+  }
+
+  return {
+    foodCount: Number.isFinite(Number(source.foodCount)) ? Number(source.foodCount) : items.length,
+    totalCalories: Number.isFinite(Number(source.totalCalories)) ? Number(source.totalCalories) : null,
+    totalProtein: Number.isFinite(Number(source.totalProtein)) ? Number(source.totalProtein) : null,
+    totalCarbs: Number.isFinite(Number(source.totalCarbs)) ? Number(source.totalCarbs) : null,
+    totalFats: Number.isFinite(Number(source.totalFats)) ? Number(source.totalFats) : null,
+    totalFiber: Number.isFinite(Number(source.totalFiber)) ? Number(source.totalFiber) : null,
+    totalWeightAmount:
+      Number.isFinite(Number(source.totalWeightAmount)) ? Number(source.totalWeightAmount) : null,
+    weightUnit: typeof source.weightUnit === 'string' ? source.weightUnit : 'g',
+    plateDetected: source.plateDetected !== false,
+    plateDiameterPx:
+      Number.isFinite(Number(source.plateDiameterPx)) ? Number(source.plateDiameterPx) : null,
+    mmPerPixel: Number.isFinite(Number(source.mmPerPixel)) ? Number(source.mmPerPixel) : null,
+    items,
+  };
+}
+
+function resolveNutritionMealAnalysis(result) {
+  const direct = normalizeNutritionMealAnalysis(result?.mealAnalysis);
+  if (direct) {
+    return direct;
+  }
+  const nested = normalizeNutritionMealAnalysis(result?.photoAnalysis?.mealAnalysis);
+  return nested;
+}
+
+function renderNutritionPhotoAnalysis() {
+  if (!nutritionPhotoAnalysis) {
+    return;
+  }
+  nutritionPhotoAnalysis.innerHTML = '';
+  const analysis = state.nutritionPhotoAnalysis;
+  if (!analysis) {
+    nutritionPhotoAnalysis.classList.add('hidden');
+    return;
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'nutrition-photo-analysis-summary';
+
+  const title = document.createElement('strong');
+  title.textContent = `Meal analysis${analysis.foodCount ? ` • ${analysis.foodCount} items` : ''}`;
+  summary.appendChild(title);
+
+  const totals = [];
+  if (Number.isFinite(analysis.totalCalories)) {
+    totals.push(`${formatDecimal(analysis.totalCalories, 1)} kcal`);
+  }
+  if (Number.isFinite(analysis.totalProtein)) {
+    totals.push(`${formatDecimal(analysis.totalProtein, 1)} g protein`);
+  }
+  if (Number.isFinite(analysis.totalCarbs)) {
+    totals.push(`${formatDecimal(analysis.totalCarbs, 1)} g carbs`);
+  }
+  if (Number.isFinite(analysis.totalFats)) {
+    totals.push(`${formatDecimal(analysis.totalFats, 1)} g fats`);
+  }
+  if (Number.isFinite(analysis.totalFiber)) {
+    totals.push(`${formatDecimal(analysis.totalFiber, 1)} g fiber`);
+  }
+  if (Number.isFinite(analysis.totalWeightAmount)) {
+    totals.push(
+      `${formatDecimal(analysis.totalWeightAmount, 1)} ${analysis.weightUnit || 'g'} total`
+    );
+  }
+
+  const totalsText = document.createElement('span');
+  totalsText.className = 'muted small-text';
+  totalsText.textContent = totals.length ? totals.join(' • ') : 'Meal analysis available.';
+  summary.appendChild(totalsText);
+
+  if (analysis.plateDetected && Number.isFinite(analysis.plateDiameterPx)) {
+    const plateMeta = document.createElement('span');
+    plateMeta.className = 'muted tiny-text';
+    const scaleText = Number.isFinite(analysis.mmPerPixel)
+      ? ` • ${formatDecimal(analysis.mmPerPixel, 4)} mm/px`
+      : '';
+    plateMeta.textContent = `Plate diameter ${formatNumber(Math.round(analysis.plateDiameterPx))} px${scaleText}`;
+    summary.appendChild(plateMeta);
+  }
+
+  nutritionPhotoAnalysis.appendChild(summary);
+
+  if (analysis.items.length) {
+    const list = document.createElement('ul');
+    list.className = 'nutrition-photo-analysis-list';
+    analysis.items.forEach((item) => {
+      const row = document.createElement('li');
+
+      const name = document.createElement('strong');
+      name.textContent = item.name;
+      row.appendChild(name);
+
+      const metaParts = [];
+      if (Number.isFinite(item.portionPercent)) {
+        metaParts.push(`${formatDecimal(item.portionPercent, 1)}% of plate`);
+      }
+      if (Number.isFinite(item.weightAmount)) {
+        metaParts.push(`${formatDecimal(item.weightAmount, 1)} ${item.weightUnit || 'g'}`);
+      }
+      if (Number.isFinite(item.calories)) {
+        metaParts.push(`${formatDecimal(item.calories, 1)} kcal`);
+      }
+      if (Number.isFinite(item.fiber)) {
+        metaParts.push(`${formatDecimal(item.fiber, 1)} g fiber`);
+      }
+      if (Number.isFinite(item.confidence)) {
+        metaParts.push(`${Math.round(item.confidence * 100)}% confidence`);
+      }
+
+      const meta = document.createElement('span');
+      meta.className = 'muted tiny-text';
+      meta.textContent = metaParts.join(' • ');
+      row.appendChild(meta);
+
+      list.appendChild(row);
+    });
+    nutritionPhotoAnalysis.appendChild(list);
+  }
+
+  nutritionPhotoAnalysis.classList.remove('hidden');
+}
+
+function setNutritionPhotoAnalysis(analysis) {
+  state.nutritionPhotoAnalysis = normalizeNutritionMealAnalysis(analysis);
+  renderNutritionPhotoAnalysis();
+}
+
+function clearNutritionPhotoAnalysis() {
+  state.nutritionPhotoAnalysis = null;
+  renderNutritionPhotoAnalysis();
+}
+
+function clearNutritionPhotoSelection({ keepStatus = false, keepAnalysis = false } = {}) {
   state.nutritionPhotoData = null;
   state.nutritionPhotoPreparing = false;
   if (nutritionPhotoInput) {
     nutritionPhotoInput.value = '';
   }
   renderNutritionPhotoPreview();
+  if (!keepAnalysis) {
+    clearNutritionPhotoAnalysis();
+  }
   if (!keepStatus) {
     setNutritionPhotoStatus('');
   }
@@ -1305,6 +1482,7 @@ function clearNutritionPhotoSelection({ keepStatus = false } = {}) {
 
 function processNutritionPhotoFile(file) {
   if (!file) return;
+  clearNutritionPhotoAnalysis();
   if (!canModifyOwnNutrition()) {
     setNutritionPhotoStatus('Switch back to your profile to import meal photos.', { isError: true });
     return;
@@ -1620,6 +1798,7 @@ const NUTRITION_METRICS = {
   protein: { key: 'protein', label: 'Protein', unit: 'g' },
   carbs: { key: 'carbs', label: 'Carbs', unit: 'g' },
   fats: { key: 'fats', label: 'Fats', unit: 'g' },
+  fiber: { key: 'fiber', label: 'Fiber', unit: 'g' },
 };
 
 const LINEAR_BARCODE_FORMATS = [
@@ -1951,6 +2130,7 @@ function applyEntryRemoval(entryId) {
     totals.protein = clamp((totals.protein || 0) - (removed.protein || 0));
     totals.carbs = clamp((totals.carbs || 0) - (removed.carbs || 0));
     totals.fats = clamp((totals.fats || 0) - (removed.fats || 0));
+    totals.fiber = clamp((totals.fiber || 0) - (removed.fiber || 0));
     totals.count = Math.max(0, (totals.count || state.nutrition.entries.length + 1) - 1);
     state.nutrition.dailyTotals = totals;
   }
@@ -1992,8 +2172,9 @@ function updateNutritionLogSummary(allEntries = [], filteredEntries = []) {
       protein: acc.protein + (Number(entry.protein) || 0),
       carbs: acc.carbs + (Number(entry.carbs) || 0),
       fats: acc.fats + (Number(entry.fats) || 0),
+      fiber: acc.fiber + (Number(entry.fiber) || 0),
     }),
-    { calories: 0, protein: 0, carbs: 0, fats: 0 }
+    { calories: 0, protein: 0, carbs: 0, fats: 0, fiber: 0 }
   );
   const label =
     state.nutritionEntryFilter === 'Liquid'
@@ -2003,11 +2184,11 @@ function updateNutritionLogSummary(allEntries = [], filteredEntries = []) {
         : 'All intake';
   const countLabel = `${filteredEntries.length} item${filteredEntries.length === 1 ? '' : 's'}`;
   const segments = [`${label}: ${countLabel}`, `${formatNumber(totals.calories)} kcal`];
-  const macrosAvailable = totals.protein > 0 || totals.carbs > 0 || totals.fats > 0;
+  const macrosAvailable = totals.protein > 0 || totals.carbs > 0 || totals.fats > 0 || totals.fiber > 0;
   if (macrosAvailable) {
     const macroLabel = `${Math.round(totals.protein)}g P / ${Math.round(totals.carbs)}g C / ${Math.round(
       totals.fats
-    )}g F`;
+    )}g F / ${Math.round(totals.fiber)}g Fiber`;
     segments.push(macroLabel);
   }
   nutritionLogSummary.textContent = segments.join(' • ');
@@ -2095,9 +2276,11 @@ function renderNutritionEntries(entries = []) {
     const protein = Number(entry.protein) || 0;
     const carbs = Number(entry.carbs) || 0;
     const fats = Number(entry.fats) || 0;
+    const fiber = Number(entry.fiber) || 0;
     metricsParts.push(`${protein}g P`);
     metricsParts.push(`${carbs}g C`);
     metricsParts.push(`${fats}g F`);
+    metricsParts.push(`${fiber}g Fiber`);
 
     const metrics = document.createElement('div');
     metrics.className = 'nutrition-log-metrics';
@@ -2260,6 +2443,7 @@ function renderMacroHistoryChart(days = [], goals = null) {
       Number(day?.protein) > 0 ||
       Number(day?.carbs) > 0 ||
       Number(day?.fats) > 0 ||
+      Number(day?.fiber) > 0 ||
       Number(day?.calories) > 0
   );
   if (!sorted.length || !hasMacros) {
@@ -2280,6 +2464,7 @@ function renderMacroHistoryChart(days = [], goals = null) {
     { key: 'protein', label: 'Protein (g)', border: '#27d2fe', background: 'rgba(39, 210, 254, 0.12)' },
     { key: 'carbs', label: 'Carbs (g)', border: '#5f6bff', background: 'rgba(95, 107, 255, 0.12)' },
     { key: 'fats', label: 'Fats (g)', border: '#a95dff', background: 'rgba(169, 93, 255, 0.12)' },
+    { key: 'fiber', label: 'Fiber (g)', border: '#5fd38d', background: 'rgba(95, 211, 141, 0.14)' },
   ];
 
   const datasets = macroConfigs.map((config) => ({
@@ -3166,6 +3351,7 @@ function applySuggestionPrefill(item) {
   const protein = Number(prefill.protein);
   const carbs = Number(prefill.carbs);
   const fats = Number(prefill.fats);
+  const fiber = Number(prefill.fiber);
   if (nutritionCaloriesInput) {
     nutritionCaloriesInput.value = Number.isFinite(calories) ? Math.round(calories) : '';
   }
@@ -3177,6 +3363,9 @@ function applySuggestionPrefill(item) {
   }
   if (nutritionFatsInput) {
     nutritionFatsInput.value = Number.isFinite(fats) ? Math.round(fats) : '';
+  }
+  if (nutritionFiberInput) {
+    nutritionFiberInput.value = Number.isFinite(fiber) ? Math.round(fiber) : '';
   }
 
   const normalizedWeight = normalizeWeightForInput(prefill.weightAmount, prefill.weightUnit, {}, {
@@ -3229,6 +3418,7 @@ function updateNutritionPreview() {
   const protein = Number.parseFloat(nutritionProteinInput?.value);
   const carbs = Number.parseFloat(nutritionCarbsInput?.value);
   const fats = Number.parseFloat(nutritionFatsInput?.value);
+  const fiber = Number.parseFloat(nutritionFiberInput?.value);
 
   if (
     !Number.isFinite(amount) ||
@@ -3247,6 +3437,7 @@ function updateNutritionPreview() {
   const proteinPerUnit = Number.isFinite(protein) ? protein / amount : null;
   const carbsPerUnit = Number.isFinite(carbs) ? carbs / amount : null;
   const fatsPerUnit = Number.isFinite(fats) ? fats / amount : null;
+  const fiberPerUnit = Number.isFinite(fiber) ? fiber / amount : null;
 
   const detailRows = [
     `<div><strong>${formatNumber(calories)} kcal</strong><span class="muted small-text">Current ${amount} ${unit}</span></div>`,
@@ -3271,6 +3462,11 @@ function updateNutritionPreview() {
   if (Number.isFinite(fatsPerUnit)) {
     chips.push(
       `<div class="nutrition-preview-chip"><strong>${fatsPerUnit.toFixed(1)} g</strong><span>fat per ${unit}</span></div>`
+    );
+  }
+  if (Number.isFinite(fiberPerUnit)) {
+    chips.push(
+      `<div class="nutrition-preview-chip"><strong>${fiberPerUnit.toFixed(1)} g</strong><span>fiber per ${unit}</span></div>`
     );
   }
   if (Number.isFinite(grams)) {
@@ -3672,7 +3868,7 @@ function syncAmountBaselineFromInput() {
     Number.isFinite(amount) &&
     amount > 0 &&
     !state.nutritionMacroReference &&
-    [nutritionCaloriesInput, nutritionProteinInput, nutritionCarbsInput, nutritionFatsInput].some(
+    [nutritionCaloriesInput, nutritionProteinInput, nutritionCarbsInput, nutritionFatsInput, nutritionFiberInput].some(
       (field) => Number.isFinite(getInputNumber(field))
     )
   ) {
@@ -3702,9 +3898,10 @@ function syncMacroReferenceFromInputs(options = {}) {
     protein: getInputNumber(nutritionProteinInput),
     carbs: getInputNumber(nutritionCarbsInput),
     fats: getInputNumber(nutritionFatsInput),
+    fiber: getInputNumber(nutritionFiberInput),
   };
   if (
-    ![reference.calories, reference.protein, reference.carbs, reference.fats].some((value) =>
+    ![reference.calories, reference.protein, reference.carbs, reference.fats, reference.fiber].some((value) =>
       Number.isFinite(value)
     )
   ) {
@@ -3771,6 +3968,7 @@ function handleAmountInputChange() {
       scaleMetric(nutritionProteinInput, macroRatio, { baseline: macroReference?.protein });
       scaleMetric(nutritionCarbsInput, macroRatio, { baseline: macroReference?.carbs });
       scaleMetric(nutritionFatsInput, macroRatio, { baseline: macroReference?.fats });
+      scaleMetric(nutritionFiberInput, macroRatio, { baseline: macroReference?.fiber });
     }
 
     if (state.nutritionAmountReference && Number.isFinite(lastAmount) && lastAmount > 0) {
@@ -4014,6 +4212,9 @@ async function lookupNutritionFromApi() {
     }
     if (nutritionFatsInput && Number.isFinite(product.fats)) {
       nutritionFatsInput.value = product.fats;
+    }
+    if (nutritionFiberInput && Number.isFinite(product.fiber)) {
+      nutritionFiberInput.value = product.fiber;
     }
     if (nutritionAmountInput && Number.isFinite(product.weightAmount) && product.weightAmount > 0) {
       const normalizedWeight = normalizeWeightForInput(
@@ -5122,6 +5323,7 @@ const macroInputs = [
   nutritionProteinInput,
   nutritionCarbsInput,
   nutritionFatsInput,
+  nutritionFiberInput,
 ];
 macroInputs.forEach((input) => {
   input?.addEventListener('input', () => {
@@ -5257,9 +5459,11 @@ nutritionForm?.addEventListener('submit', async (event) => {
   const proteinValue = Number.parseInt(nutritionProteinInput?.value, 10);
   const carbValue = Number.parseInt(nutritionCarbsInput?.value, 10);
   const fatValue = Number.parseInt(nutritionFatsInput?.value, 10);
+  const fiberValue = Number.parseInt(nutritionFiberInput?.value, 10);
   if (proteinValue > 0) payload.protein = proteinValue;
   if (carbValue > 0) payload.carbs = carbValue;
   if (fatValue > 0) payload.fats = fatValue;
+  if (fiberValue > 0) payload.fiber = fiberValue;
 
   nutritionFeedback.textContent =
     photoData && !name && !barcode ? 'Analyzing meal photo...' : 'Logging item...';
@@ -5285,6 +5489,7 @@ nutritionForm?.addEventListener('submit', async (event) => {
       photoData
     ) {
       const detectedFoods = normalizePhotoDetectedFoods(result?.photoAnalysis);
+      setNutritionPhotoAnalysis(resolveNutritionMealAnalysis(result));
       applyPhotoDetectedSuggestions(detectedFoods);
       const autoItems = detectedFoods
         .filter((item) => item.confidence === null || item.confidence >= 0.12)
@@ -5330,6 +5535,12 @@ nutritionForm?.addEventListener('submit', async (event) => {
       const codeSuffix = result?.code ? ` [${result.code}]` : '';
       throw new Error(`${detail}${codeSuffix}`);
     }
+    const resolvedMealAnalysis = resolveNutritionMealAnalysis(result);
+    if (resolvedMealAnalysis) {
+      setNutritionPhotoAnalysis(resolvedMealAnalysis);
+    } else if (!photoData) {
+      clearNutritionPhotoAnalysis();
+    }
     const note = result.autoLookup ? ' (nutrition estimated automatically)' : '';
     const detectedName = result.photoAnalysis?.name ? ` Detected: ${result.photoAnalysis.name}.` : '';
     nutritionFeedback.textContent = `${result.message}${note}${detectedName}`;
@@ -5337,7 +5548,7 @@ nutritionForm?.addEventListener('submit', async (event) => {
     if (nutritionTypeSelect) {
       nutritionTypeSelect.value = 'Food';
     }
-    clearNutritionPhotoSelection({ keepStatus: true });
+    clearNutritionPhotoSelection({ keepStatus: true, keepAnalysis: true });
     if (result.photoAnalysis?.name) {
       setNutritionPhotoStatus(`Detected and logged: ${result.photoAnalysis.name}.`);
     } else {

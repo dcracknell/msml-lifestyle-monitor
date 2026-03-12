@@ -276,6 +276,7 @@ CREATE TABLE nutrition_entries (
   protein_grams INTEGER DEFAULT 0,
   carbs_grams INTEGER DEFAULT 0,
   fats_grams INTEGER DEFAULT 0,
+  fiber_grams INTEGER DEFAULT 0,
   weight_amount REAL,
   weight_unit TEXT DEFAULT 'g',
   barcode TEXT,
@@ -332,6 +333,7 @@ INSERT INTO nutrition_entries (
   protein_grams,
   carbs_grams,
   fats_grams,
+  fiber_grams,
   weight_amount,
   weight_unit,
   barcode,
@@ -432,6 +434,7 @@ SELECT
       )
     ELSE mt.fats
   END AS fats_grams,
+  0 AS fiber_grams,
   CASE
     WHEN mt.item_type = 'Food' THEN
       ROUND(

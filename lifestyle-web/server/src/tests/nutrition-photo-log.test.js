@@ -87,6 +87,7 @@ describe('Nutrition photo logging', () => {
       protein: 1,
       carbs: 27,
       fats: 0,
+      fiber: 3,
       topMatches: [{ name: 'Banana', confidence: 0.91 }],
     });
 
@@ -116,10 +117,204 @@ describe('Nutrition photo logging', () => {
         (entry) =>
           entry.name === 'Banana' &&
           entry.calories === 105 &&
+          entry.fiber === 3 &&
           typeof entry.photoData === 'string' &&
           entry.photoData.length > 0
       )
     ).toBe(true);
+    expect(fetchResponse.body.dailyTotals).toMatchObject({
+      calories: 105,
+      protein: 1,
+      carbs: 27,
+      fats: 0,
+      fiber: 3,
+      count: 1,
+    });
+  });
+
+  it('logs a full meal breakdown from one photo when the NUT model returns multiple foods', async () => {
+    analyzeNutritionPhoto.mockResolvedValue({
+      name: 'chicken duck',
+      confidence: 0.1287,
+      calories: 611,
+      protein: 56,
+      carbs: 60,
+      fats: 5,
+      fiber: 13,
+      detectedFoods: [
+        {
+          name: 'chicken duck',
+          confidence: 0.1287,
+          calories: 404.68,
+          protein: 45,
+          carbs: 0,
+          fats: 4,
+          fiber: 0,
+          weightAmount: 165.18,
+          weightUnit: 'g',
+        },
+        {
+          name: 'corn',
+          confidence: 0.0585,
+          calories: 42.02,
+          protein: 3,
+          carbs: 19,
+          fats: 1,
+          fiber: 3,
+          weightAmount: 75.04,
+          weightUnit: 'g',
+        },
+        {
+          name: 'potato',
+          confidence: 0.0542,
+          calories: 114.48,
+          protein: 2,
+          carbs: 19,
+          fats: 0,
+          fiber: 2,
+          weightAmount: 66.95,
+          weightUnit: 'g',
+        },
+        {
+          name: 'carrot',
+          confidence: 0.0595,
+          calories: 33.57,
+          protein: 1,
+          carbs: 8,
+          fats: 0,
+          fiber: 2,
+          weightAmount: 76.3,
+          weightUnit: 'g',
+        },
+        {
+          name: 'broccoli',
+          confidence: 0.1157,
+          calories: 16.48,
+          protein: 5,
+          carbs: 14,
+          fats: 0,
+          fiber: 6,
+          weightAmount: 68.67,
+          weightUnit: 'g',
+        },
+      ],
+      mealAnalysis: {
+        foodCount: 5,
+        totalCalories: 611.24,
+        totalProtein: 56,
+        totalCarbs: 60,
+        totalFats: 5,
+        totalFiber: 13,
+        totalWeightAmount: 452.14,
+        weightUnit: 'g',
+        plateDetected: true,
+        plateDiameterPx: 400,
+        mmPerPixel: 0.675,
+        items: [
+          {
+            name: 'chicken duck',
+            confidence: 0.1287,
+            calories: 404.68,
+            protein: 45,
+            carbs: 0,
+            fats: 4,
+            fiber: 0,
+            weightAmount: 165.18,
+            weightUnit: 'g',
+          },
+          {
+            name: 'corn',
+            confidence: 0.0585,
+            calories: 42.02,
+            protein: 3,
+            carbs: 19,
+            fats: 1,
+            fiber: 3,
+            weightAmount: 75.04,
+            weightUnit: 'g',
+          },
+          {
+            name: 'potato',
+            confidence: 0.0542,
+            calories: 114.48,
+            protein: 2,
+            carbs: 19,
+            fats: 0,
+            fiber: 2,
+            weightAmount: 66.95,
+            weightUnit: 'g',
+          },
+          {
+            name: 'carrot',
+            confidence: 0.0595,
+            calories: 33.57,
+            protein: 1,
+            carbs: 8,
+            fats: 0,
+            fiber: 2,
+            weightAmount: 76.3,
+            weightUnit: 'g',
+          },
+          {
+            name: 'broccoli',
+            confidence: 0.1157,
+            calories: 16.48,
+            protein: 5,
+            carbs: 14,
+            fats: 0,
+            fiber: 6,
+            weightAmount: 68.67,
+            weightUnit: 'g',
+          },
+        ],
+      },
+    });
+
+    const { token } = await loginAsCoach();
+    const date = '2030-01-06';
+    const photoData = Buffer.from('fake-meal-photo').toString('base64');
+
+    const postResponse = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ date, photoData });
+
+    expect(postResponse.status).toBe(200);
+    expect(postResponse.body.entriesLogged).toHaveLength(5);
+    expect(postResponse.body.entriesLogged.map((entry) => entry.name)).toEqual(
+      expect.arrayContaining(['chicken duck', 'corn', 'potato', 'carrot', 'broccoli'])
+    );
+    expect(postResponse.body.mealAnalysis).toMatchObject({
+      foodCount: 5,
+      totalCalories: 611.24,
+      totalProtein: 56,
+      totalCarbs: 60,
+      totalFiber: 13,
+      plateDiameterPx: 400,
+      mmPerPixel: 0.675,
+    });
+
+    const fetchResponse = await request(app)
+      .get(`/api/nutrition?date=${date}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(fetchResponse.status).toBe(200);
+    expect(
+      fetchResponse.body.entries.some((entry) => entry.name === 'chicken duck' && entry.calories === 405)
+    ).toBe(true);
+    expect(
+      fetchResponse.body.entries.some(
+        (entry) => entry.name === 'potato' && entry.calories === 114 && entry.fiber === 2
+      )
+    ).toBe(true);
+    expect(fetchResponse.body.dailyTotals).toMatchObject({
+      calories: 611,
+      protein: 56,
+      carbs: 60,
+      fats: 5,
+      fiber: 13,
+      count: 5,
+    });
   });
 
   it('uses quick-add fallback when photo analysis has no macro values', async () => {

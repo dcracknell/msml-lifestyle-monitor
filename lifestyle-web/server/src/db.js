@@ -113,6 +113,7 @@ function ensureNutritionEntriesTable() {
       protein_grams INTEGER DEFAULT 0,
       carbs_grams INTEGER DEFAULT 0,
       fats_grams INTEGER DEFAULT 0,
+      fiber_grams INTEGER DEFAULT 0,
       weight_amount REAL,
       weight_unit TEXT DEFAULT 'g',
       barcode TEXT,
@@ -141,6 +142,17 @@ function ensureNutritionEntryWeightColumns() {
 }
 
 ensureNutritionEntryWeightColumns();
+
+function ensureNutritionEntryFiberColumn() {
+  const columns = db.prepare("PRAGMA table_info(nutrition_entries)").all();
+  const hasFiber = columns.some((column) => column.name === 'fiber_grams');
+  if (!hasFiber) {
+    db.prepare('ALTER TABLE nutrition_entries ADD COLUMN fiber_grams INTEGER DEFAULT 0').run();
+    db.prepare('UPDATE nutrition_entries SET fiber_grams = 0 WHERE fiber_grams IS NULL').run();
+  }
+}
+
+ensureNutritionEntryFiberColumn();
 
 function ensureNutritionEntryPhotoColumn() {
   const columns = db.prepare("PRAGMA table_info(nutrition_entries)").all();
@@ -359,6 +371,7 @@ function ensureSyncInfrastructure() {
              'protein_grams', NEW.protein_grams,
              'carbs_grams', NEW.carbs_grams,
              'fats_grams', NEW.fats_grams,
+             'fiber_grams', NEW.fiber_grams,
              'weight_amount', NEW.weight_amount,
              'weight_unit', NEW.weight_unit,
              'created_at', NEW.created_at
@@ -388,6 +401,7 @@ function ensureSyncInfrastructure() {
              'protein_grams', NEW.protein_grams,
              'carbs_grams', NEW.carbs_grams,
              'fats_grams', NEW.fats_grams,
+             'fiber_grams', NEW.fiber_grams,
              'weight_amount', NEW.weight_amount,
              'weight_unit', NEW.weight_unit,
              'created_at', NEW.created_at

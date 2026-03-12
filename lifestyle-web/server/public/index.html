@@ -889,6 +889,7 @@
                   <div class="photo-preview-wrapper hidden" id="nutritionPhotoPreviewWrapper">
                     <img id="nutritionPhotoPreview" class="photo-preview" alt="Meal photo preview" />
                   </div>
+                  <div class="nutrition-photo-analysis hidden" id="nutritionPhotoAnalysis"></div>
                 </div>
                 <input type="hidden" id="nutritionBarcode" />
                 <label>
@@ -932,6 +933,10 @@
                     Fats (g)
                     <input type="number" id="nutritionFats" min="0" placeholder="0" />
                   </label>
+                  <label>
+                    Fiber (g)
+                    <input type="number" id="nutritionFiber" min="0" placeholder="0" />
+                  </label>
                 </div>
                 <div class="nutrition-actions">
                   <button type="submit" class="outline-btn">Log intake</button>
@@ -972,6 +977,7 @@
                   <option value="protein">Protein</option>
                   <option value="carbs">Carbs</option>
                   <option value="fats">Fats</option>
+                  <option value="fiber">Fiber</option>
                 </select>
               </label>
               <p class="muted" id="nutritionInsightSummary">Log macros to unlock insights.</p>

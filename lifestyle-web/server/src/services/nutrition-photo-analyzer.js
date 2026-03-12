@@ -48,8 +48,10 @@ const DEFAULT_SCRIPT_PATH =
   path.resolve(__dirname, '..', '..', 'NUT_model', 'nut_estimator.py');
 const DEFAULT_MODEL_PATH =
   process.env.NUT_MODEL_WEIGHTS ||
-  path.resolve(__dirname, '..', '..', 'NUT_model', 'canet_NUT.pth');
-const DEFAULT_LABELS_PATH = process.env.NUT_MODEL_LABELS || null;
+  path.resolve(__dirname, '..', '..', 'NUT_model', 'checkpoint', 'canet_NUT.pth');
+const DEFAULT_LABELS_PATH =
+  process.env.NUT_MODEL_LABELS ||
+  path.resolve(__dirname, '..', '..', 'data', 'FoodSeg103', 'category_id.txt');
 const SETUP_CACHE_TTL_MS = parseIntegerEnv(
   process.env.NUT_MODEL_SETUP_CACHE_TTL_MS,
   60 * 60 * 1000,
@@ -122,8 +124,12 @@ function buildCommandArgs({
   imagePath = null,
   imageSize = null,
   selfCheck = false,
+  json = true,
 }) {
   const args = [scriptPath];
+  if (json) {
+    args.push('--json');
+  }
   if (selfCheck) {
     args.push('--self-check');
   }
@@ -138,6 +144,33 @@ function buildCommandArgs({
     args.push('--labels', labelsPath);
   }
   return args;
+}
+
+function normalizeWeightUnit(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeDetectedFoodEntry(entry) {
+  const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+  if (!name) {
+    return null;
+  }
+  return {
+    name,
+    confidence: normalizeNumericValue(entry.confidence, 4),
+    portionPercent: normalizeNumericValue(entry.portionPercent, 2),
+    calories: normalizeNumericValue(entry.calories, 2),
+    protein: normalizeNumericValue(entry.protein, 2),
+    carbs: normalizeNumericValue(entry.carbs, 2),
+    fats: normalizeNumericValue(entry.fats, 2),
+    fiber: normalizeNumericValue(entry.fiber, 2),
+    weightAmount: normalizeNumericValue(entry.weightAmount ?? entry.massG, 2),
+    weightUnit: normalizeWeightUnit(entry.weightUnit),
+  };
 }
 
 function normalizeSetupPayload(raw) {
@@ -206,35 +239,58 @@ function parsePredictionPayload(raw) {
 
   const topMatches = Array.isArray(parsed.topMatches)
     ? parsed.topMatches
-        .map((entry) => {
-          const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
-          if (!name) {
-            return null;
-          }
-          return {
-            name,
-            confidence: normalizeNumericValue(entry.confidence, 4),
-          };
-        })
+        .map((entry) => normalizeDetectedFoodEntry(entry))
         .filter(Boolean)
         .slice(0, 5)
     : [];
 
   const detectedFoods = Array.isArray(parsed.detectedFoods)
     ? parsed.detectedFoods
-        .map((entry) => {
-          const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
-          if (!name) {
-            return null;
-          }
-          return {
-            name,
-            confidence: normalizeNumericValue(entry.confidence, 4),
-          };
-        })
+        .map((entry) => normalizeDetectedFoodEntry(entry))
         .filter(Boolean)
         .slice(0, 8)
     : [];
+
+  const rawMealAnalysis =
+    parsed.mealAnalysis && typeof parsed.mealAnalysis === 'object' && !Array.isArray(parsed.mealAnalysis)
+      ? parsed.mealAnalysis
+      : null;
+  const mealItems = Array.isArray(rawMealAnalysis?.items)
+    ? rawMealAnalysis.items.map((entry) => normalizeDetectedFoodEntry(entry)).filter(Boolean)
+    : detectedFoods;
+  const mealAnalysis = rawMealAnalysis
+    ? {
+        foodCount: Number.isFinite(Number(rawMealAnalysis.foodCount))
+          ? Math.max(0, Math.trunc(Number(rawMealAnalysis.foodCount)))
+          : mealItems.length,
+        totalCalories: normalizeNumericValue(rawMealAnalysis.totalCalories, 2),
+        totalProtein: normalizeNumericValue(rawMealAnalysis.totalProtein, 2),
+        totalCarbs: normalizeNumericValue(rawMealAnalysis.totalCarbs, 2),
+        totalFats: normalizeNumericValue(rawMealAnalysis.totalFats, 2),
+        totalFiber: normalizeNumericValue(rawMealAnalysis.totalFiber, 2),
+        totalWeightAmount: normalizeNumericValue(rawMealAnalysis.totalWeightAmount, 2),
+        weightUnit: normalizeWeightUnit(rawMealAnalysis.weightUnit) || 'g',
+        plateDetected: rawMealAnalysis.plateDetected !== false,
+        plateDiameterPx: normalizeNumericValue(rawMealAnalysis.plateDiameterPx, 0),
+        mmPerPixel: normalizeNumericValue(rawMealAnalysis.mmPerPixel, 4),
+        items: mealItems,
+      }
+    : mealItems.length
+      ? {
+          foodCount: mealItems.length,
+          totalCalories: normalizeNumericValue(parsed.calories, 2),
+          totalProtein: normalizeNumericValue(parsed.protein, 2),
+          totalCarbs: normalizeNumericValue(parsed.carbs, 2),
+          totalFats: normalizeNumericValue(parsed.fats, 2),
+          totalFiber: normalizeNumericValue(parsed.fiber, 2),
+          totalWeightAmount: normalizeNumericValue(parsed.weightAmount, 2),
+          weightUnit: normalizeWeightUnit(parsed.weightUnit) || 'g',
+          plateDetected: false,
+          plateDiameterPx: null,
+          mmPerPixel: null,
+          items: mealItems,
+        }
+      : null;
 
   return {
     name: typeof parsed.name === 'string' ? parsed.name.trim() : '',
@@ -247,10 +303,12 @@ function parsePredictionPayload(raw) {
     protein: normalizeNumericValue(parsed.protein, 1),
     carbs: normalizeNumericValue(parsed.carbs, 1),
     fats: normalizeNumericValue(parsed.fats, 1),
+    fiber: normalizeNumericValue(parsed.fiber, 1),
     weightAmount: normalizeNumericValue(parsed.weightAmount, 1),
     weightUnit: typeof parsed.weightUnit === 'string' ? parsed.weightUnit.trim().toLowerCase() : null,
     topMatches,
     detectedFoods,
+    mealAnalysis,
   };
 }
 

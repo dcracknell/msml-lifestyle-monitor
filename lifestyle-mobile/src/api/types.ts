@@ -258,6 +258,7 @@ export interface NutritionEntry {
   protein: number;
   carbs: number;
   fats: number;
+  fiber: number;
   weightAmount: number | null;
   weightUnit: string | null;
   createdAt: string;
@@ -269,6 +270,7 @@ export interface NutritionTotals {
   protein: number;
   carbs: number;
   fats: number;
+  fiber: number;
   count: number;
 }
 
@@ -278,6 +280,7 @@ export interface NutritionTrendEntry {
   protein: number;
   carbs: number;
   fats: number;
+  fiber: number;
   targetCalories: number | null;
   percent: number | null;
 }
@@ -336,6 +339,7 @@ export interface NutritionSuggestionPrefill {
   protein?: number | null;
   carbs?: number | null;
   fats?: number | null;
+  fiber?: number | null;
   weightAmount?: number | null;
   weightUnit?: string | null;
   barcode?: string | null;
@@ -361,6 +365,7 @@ export interface NutritionLookupProduct {
   protein?: number | null;
   carbs?: number | null;
   fats?: number | null;
+  fiber?: number | null;
   weightAmount?: number | null;
   weightUnit?: string | null;
 }

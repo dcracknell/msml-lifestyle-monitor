@@ -246,6 +246,7 @@ const entriesByDateStatement = db.prepare(
           protein_grams    AS protein,
           carbs_grams      AS carbs,
           fats_grams       AS fats,
+          fiber_grams      AS fiber,
           weight_amount    AS weightAmount,
           weight_unit      AS weightUnit,
           photo_data       AS photoData,
@@ -261,7 +262,8 @@ const windowTotalsStatement = db.prepare(
           SUM(calories)      AS calories,
           SUM(protein_grams) AS protein,
           SUM(carbs_grams)   AS carbs,
-          SUM(fats_grams)    AS fats
+          SUM(fats_grams)    AS fats,
+          SUM(fiber_grams)   AS fiber
      FROM nutrition_entries
     WHERE user_id = ?
       AND date >= ?
@@ -271,8 +273,8 @@ const windowTotalsStatement = db.prepare(
 
 const insertEntryStatement = db.prepare(
   `INSERT INTO nutrition_entries
-    (user_id, date, item_name, item_type, barcode, calories, protein_grams, carbs_grams, fats_grams, weight_amount, weight_unit, photo_data)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    (user_id, date, item_name, item_type, barcode, calories, protein_grams, carbs_grams, fats_grams, fiber_grams, weight_amount, weight_unit, photo_data)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
 
 const entryByIdStatement = db.prepare(
@@ -286,6 +288,7 @@ const entryByIdStatement = db.prepare(
           protein_grams  AS protein,
           carbs_grams    AS carbs,
           fats_grams     AS fats,
+          fiber_grams    AS fiber,
           weight_amount  AS weightAmount,
           weight_unit    AS weightUnit,
           photo_data     AS photoData
@@ -304,6 +307,7 @@ const localSuggestionStatement = db.prepare(
           protein_grams AS protein,
           carbs_grams   AS carbs,
           fats_grams    AS fats,
+          fiber_grams   AS fiber,
           weight_amount AS weightAmount,
           weight_unit   AS weightUnit,
           photo_data    AS photoData,
@@ -323,6 +327,7 @@ const entryByBarcodeStatement = db.prepare(
           protein_grams AS protein,
           carbs_grams   AS carbs,
           fats_grams    AS fats,
+          fiber_grams   AS fiber,
           weight_amount AS weightAmount,
           weight_unit   AS weightUnit
      FROM nutrition_entries
@@ -1318,11 +1323,13 @@ function resolvePhotoDetectedFoods(photoAnalysis, options = {}) {
       ? Math.floor(Number(options.maxItems))
       : 6;
 
-  const ranked = Array.isArray(photoAnalysis?.detectedFoods) && photoAnalysis.detectedFoods.length
-    ? photoAnalysis.detectedFoods
-    : Array.isArray(photoAnalysis?.topMatches)
-      ? photoAnalysis.topMatches
-      : [];
+  const ranked = Array.isArray(photoAnalysis?.mealAnalysis?.items) && photoAnalysis.mealAnalysis.items.length
+    ? photoAnalysis.mealAnalysis.items
+    : Array.isArray(photoAnalysis?.detectedFoods) && photoAnalysis.detectedFoods.length
+      ? photoAnalysis.detectedFoods
+      : Array.isArray(photoAnalysis?.topMatches)
+        ? photoAnalysis.topMatches
+        : [];
 
   const resolved = [];
   const seen = new Set();
@@ -1354,6 +1361,174 @@ function resolvePhotoDetectedFoods(photoAnalysis, options = {}) {
   return resolved;
 }
 
+function resolvePhotoMealItems(photoAnalysis, options = {}) {
+  const maxItems =
+    Number.isFinite(Number(options.maxItems)) && Number(options.maxItems) > 0
+      ? Math.floor(Number(options.maxItems))
+      : 12;
+  const fallbackType = options.fallbackType === 'Liquid' ? 'Liquid' : 'Food';
+  const items = Array.isArray(photoAnalysis?.mealAnalysis?.items) ? photoAnalysis.mealAnalysis.items : [];
+  const resolved = [];
+  const seen = new Set();
+
+  items.forEach((entry) => {
+    if (resolved.length >= maxItems) {
+      return;
+    }
+    const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+    if (!name) {
+      return;
+    }
+    const normalized = normalizeText(name);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    resolved.push({
+      name,
+      type: fallbackType,
+      calories: hasFiniteNumericValue(entry?.calories) ? Number(entry.calories) : undefined,
+    protein: hasFiniteNumericValue(entry?.protein) ? Number(entry.protein) : undefined,
+    carbs: hasFiniteNumericValue(entry?.carbs) ? Number(entry.carbs) : undefined,
+    fats: hasFiniteNumericValue(entry?.fats) ? Number(entry.fats) : undefined,
+    fiber: hasFiniteNumericValue(entry?.fiber) ? Number(entry.fiber) : undefined,
+    weightAmount: hasFiniteNumericValue(entry?.weightAmount) ? Number(entry.weightAmount) : undefined,
+      weightUnit:
+        typeof entry?.weightUnit === 'string' && ['g', 'ml', 'portion'].includes(entry.weightUnit)
+          ? entry.weightUnit
+          : fallbackType === 'Liquid'
+            ? 'ml'
+            : 'g',
+    });
+  });
+
+  return resolved;
+}
+
+async function logNutritionItems({ userId, entryDate, items, photoData = null }) {
+  const loggedEntries = [];
+  const skippedItems = [];
+  let autoLookup = false;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index] || {};
+    const itemName = typeof item.name === 'string' ? item.name.trim() : '';
+    const itemBarcode = typeof item.barcode === 'string' ? item.barcode.trim() : '';
+    const itemType = item.type === 'Liquid' ? 'Liquid' : 'Food';
+    const defaultUnit = itemType === 'Liquid' ? 'ml' : 'g';
+    const itemRequestedUnit =
+      typeof item.weightUnit === 'string' ? item.weightUnit.trim().toLowerCase() : null;
+    let itemWeightUnit =
+      itemRequestedUnit && ['g', 'ml', 'portion'].includes(itemRequestedUnit)
+        ? itemRequestedUnit
+        : defaultUnit;
+    let itemWeightAmount = normalizePositiveNumber(item.weightAmount, { decimals: 1 });
+    if (itemWeightUnit === 'portion' && (!itemWeightAmount || itemWeightAmount <= 0)) {
+      itemWeightAmount = 1;
+    }
+
+    let calorieValue = Number.parseFloat(item.calories);
+    let proteinValue = Number(item.protein);
+    let carbValue = Number(item.carbs);
+    let fatValue = Number(item.fats);
+    let fiberValue = Number(item.fiber);
+    let productData = null;
+
+    if (!Number.isFinite(calorieValue)) {
+      if (!itemName && !itemBarcode) {
+        skippedItems.push({
+          index,
+          reason: 'Each item needs a name, barcode, or calories value.',
+        });
+        continue;
+      }
+      try {
+        productData = await lookupProduct({
+          barcode: itemBarcode,
+          query: itemName,
+          userId,
+        });
+      } catch (error) {
+        skippedItems.push({
+          index,
+          reason: error?.message || 'Nutrition lookup failed for item.',
+        });
+        continue;
+      }
+    }
+
+    if (productData?.calories) {
+      autoLookup = true;
+      calorieValue = Number.isFinite(calorieValue) ? calorieValue : productData.calories;
+      proteinValue = Number.isFinite(proteinValue) ? proteinValue : productData.protein ?? proteinValue;
+      carbValue = Number.isFinite(carbValue) ? carbValue : productData.carbs ?? carbValue;
+      fatValue = Number.isFinite(fatValue) ? fatValue : productData.fats ?? fatValue;
+      fiberValue = Number.isFinite(fiberValue) ? fiberValue : productData.fiber ?? fiberValue;
+      if (!itemWeightAmount && productData.weightAmount) {
+        itemWeightAmount = Number(productData.weightAmount);
+        if (['ml', 'g', 'portion'].includes(productData.weightUnit)) {
+          itemWeightUnit = productData.weightUnit;
+        }
+      }
+    }
+
+    if (!Number.isFinite(calorieValue) || calorieValue < 0) {
+      skippedItems.push({
+        index,
+        reason: 'Calories missing and no lookup result found.',
+      });
+      continue;
+    }
+
+    const payload = {
+      protein: Number.isFinite(proteinValue) && proteinValue > 0 ? proteinValue : 0,
+      carbs: Number.isFinite(carbValue) && carbValue > 0 ? carbValue : 0,
+      fats: Number.isFinite(fatValue) && fatValue > 0 ? fatValue : 0,
+      fiber: Number.isFinite(fiberValue) && fiberValue > 0 ? fiberValue : 0,
+    };
+
+    const displayName =
+      itemName ||
+      productData?.name ||
+      (itemBarcode ? `Barcode ${itemBarcode}` : `Photo item ${index + 1}`);
+    const storedBarcode = itemBarcode || productData?.barcode || null;
+
+    insertEntryStatement.run(
+      userId,
+      entryDate,
+      displayName,
+      itemType,
+      storedBarcode,
+      Math.round(calorieValue),
+      payload.protein,
+      payload.carbs,
+      payload.fats,
+      payload.fiber,
+      itemWeightAmount,
+      itemWeightUnit,
+      index === 0 ? photoData : null
+    );
+
+    loggedEntries.push({
+      name: displayName,
+      calories: Math.round(calorieValue),
+      protein: payload.protein,
+      carbs: payload.carbs,
+      fats: payload.fats,
+      fiber: payload.fiber,
+      weightAmount: itemWeightAmount,
+      weightUnit: itemWeightUnit,
+      barcode: storedBarcode,
+    });
+  }
+
+  return {
+    loggedEntries,
+    skippedItems,
+    autoLookup,
+  };
+}
+
 function canViewSubject(viewerId, viewerRole, subjectId) {
   if (viewerId === subjectId) {
     return true;
@@ -1375,9 +1550,10 @@ function computeTotals(entries = []) {
       protein: acc.protein + (entry.protein || 0),
       carbs: acc.carbs + (entry.carbs || 0),
       fats: acc.fats + (entry.fats || 0),
+      fiber: acc.fiber + (entry.fiber || 0),
       count: acc.count + 1,
     }),
-    { calories: 0, protein: 0, carbs: 0, fats: 0, count: 0 }
+    { calories: 0, protein: 0, carbs: 0, fats: 0, fiber: 0, count: 0 }
   );
 }
 
@@ -1547,8 +1723,13 @@ function parseNutritionFromProduct(product = {}) {
     nutriments.fat_serving,
     nutriments.fat_100g
   );
+  const fiber = readFirstFiniteNumber(
+    nutriments.fiber_serving,
+    nutriments.fiber_100g,
+    nutriments.fiber
+  );
 
-  if (![calories, protein, carbs, fats].some((value) => Number.isFinite(value))) {
+  if (![calories, protein, carbs, fats, fiber].some((value) => Number.isFinite(value))) {
     return null;
   }
 
@@ -1606,6 +1787,7 @@ function parseNutritionFromProduct(product = {}) {
     protein: Number.isFinite(protein) ? Math.round(protein) : null,
     carbs: Number.isFinite(carbs) ? Math.round(carbs) : null,
     fats: Number.isFinite(fats) ? Math.round(fats) : null,
+    fiber: Number.isFinite(fiber) ? Math.round(fiber) : null,
     weightAmount,
     weightUnit,
     weightGramsEquivalent,
@@ -1970,6 +2152,7 @@ function mapEntryToProduct(row) {
     protein: parseNullableNumber(row.protein),
     carbs: parseNullableNumber(row.carbs),
     fats: parseNullableNumber(row.fats),
+    fiber: parseNullableNumber(row.fiber),
     weightAmount: weightAmount ?? null,
     weightUnit: row.weightUnit || null,
     weightGramsEquivalent: null,
@@ -2122,6 +2305,9 @@ function hasNutritionData(nutriments = {}) {
     'carbohydrates_serving',
     'fat_100g',
     'fat_serving',
+    'fiber_100g',
+    'fiber_serving',
+    'fiber',
   ];
   return keys.some((key) => Number.isFinite(Number.parseFloat(nutriments[key])));
 }
@@ -2187,6 +2373,7 @@ function searchLocalEntries(userId, query) {
         protein: Number.isFinite(row.protein) ? row.protein : null,
         carbs: Number.isFinite(row.carbs) ? row.carbs : null,
         fats: Number.isFinite(row.fats) ? row.fats : null,
+        fiber: Number.isFinite(row.fiber) ? row.fiber : null,
         weightAmount: Number.isFinite(row.weightAmount) ? row.weightAmount : null,
         weightUnit: row.weightUnit || null,
         type: row.type || 'Food',
@@ -2237,6 +2424,7 @@ function mapQuickSuggestionToProduct(item) {
     protein: parseNullableNumber(item.prefill.protein),
     carbs: parseNullableNumber(item.prefill.carbs),
     fats: parseNullableNumber(item.prefill.fats),
+    fiber: parseNullableNumber(item.prefill.fiber),
     weightAmount,
     weightUnit,
     weightGramsEquivalent: weightUnit === 'g' ? weightAmount : null,
@@ -2437,6 +2625,7 @@ router.get('/', authenticate, (req, res) => {
       protein: row.protein || 0,
       carbs: row.carbs || 0,
       fats: row.fats || 0,
+      fiber: row.fiber || 0,
       targetCalories: dayGoals.calories,
       percent,
     };
@@ -2532,6 +2721,7 @@ router.post('/', authenticate, async (req, res) => {
     protein,
     carbs,
     fats,
+    fiber,
     barcode,
     date,
     weightAmount,
@@ -2560,114 +2750,12 @@ router.post('/', authenticate, async (req, res) => {
     }
 
     const entryDate = resolveDate(date);
-    const loggedEntries = [];
-    const skippedItems = [];
-
-    for (let index = 0; index < rawItems.length; index += 1) {
-      const item = rawItems[index] || {};
-      const itemName = typeof item.name === 'string' ? item.name.trim() : '';
-      const itemBarcode = typeof item.barcode === 'string' ? item.barcode.trim() : '';
-      const itemType = item.type === 'Liquid' ? 'Liquid' : 'Food';
-      const defaultUnit = itemType === 'Liquid' ? 'ml' : 'g';
-      const itemRequestedUnit =
-        typeof item.weightUnit === 'string' ? item.weightUnit.trim().toLowerCase() : null;
-      let itemWeightUnit =
-        itemRequestedUnit && ['g', 'ml', 'portion'].includes(itemRequestedUnit)
-          ? itemRequestedUnit
-          : defaultUnit;
-      let itemWeightAmount = normalizePositiveNumber(item.weightAmount, { decimals: 1 });
-      if (itemWeightUnit === 'portion' && (!itemWeightAmount || itemWeightAmount <= 0)) {
-        itemWeightAmount = 1;
-      }
-
-      let calorieValue = Number.parseInt(item.calories, 10);
-      let proteinValue = Number(item.protein);
-      let carbValue = Number(item.carbs);
-      let fatValue = Number(item.fats);
-      let productData = null;
-
-      if (!Number.isFinite(calorieValue)) {
-        if (!itemName && !itemBarcode) {
-          skippedItems.push({
-            index,
-            reason: 'Each item needs a name, barcode, or calories value.',
-          });
-          continue;
-        }
-        try {
-          productData = await lookupProduct({
-            barcode: itemBarcode,
-            query: itemName,
-            userId,
-          });
-        } catch (error) {
-          skippedItems.push({
-            index,
-            reason: error?.message || 'Nutrition lookup failed for item.',
-          });
-          continue;
-        }
-      }
-
-      if (productData?.calories) {
-        calorieValue = Number.isFinite(calorieValue) ? calorieValue : productData.calories;
-        proteinValue = Number.isFinite(proteinValue) ? proteinValue : productData.protein ?? proteinValue;
-        carbValue = Number.isFinite(carbValue) ? carbValue : productData.carbs ?? carbValue;
-        fatValue = Number.isFinite(fatValue) ? fatValue : productData.fats ?? fatValue;
-        if (!itemWeightAmount && productData.weightAmount) {
-          itemWeightAmount = Number(productData.weightAmount);
-          if (['ml', 'g', 'portion'].includes(productData.weightUnit)) {
-            itemWeightUnit = productData.weightUnit;
-          }
-        }
-      }
-
-      if (!Number.isFinite(calorieValue) || calorieValue < 0) {
-        skippedItems.push({
-          index,
-          reason: 'Calories missing and no lookup result found.',
-        });
-        continue;
-      }
-
-      const payload = {
-        protein: Number.isFinite(proteinValue) && proteinValue > 0 ? proteinValue : 0,
-        carbs: Number.isFinite(carbValue) && carbValue > 0 ? carbValue : 0,
-        fats: Number.isFinite(fatValue) && fatValue > 0 ? fatValue : 0,
-      };
-
-      const displayName =
-        itemName ||
-        productData?.name ||
-        (itemBarcode ? `Barcode ${itemBarcode}` : `Photo item ${index + 1}`);
-      const storedBarcode = itemBarcode || productData?.barcode || null;
-
-      insertEntryStatement.run(
-        userId,
-        entryDate,
-        displayName,
-        itemType,
-        storedBarcode,
-        calorieValue,
-        payload.protein,
-        payload.carbs,
-        payload.fats,
-        itemWeightAmount,
-        itemWeightUnit,
-        index === 0 ? normalizedPhotoData : null
-      );
-
-      loggedEntries.push({
-        name: displayName,
-        calories: calorieValue,
-        protein: payload.protein,
-        carbs: payload.carbs,
-        fats: payload.fats,
-        weightAmount: itemWeightAmount,
-        weightUnit: itemWeightUnit,
-        barcode: storedBarcode,
-      });
-    }
+    const { loggedEntries, skippedItems, autoLookup } = await logNutritionItems({
+      userId,
+      entryDate,
+      items: rawItems,
+      photoData: normalizedPhotoData,
+    });
 
     if (!loggedEntries.length) {
       return res.status(400).json({
@@ -2681,12 +2769,15 @@ router.post('/', authenticate, async (req, res) => {
       date: entryDate,
       entriesLogged: loggedEntries,
       skippedItems,
+      autoLookup,
     });
   }
 
   let trimmedName = typeof name === 'string' ? name.trim() : '';
   const trimmedBarcode = typeof barcode === 'string' ? barcode.trim() : '';
   let photoAnalysis = null;
+  const normalizedType = type === 'Liquid' ? 'Liquid' : 'Food';
+  const entryDate = resolveDate(date);
 
   if (!trimmedName && !trimmedBarcode && !normalizedPhotoData) {
     return res.status(400).json({ message: 'Provide a food name, barcode, or meal photo.' });
@@ -2719,14 +2810,72 @@ router.post('/', authenticate, async (req, res) => {
         photoAnalysis: {
           name: photoAnalysis.name || null,
           confidence: photoAnalysis.confidence,
+          fiber: photoAnalysis.fiber ?? null,
           reliabilityThreshold: photoAnalysis.reliabilityThreshold,
           reliabilityReason: photoAnalysis.reliabilityReason || null,
           topMatches: photoAnalysis.topMatches || [],
           detectedFoods,
+          mealAnalysis: photoAnalysis.mealAnalysis || null,
         },
       });
     }
   }
+
+  if (!trimmedName && !trimmedBarcode && photoAnalysis) {
+    const photoMealItems = resolvePhotoMealItems(photoAnalysis, {
+      fallbackType: normalizedType,
+      maxItems: 12,
+    });
+    if (photoMealItems.length > 1) {
+      const { loggedEntries, skippedItems, autoLookup } = await logNutritionItems({
+        userId,
+        entryDate,
+        items: photoMealItems,
+        photoData: normalizedPhotoData,
+      });
+
+      if (!loggedEntries.length) {
+        return res.status(400).json({
+          message:
+            'Unable to log the detected foods from this photo. Try a clearer image or enter the foods manually.',
+          skippedItems,
+          photoAnalysis: {
+            name: photoAnalysis.name || null,
+            confidence: photoAnalysis.confidence,
+            fiber: photoAnalysis.fiber ?? null,
+            isReliable: photoAnalysis.isReliable !== false,
+            reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
+            reliabilityReason: photoAnalysis.reliabilityReason || null,
+            topMatches: photoAnalysis.topMatches || [],
+            detectedFoods: photoAnalysis.detectedFoods || [],
+            mealAnalysis: photoAnalysis.mealAnalysis || null,
+          },
+          mealAnalysis: photoAnalysis.mealAnalysis || null,
+        });
+      }
+
+      return res.json({
+        message: `${loggedEntries.length} items logged from photo.`,
+        date: entryDate,
+        autoLookup,
+        entriesLogged: loggedEntries,
+        skippedItems,
+        photoAnalysis: {
+          name: photoAnalysis.name || loggedEntries[0]?.name || null,
+          confidence: photoAnalysis.confidence,
+          fiber: photoAnalysis.fiber ?? null,
+          isReliable: photoAnalysis.isReliable !== false,
+          reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
+          reliabilityReason: photoAnalysis.reliabilityReason || null,
+          topMatches: photoAnalysis.topMatches || [],
+          detectedFoods: photoAnalysis.detectedFoods || [],
+          mealAnalysis: photoAnalysis.mealAnalysis || null,
+        },
+        mealAnalysis: photoAnalysis.mealAnalysis || null,
+      });
+    }
+  }
+
   const detectedPhotoName = resolvePhotoAnalysisQuery(photoAnalysis);
   if (!trimmedName && detectedPhotoName) {
     trimmedName = detectedPhotoName;
@@ -2736,8 +2885,8 @@ router.post('/', authenticate, async (req, res) => {
   let proteinValue = Number.parseInt(protein, 10);
   let carbValue = Number.parseInt(carbs, 10);
   let fatValue = Number.parseInt(fats, 10);
+  let fiberValue = Number.parseInt(fiber, 10);
   let productData = null;
-  const normalizedType = type === 'Liquid' ? 'Liquid' : 'Food';
   const defaultUnit = normalizedType === 'Liquid' ? 'ml' : 'g';
   const requestedUnit = typeof weightUnit === 'string' ? weightUnit.trim().toLowerCase() : null;
   let normalizedUnit =
@@ -2760,6 +2909,9 @@ router.post('/', authenticate, async (req, res) => {
   }
   if (!Number.isFinite(fatValue) && hasFiniteNumericValue(photoAnalysis?.fats)) {
     fatValue = Number(photoAnalysis.fats);
+  }
+  if (!Number.isFinite(fiberValue) && hasFiniteNumericValue(photoAnalysis?.fiber)) {
+    fiberValue = Number(photoAnalysis.fiber);
   }
   if (!normalizedWeightAmount && Number.isFinite(Number(photoAnalysis?.weightAmount))) {
     normalizedWeightAmount = normalizePositiveNumber(photoAnalysis.weightAmount, { decimals: 1 });
@@ -2794,6 +2946,7 @@ router.post('/', authenticate, async (req, res) => {
       proteinValue = Number.isFinite(proteinValue) ? proteinValue : productData.protein ?? proteinValue;
       carbValue = Number.isFinite(carbValue) ? carbValue : productData.carbs ?? carbValue;
       fatValue = Number.isFinite(fatValue) ? fatValue : productData.fats ?? fatValue;
+      fiberValue = Number.isFinite(fiberValue) ? fiberValue : productData.fiber ?? fiberValue;
       if (!normalizedWeightAmount && productData.weightAmount) {
         normalizedWeightAmount = Number(productData.weightAmount);
         if (['ml', 'g', 'portion'].includes(productData.weightUnit)) {
@@ -2816,9 +2969,9 @@ router.post('/', authenticate, async (req, res) => {
     protein: Number.isFinite(proteinValue) && proteinValue > 0 ? proteinValue : 0,
     carbs: Number.isFinite(carbValue) && carbValue > 0 ? carbValue : 0,
     fats: Number.isFinite(fatValue) && fatValue > 0 ? fatValue : 0,
+    fiber: Number.isFinite(fiberValue) && fiberValue > 0 ? fiberValue : 0,
   };
 
-  const entryDate = resolveDate(date);
   const displayName =
     trimmedName ||
     productData?.name ||
@@ -2836,6 +2989,7 @@ router.post('/', authenticate, async (req, res) => {
     payload.protein,
     payload.carbs,
     payload.fats,
+    payload.fiber,
     normalizedWeightAmount,
     normalizedUnit,
     normalizedPhotoData
@@ -2849,13 +3003,16 @@ router.post('/', authenticate, async (req, res) => {
       ? {
           name: photoAnalysis.name || displayName,
           confidence: photoAnalysis.confidence,
+          fiber: photoAnalysis.fiber ?? null,
           isReliable: photoAnalysis.isReliable !== false,
           reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
           reliabilityReason: photoAnalysis.reliabilityReason || null,
           topMatches: photoAnalysis.topMatches || [],
           detectedFoods: photoAnalysis.detectedFoods || [],
+          mealAnalysis: photoAnalysis.mealAnalysis || null,
         }
       : null,
+    mealAnalysis: photoAnalysis?.mealAnalysis || null,
   });
 });
 
@@ -2880,6 +3037,7 @@ router.delete('/:entryId', authenticate, (req, res) => {
       protein: entry.protein,
       carbs: entry.carbs,
       fats: entry.fats,
+      fiber: entry.fiber,
       weightAmount: entry.weightAmount,
       weightUnit: entry.weightUnit,
       photoData: entry.photoData,

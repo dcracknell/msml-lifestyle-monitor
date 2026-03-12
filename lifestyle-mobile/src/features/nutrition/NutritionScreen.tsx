@@ -61,6 +61,7 @@ type EntryFormState = {
   protein: string;
   carbs: string;
   fats: string;
+  fiber: string;
   weightAmount: string;
   weightUnit: string;
   photoData: string | null;
@@ -72,6 +73,43 @@ type PhotoDetectedFood = {
   id: string;
   name: string;
   confidence: number | null;
+};
+
+type NutritionMealAnalysisItem = {
+  id: string;
+  name: string;
+  confidence: number | null;
+  calories: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fats: number | null;
+  fiber: number | null;
+  weightAmount: number | null;
+  weightUnit: string | null;
+  portionPercent: number | null;
+};
+
+type NutritionMealAnalysis = {
+  foodCount: number;
+  totalCalories: number | null;
+  totalProtein: number | null;
+  totalCarbs: number | null;
+  totalFats: number | null;
+  totalFiber: number | null;
+  totalWeightAmount: number | null;
+  weightUnit: string | null;
+  plateDetected: boolean;
+  plateDiameterPx: number | null;
+  mmPerPixel: number | null;
+  items: NutritionMealAnalysisItem[];
+};
+
+type NutritionLogResponse = {
+  message?: string;
+  autoLookup?: boolean;
+  entriesLogged?: Array<{ name?: string }>;
+  mealAnalysis?: unknown;
+  photoAnalysis?: unknown;
 };
 
 const PHOTO_DETECTED_MAX_ITEMS = 6;
@@ -151,6 +189,80 @@ function normalizePhotoDetectedFoods(raw: unknown) {
   return foods.slice(0, PHOTO_DETECTED_MAX_ITEMS);
 }
 
+function normalizeMealAnalysis(raw: unknown): NutritionMealAnalysis | null {
+  const record = asRecord(raw);
+  if (!record) {
+    return null;
+  }
+
+  const items: NutritionMealAnalysisItem[] = Array.isArray(record.items)
+    ? record.items
+        .map((entry, index) => {
+          const item = asRecord(entry);
+          const name = typeof item?.name === 'string' ? item.name.trim() : '';
+          if (!name) {
+            return null;
+          }
+          const confidenceRaw = Number(item?.confidence);
+          return {
+            id: `meal-${index}-${name.toLowerCase().replace(/\s+/g, '-')}`,
+            name,
+            confidence:
+              Number.isFinite(confidenceRaw) && confidenceRaw >= 0 && confidenceRaw <= 1
+                ? Number(confidenceRaw.toFixed(4))
+                : null,
+            calories: Number.isFinite(Number(item?.calories)) ? Number(item?.calories) : null,
+            protein: Number.isFinite(Number(item?.protein)) ? Number(item?.protein) : null,
+            carbs: Number.isFinite(Number(item?.carbs)) ? Number(item?.carbs) : null,
+            fats: Number.isFinite(Number(item?.fats)) ? Number(item?.fats) : null,
+            fiber: Number.isFinite(Number(item?.fiber)) ? Number(item?.fiber) : null,
+            weightAmount:
+              Number.isFinite(Number(item?.weightAmount)) ? Number(item?.weightAmount) : null,
+            weightUnit: typeof item?.weightUnit === 'string' ? item.weightUnit : null,
+            portionPercent:
+              Number.isFinite(Number(item?.portionPercent)) ? Number(item?.portionPercent) : null,
+          };
+        })
+        .filter((entry): entry is NutritionMealAnalysisItem => entry !== null)
+    : [];
+
+  const totalCalories = Number(record.totalCalories);
+  const totalProtein = Number(record.totalProtein);
+  const totalCarbs = Number(record.totalCarbs);
+  const totalFats = Number(record.totalFats);
+  const totalFiber = Number(record.totalFiber);
+  const totalWeightAmount = Number(record.totalWeightAmount);
+  const plateDiameterPx = Number(record.plateDiameterPx);
+  const mmPerPixel = Number(record.mmPerPixel);
+
+  if (!items.length && !Number.isFinite(totalCalories)) {
+    return null;
+  }
+
+  return {
+    foodCount: Number.isFinite(Number(record.foodCount)) ? Number(record.foodCount) : items.length,
+    totalCalories: Number.isFinite(totalCalories) ? totalCalories : null,
+    totalProtein: Number.isFinite(totalProtein) ? totalProtein : null,
+    totalCarbs: Number.isFinite(totalCarbs) ? totalCarbs : null,
+    totalFats: Number.isFinite(totalFats) ? totalFats : null,
+    totalFiber: Number.isFinite(totalFiber) ? totalFiber : null,
+    totalWeightAmount: Number.isFinite(totalWeightAmount) ? totalWeightAmount : null,
+    weightUnit: typeof record.weightUnit === 'string' ? record.weightUnit : 'g',
+    plateDetected: record.plateDetected !== false,
+    plateDiameterPx: Number.isFinite(plateDiameterPx) ? plateDiameterPx : null,
+    mmPerPixel: Number.isFinite(mmPerPixel) ? mmPerPixel : null,
+    items,
+  };
+}
+
+function extractMealAnalysis(payload: unknown) {
+  const direct = normalizeMealAnalysis(asRecord(payload)?.mealAnalysis);
+  if (direct) {
+    return direct;
+  }
+  return normalizeMealAnalysis(asRecord(asRecord(payload)?.photoAnalysis)?.mealAnalysis);
+}
+
 function mapDetectedFoodToSuggestion(food: PhotoDetectedFood): NutritionSuggestion {
   const confidence =
     typeof food.confidence === 'number' ? `${Math.round(food.confidence * 100)}% confidence` : null;
@@ -181,6 +293,7 @@ function parsePhotoUncertainError(error: unknown) {
         ? payload.message.trim()
         : 'Meal photo needs review before logging.',
     detectedFoods: fallbackFoods,
+    mealAnalysis: extractMealAnalysis(payload),
   };
 }
 
@@ -197,6 +310,7 @@ export function NutritionScreen() {
     protein: '',
     carbs: '',
     fats: '',
+    fiber: '',
     weightAmount: '',
     weightUnit: 'g',
     photoData: null,
@@ -208,6 +322,7 @@ export function NutritionScreen() {
   const [macroFeedback, setMacroFeedback] = useState<string | null>(null);
   const [photoStatus, setPhotoStatus] = useState<string | null>(null);
   const [photoDetectedFoods, setPhotoDetectedFoods] = useState<PhotoDetectedFood[]>([]);
+  const [photoMealAnalysis, setPhotoMealAnalysis] = useState<NutritionMealAnalysis | null>(null);
   const [suggestions, setSuggestions] = useState<NutritionSuggestion[]>([]);
   const [suggestionStatus, setSuggestionStatus] = useState('Type at least 2 characters to see suggestions.');
   const [suggestionLoading, setSuggestionLoading] = useState(false);
@@ -290,6 +405,7 @@ export function NutritionScreen() {
       protein: '',
       carbs: '',
       fats: '',
+      fiber: '',
       weightAmount: '',
       weightUnit: prev.weightUnit,
       photoData: null,
@@ -330,6 +446,10 @@ export function NutritionScreen() {
       return;
     }
     setSuggestionStatus('Photo is unclear. Type a food name or try another image.');
+  };
+
+  const applyMealAnalysis = (payload: unknown) => {
+    setPhotoMealAnalysis(extractMealAnalysis(payload));
   };
 
   const ensureScannerPermission = async () => {
@@ -459,6 +579,7 @@ export function NutritionScreen() {
       setNumericField('protein', prefill.protein);
       setNumericField('carbs', prefill.carbs);
       setNumericField('fats', prefill.fats);
+      setNumericField('fiber', prefill.fiber);
       setNumericField('weightAmount', prefill.weightAmount, true);
       if (prefill.weightUnit) {
         handleEntryChange('weightUnit', prefill.weightUnit);
@@ -493,6 +614,7 @@ export function NutritionScreen() {
     setNumericField('protein', product.protein);
     setNumericField('carbs', product.carbs);
     setNumericField('fats', product.fats);
+    setNumericField('fiber', product.fiber);
     setNumericField('weightAmount', product.weightAmount, true);
     if (product.weightUnit) {
       handleEntryChange('weightUnit', product.weightUnit);
@@ -503,7 +625,7 @@ export function NutritionScreen() {
     if (!product || !product.name?.trim()) {
       return false;
     }
-    const signals = [product.calories, product.protein, product.carbs, product.fats];
+    const signals = [product.calories, product.protein, product.carbs, product.fats, product.fiber];
     if (signals.some((value) => typeof value === 'number' && Number.isFinite(value))) {
       return true;
     }
@@ -654,6 +776,7 @@ export function NutritionScreen() {
       protein: asNumber(entryForm.protein),
       carbs: asNumber(entryForm.carbs),
       fats: asNumber(entryForm.fats),
+      fiber: asNumber(entryForm.fiber),
       weightAmount: asNumber(entryForm.weightAmount),
       weightUnit: entryForm.weightUnit.trim() || undefined,
       date: selectedDate,
@@ -661,11 +784,13 @@ export function NutritionScreen() {
     };
     setEntryFeedback('Logging entry...');
     try {
-      const result = await runOrQueue<{ message?: string }>({ endpoint: '/api/nutrition', payload });
+      const result = await runOrQueue<NutritionLogResponse>({ endpoint: '/api/nutrition', payload });
       if (result.status === 'sent') {
+        applyMealAnalysis(result.result);
         setEntryFeedback(result.result?.message || 'Entry saved.');
         refetch();
       } else {
+        setPhotoMealAnalysis(null);
         setEntryFeedback('Offline detected - entry queued and will sync automatically.');
       }
       resetEntryForm();
@@ -678,6 +803,7 @@ export function NutritionScreen() {
     } catch (error) {
       const uncertain = parsePhotoUncertainError(error);
       if (uncertain) {
+        setPhotoMealAnalysis(uncertain.mealAnalysis);
         applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
         setEntryFeedback(uncertain.message);
         if (entryForm.photoData) {
@@ -726,6 +852,7 @@ export function NutritionScreen() {
   const handleCapturePhoto = async () => {
     setPhotoStatus(null);
     setPhotoDetectedFoods([]);
+    setPhotoMealAnalysis(null);
     try {
       const imagePicker = getImagePickerModule();
       if (!imagePicker) {
@@ -762,6 +889,7 @@ export function NutritionScreen() {
     setPhotoStatus(null);
     setEntryFeedback(null);
     setPhotoDetectedFoods([]);
+    setPhotoMealAnalysis(null);
     let importedPhotoData: string | null = null;
     try {
       const imagePicker = getImagePickerModule();
@@ -792,7 +920,7 @@ export function NutritionScreen() {
       handleEntryChange('photoData', importedPhotoData);
 
       setEntryFeedback('Importing photo...');
-      const upload = await runOrQueue<{ message?: string }>({
+      const upload = await runOrQueue<NutritionLogResponse>({
         endpoint: '/api/nutrition',
         payload: {
           type: entryForm.type,
@@ -803,6 +931,7 @@ export function NutritionScreen() {
       });
 
       if (upload.status === 'sent') {
+        applyMealAnalysis(upload.result);
         setEntryFeedback(upload.result?.message || 'Photo imported into the food register.');
         setPhotoStatus('Imported photo logged.');
         handleEntryChange('photoData', null);
@@ -824,6 +953,7 @@ export function NutritionScreen() {
         if (importedPhotoData) {
           handleEntryChange('photoData', importedPhotoData);
         }
+        setPhotoMealAnalysis(uncertain.mealAnalysis);
         applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
         setEntryFeedback(uncertain.message);
         setPhotoStatus(
@@ -846,6 +976,7 @@ export function NutritionScreen() {
     handleEntryChange('photoData', null);
     setPhotoStatus(null);
     setPhotoDetectedFoods([]);
+    setPhotoMealAnalysis(null);
   };
 
   const handleViewHistoryPhoto = (entry: NutritionEntry) => {
@@ -1011,7 +1142,7 @@ export function NutritionScreen() {
     }));
 
     try {
-      const result = await runOrQueue<{ message?: string; entriesLogged?: Array<{ name?: string }> }>({
+      const result = await runOrQueue<NutritionLogResponse>({
         endpoint: '/api/nutrition',
         payload: {
           type: entryForm.type,
@@ -1023,6 +1154,10 @@ export function NutritionScreen() {
       });
 
       if (result.status === 'sent') {
+        const analysis = extractMealAnalysis(result.result);
+        if (analysis) {
+          setPhotoMealAnalysis(analysis);
+        }
         const loggedCount = Array.isArray(result.result?.entriesLogged)
           ? result.result?.entriesLogged?.length || 0
           : 0;
@@ -2142,6 +2277,27 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
     gap: spacing.sm,
     backgroundColor: colors.glass,
+  },
+  mealAnalysisCard: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: 16,
+    padding: spacing.sm,
+    gap: spacing.sm,
+    backgroundColor: colors.glass,
+  },
+  mealAnalysisSummary: {
+    color: colors.muted,
+  },
+  mealAnalysisRow: {
+    gap: spacing.xs,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  mealAnalysisMeta: {
+    color: colors.muted,
   },
   scannerPanel: {
     borderWidth: 1,

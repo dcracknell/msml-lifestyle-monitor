@@ -1622,6 +1622,38 @@ button:hover {
   background: rgba(5, 10, 24, 0.9);
 }
 
+.nutrition-photo-analysis {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(77, 245, 255, 0.18);
+  background:
+    linear-gradient(135deg, rgba(77, 245, 255, 0.08), rgba(255, 255, 255, 0.02));
+}
+
+.nutrition-photo-analysis-summary {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.nutrition-photo-analysis-list {
+  list-style: none;
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+}
+
+.nutrition-photo-analysis-list li {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
 #nutritionPhotoStatus.error {
   color: #ff8ba7;
 }

@@ -85,6 +85,7 @@ export const createNutritionEntryRequest = (payload: {
   protein?: number;
   carbs?: number;
   fats?: number;
+  fiber?: number;
   weightAmount?: number;
   weightUnit?: string;
   date?: string;
@@ -97,6 +98,7 @@ export const createNutritionEntryRequest = (payload: {
     protein?: number;
     carbs?: number;
     fats?: number;
+    fiber?: number;
     weightAmount?: number;
     weightUnit?: string;
   }>;
