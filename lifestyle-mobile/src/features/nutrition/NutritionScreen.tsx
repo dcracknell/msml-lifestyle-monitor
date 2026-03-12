@@ -33,6 +33,7 @@ import {
   searchNutritionRequest,
   lookupNutritionRequest,
 } from '../../api/endpoints';
+import { ApiError } from '../../api/client';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import { formatDate, formatNumber } from '../../utils/format';
@@ -67,6 +68,16 @@ type EntryFormState = {
 
 type AddFoodMode = 'menu' | 'search' | 'photo' | 'manual';
 
+type PhotoDetectedFood = {
+  id: string;
+  name: string;
+  confidence: number | null;
+};
+
+const PHOTO_DETECTED_MAX_ITEMS = 6;
+const PHOTO_DETECTED_MIN_CONFIDENCE = 0.08;
+const PHOTO_UNCERTAIN_CODE = 'PHOTO_ANALYSIS_UNCERTAIN';
+
 const NUMERIC_BARCODE_TYPE_HINTS = [
   'ean13',
   'ean_13',
@@ -99,6 +110,80 @@ function normalizeScannedBarcode(rawValue: unknown, type?: unknown) {
   return trimmed;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizePhotoDetectedFoods(raw: unknown) {
+  if (!Array.isArray(raw)) {
+    return [] as PhotoDetectedFood[];
+  }
+  const foods: PhotoDetectedFood[] = [];
+  const seen = new Set<string>();
+  raw.forEach((entry, index) => {
+    const item = asRecord(entry);
+    const name = typeof item?.name === 'string' ? item.name.trim() : '';
+    if (!name) {
+      return;
+    }
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    const confidenceRaw = Number(item?.confidence);
+    const confidence =
+      Number.isFinite(confidenceRaw) && confidenceRaw >= 0 && confidenceRaw <= 1
+        ? Number(confidenceRaw.toFixed(4))
+        : null;
+    if (confidence !== null && confidence < PHOTO_DETECTED_MIN_CONFIDENCE) {
+      return;
+    }
+    seen.add(key);
+    foods.push({
+      id: `photo-${index}-${key.replace(/\s+/g, '-')}`,
+      name,
+      confidence,
+    });
+  });
+  return foods.slice(0, PHOTO_DETECTED_MAX_ITEMS);
+}
+
+function mapDetectedFoodToSuggestion(food: PhotoDetectedFood): NutritionSuggestion {
+  const confidence =
+    typeof food.confidence === 'number' ? `${Math.round(food.confidence * 100)}% confidence` : null;
+  return {
+    id: food.id,
+    name: food.name,
+    source: 'Photo analysis',
+    serving: confidence,
+  };
+}
+
+function parsePhotoUncertainError(error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 422) {
+    return null;
+  }
+  const payload = asRecord(error.data);
+  if (!payload || String(payload.code || '') !== PHOTO_UNCERTAIN_CODE) {
+    return null;
+  }
+  const analysis = asRecord(payload.photoAnalysis);
+  const detectedFoods = normalizePhotoDetectedFoods(analysis?.detectedFoods);
+  const fallbackFoods = detectedFoods.length
+    ? detectedFoods
+    : normalizePhotoDetectedFoods(analysis?.topMatches);
+  return {
+    message:
+      typeof payload.message === 'string' && payload.message.trim()
+        ? payload.message.trim()
+        : 'Meal photo needs review before logging.',
+    detectedFoods: fallbackFoods,
+  };
+}
+
 export function NutritionScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
@@ -122,6 +207,7 @@ export function NutritionScreen() {
   const [macroForm, setMacroForm] = useState({ calories: '', protein: '', carbs: '', fats: '' });
   const [macroFeedback, setMacroFeedback] = useState<string | null>(null);
   const [photoStatus, setPhotoStatus] = useState<string | null>(null);
+  const [photoDetectedFoods, setPhotoDetectedFoods] = useState<PhotoDetectedFood[]>([]);
   const [suggestions, setSuggestions] = useState<NutritionSuggestion[]>([]);
   const [suggestionStatus, setSuggestionStatus] = useState('Type at least 2 characters to see suggestions.');
   const [suggestionLoading, setSuggestionLoading] = useState(false);
@@ -220,6 +306,30 @@ export function NutritionScreen() {
     if (message) {
       setSuggestionStatus(message);
     }
+  };
+
+  const applyPhotoDetectedFoods = (foods: PhotoDetectedFood[], feedbackMessage?: string) => {
+    if (suggestionTimerRef.current) {
+      clearTimeout(suggestionTimerRef.current);
+      suggestionTimerRef.current = null;
+    }
+    activeSuggestionRequest.current = null;
+    setSuggestionLoading(false);
+    const limitedFoods = foods.slice(0, PHOTO_DETECTED_MAX_ITEMS);
+    setPhotoDetectedFoods(limitedFoods);
+    const photoSuggestions = limitedFoods.map(mapDetectedFoodToSuggestion);
+    setSuggestions(photoSuggestions);
+    if (feedbackMessage) {
+      setSuggestionStatus(feedbackMessage);
+      return;
+    }
+    if (photoSuggestions.length) {
+      setSuggestionStatus(
+        'Meal photo has multiple possible foods. Choose one or log all detected foods below.'
+      );
+      return;
+    }
+    setSuggestionStatus('Photo is unclear. Type a food name or try another image.');
   };
 
   const ensureScannerPermission = async () => {
@@ -560,11 +670,28 @@ export function NutritionScreen() {
       }
       resetEntryForm();
       setPhotoStatus(null);
+      setPhotoDetectedFoods([]);
       clearSuggestions('Type at least 2 characters to see suggestions.');
       setAddFoodModalVisible(false);
       setAddFoodMode('menu');
       handleCloseScanner();
     } catch (error) {
+      const uncertain = parsePhotoUncertainError(error);
+      if (uncertain) {
+        applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
+        setEntryFeedback(uncertain.message);
+        if (entryForm.photoData) {
+          setPhotoStatus(
+            uncertain.detectedFoods.length
+              ? 'Photo detected multiple foods. Review suggestions or log detected foods.'
+              : 'Photo result is uncertain. Try another angle or type the food name.'
+          );
+        }
+        if (!trimmedName && !trimmedBarcode && uncertain.detectedFoods[0]) {
+          handleEntryChange('name', uncertain.detectedFoods[0].name);
+        }
+        return;
+      }
       setEntryFeedback(
         error instanceof Error ? error.message : 'Unable to log entry. Try again in a moment.'
       );
@@ -598,6 +725,7 @@ export function NutritionScreen() {
 
   const handleCapturePhoto = async () => {
     setPhotoStatus(null);
+    setPhotoDetectedFoods([]);
     try {
       const imagePicker = getImagePickerModule();
       if (!imagePicker) {
@@ -633,6 +761,8 @@ export function NutritionScreen() {
   const handleImportPhoto = async () => {
     setPhotoStatus(null);
     setEntryFeedback(null);
+    setPhotoDetectedFoods([]);
+    let importedPhotoData: string | null = null;
     try {
       const imagePicker = getImagePickerModule();
       if (!imagePicker) {
@@ -658,6 +788,8 @@ export function NutritionScreen() {
         setPhotoStatus('Unable to read the selected photo. Try another image.');
         return;
       }
+      importedPhotoData = asset.base64;
+      handleEntryChange('photoData', importedPhotoData);
 
       setEntryFeedback('Importing photo...');
       const upload = await runOrQueue<{ message?: string }>({
@@ -665,7 +797,7 @@ export function NutritionScreen() {
         payload: {
           type: entryForm.type,
           date: selectedDate,
-          photoData: asset.base64,
+          photoData: importedPhotoData,
         },
         description: 'Imported meal photo',
       });
@@ -673,6 +805,7 @@ export function NutritionScreen() {
       if (upload.status === 'sent') {
         setEntryFeedback(upload.result?.message || 'Photo imported into the food register.');
         setPhotoStatus('Imported photo logged.');
+        handleEntryChange('photoData', null);
         refetch();
         resetEntryForm();
         setAddFoodModalVisible(false);
@@ -686,6 +819,23 @@ export function NutritionScreen() {
       setAddFoodModalVisible(false);
       setAddFoodMode('menu');
     } catch (error) {
+      const uncertain = parsePhotoUncertainError(error);
+      if (uncertain) {
+        if (importedPhotoData) {
+          handleEntryChange('photoData', importedPhotoData);
+        }
+        applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
+        setEntryFeedback(uncertain.message);
+        setPhotoStatus(
+          uncertain.detectedFoods.length
+            ? 'Photo imported. Multiple foods detected, review suggestions before logging.'
+            : 'Photo imported, but the result is uncertain. Type a food name or try another photo.'
+        );
+        if (uncertain.detectedFoods[0]) {
+          handleEntryChange('name', uncertain.detectedFoods[0].name);
+        }
+        return;
+      }
       setEntryFeedback(
         error instanceof Error ? error.message : 'Unable to import meal photo right now.'
       );
@@ -695,6 +845,7 @@ export function NutritionScreen() {
   const handleRemovePhoto = () => {
     handleEntryChange('photoData', null);
     setPhotoStatus(null);
+    setPhotoDetectedFoods([]);
   };
 
   const handleViewHistoryPhoto = (entry: NutritionEntry) => {
@@ -841,6 +992,61 @@ export function NutritionScreen() {
       )}
     </View>
   );
+
+  const handleLogDetectedFoodsFromPhoto = async () => {
+    if (!entryForm.photoData) {
+      setEntryFeedback('Attach a photo before logging detected foods.');
+      return;
+    }
+    const detected = photoDetectedFoods.slice(0, PHOTO_DETECTED_MAX_ITEMS);
+    if (!detected.length) {
+      setEntryFeedback('No detected foods are available to log from this photo.');
+      return;
+    }
+
+    setEntryFeedback('Logging detected foods...');
+    const items = detected.map((food) => ({
+      name: food.name,
+      type: entryForm.type,
+    }));
+
+    try {
+      const result = await runOrQueue<{ message?: string; entriesLogged?: Array<{ name?: string }> }>({
+        endpoint: '/api/nutrition',
+        payload: {
+          type: entryForm.type,
+          date: selectedDate,
+          photoData: entryForm.photoData,
+          items,
+        },
+        description: 'Detected meal photo foods',
+      });
+
+      if (result.status === 'sent') {
+        const loggedCount = Array.isArray(result.result?.entriesLogged)
+          ? result.result?.entriesLogged?.length || 0
+          : 0;
+        setEntryFeedback(
+          result.result?.message ||
+            (loggedCount > 0
+              ? `${loggedCount} foods logged from one photo.`
+              : 'Detected foods logged from photo.')
+        );
+        refetch();
+      } else {
+        setEntryFeedback('Offline detected - detected foods queued and will sync automatically.');
+      }
+
+      resetEntryForm();
+      setPhotoStatus(null);
+      setPhotoDetectedFoods([]);
+      clearSuggestions('Type at least 2 characters to see suggestions.');
+    } catch (error) {
+      setEntryFeedback(
+        error instanceof Error ? error.message : 'Unable to log detected foods right now.'
+      );
+    }
+  };
 
   const renderScannerPanel = () =>
     scannerActive ? (
@@ -1006,6 +1212,18 @@ export function NutritionScreen() {
               selectTextOnFocus
             />
             {renderSuggestionPanel()}
+            {photoDetectedFoods.length ? (
+              <View style={styles.detectedFoodsContainer}>
+                <AppText variant="muted">
+                  Detected foods from this photo: {photoDetectedFoods.map((item) => item.name).join(', ')}.
+                </AppText>
+                <AppButton
+                  title={`Log ${photoDetectedFoods.length} detected foods`}
+                  variant="ghost"
+                  onPress={handleLogDetectedFoodsFromPhoto}
+                />
+              </View>
+            ) : null}
             <AppInput
               label="Barcode"
               placeholder="01234567890"
@@ -1915,6 +2133,15 @@ const styles = StyleSheet.create({
   },
   suggestionEmpty: {
     lineHeight: 20,
+  },
+  detectedFoodsContainer: {
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 16,
+    padding: spacing.sm,
+    gap: spacing.sm,
+    backgroundColor: colors.glass,
   },
   scannerPanel: {
     borderWidth: 1,

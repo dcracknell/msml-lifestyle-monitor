@@ -1573,6 +1573,59 @@ button:hover {
   width: 100%;
 }
 
+.photo-import-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.photo-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.photo-preview-wrapper {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.02);
+  max-width: 320px;
+}
+
+.photo-drop-zone {
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  border-radius: 12px;
+  padding: 0.7rem 0.8rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.03em;
+  background: rgba(255, 255, 255, 0.02);
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+  cursor: pointer;
+}
+
+.photo-drop-zone:hover,
+.photo-drop-zone:focus-visible,
+.photo-drop-zone.dragging {
+  border-color: rgba(77, 245, 255, 0.75);
+  background: rgba(77, 245, 255, 0.08);
+  color: #e9fbff;
+}
+
+.photo-preview {
+  width: 100%;
+  max-height: 220px;
+  object-fit: cover;
+  display: block;
+  background: rgba(5, 10, 24, 0.9);
+}
+
+#nutritionPhotoStatus.error {
+  color: #ff8ba7;
+}
+
 .outline-btn.secondary {
   padding: 0.65rem 1rem;
 }

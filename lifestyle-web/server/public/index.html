@@ -863,6 +863,33 @@
                     <p class="muted tiny-text">Pulls calories/macros from a global food database.</p>
                   </div>
                 </div>
+                <div class="photo-import-row">
+                  <input type="file" id="nutritionPhotoInput" accept="image/*" class="hidden" />
+                  <div class="photo-import-actions">
+                    <button type="button" class="outline-btn secondary" id="nutritionPhotoButton">
+                      Import meal photo
+                    </button>
+                    <button
+                      type="button"
+                      class="outline-btn secondary hidden"
+                      id="nutritionPhotoClearButton">
+                      Remove photo
+                    </button>
+                  </div>
+                  <p class="muted tiny-text" id="nutritionPhotoStatus">
+                    Upload a meal photo to auto-detect and log food items.
+                  </p>
+                  <label
+                    id="nutritionPhotoDropZone"
+                    class="photo-drop-zone"
+                    for="nutritionPhotoInput"
+                    aria-label="Drop a local meal photo here or click to choose a file">
+                    Drop a local food image here, or click to browse.
+                  </label>
+                  <div class="photo-preview-wrapper hidden" id="nutritionPhotoPreviewWrapper">
+                    <img id="nutritionPhotoPreview" class="photo-preview" alt="Meal photo preview" />
+                  </div>
+                </div>
                 <input type="hidden" id="nutritionBarcode" />
                 <label>
                   Category

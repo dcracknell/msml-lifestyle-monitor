@@ -1,20 +1,60 @@
 const { execFile } = require('child_process');
+const fsSync = require('fs');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 
-const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.NUT_MODEL_TIMEOUT_MS, 10) || 15000;
-const DEFAULT_PYTHON_BIN = process.env.NUT_MODEL_PYTHON_BIN || 'python';
+function parseIntegerEnv(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  if (parsed < min) {
+    return min;
+  }
+  if (parsed > max) {
+    return max;
+  }
+  return parsed;
+}
+
+const DEFAULT_TIMEOUT_MS = parseIntegerEnv(process.env.NUT_MODEL_TIMEOUT_MS, 45000, {
+  min: 1000,
+  max: 300000,
+});
+const DEFAULT_IMAGE_SIZE = parseIntegerEnv(process.env.NUT_MODEL_IMAGE_SIZE, 320, {
+  min: 128,
+  max: 1024,
+});
+const LOCAL_VENV_PYTHON = path.resolve(__dirname, '..', '..', 'NUT_model', '.venv', 'bin', 'python');
+const LOCAL_VENV_WINDOWS_PYTHON = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  'NUT_model',
+  '.venv',
+  'Scripts',
+  'python.exe'
+);
+const DEFAULT_PYTHON_BIN =
+  process.env.NUT_MODEL_PYTHON_BIN ||
+  (fsSync.existsSync(LOCAL_VENV_PYTHON)
+    ? LOCAL_VENV_PYTHON
+    : fsSync.existsSync(LOCAL_VENV_WINDOWS_PYTHON)
+      ? LOCAL_VENV_WINDOWS_PYTHON
+      : 'python');
 const DEFAULT_SCRIPT_PATH =
   process.env.NUT_MODEL_SCRIPT ||
-  path.resolve(__dirname, '..', '..', 'NUT_model', 'predict.py');
+  path.resolve(__dirname, '..', '..', 'NUT_model', 'nut_estimator.py');
 const DEFAULT_MODEL_PATH =
   process.env.NUT_MODEL_WEIGHTS ||
   path.resolve(__dirname, '..', '..', 'NUT_model', 'canet_NUT.pth');
-const DEFAULT_LABELS_PATH =
-  process.env.NUT_MODEL_LABELS ||
-  path.resolve(__dirname, '..', '..', 'NUT_model', 'foodseg103_labels.json');
-const SETUP_CACHE_TTL_MS = Number.parseInt(process.env.NUT_MODEL_SETUP_CACHE_TTL_MS, 10) || 60000;
+const DEFAULT_LABELS_PATH = process.env.NUT_MODEL_LABELS || null;
+const SETUP_CACHE_TTL_MS = parseIntegerEnv(
+  process.env.NUT_MODEL_SETUP_CACHE_TTL_MS,
+  60 * 60 * 1000,
+  { min: 1000, max: 24 * 60 * 60 * 1000 }
+);
 
 let setupCheckCache = {
   checkedAt: 0,
@@ -37,6 +77,9 @@ function isFiniteNumber(value) {
 }
 
 function normalizeNumericValue(value, digits = 1) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
   if (!isFiniteNumber(value)) {
     return null;
   }
@@ -75,8 +118,9 @@ function execFileAsync(command, args, options = {}) {
 function buildCommandArgs({
   scriptPath,
   modelPath,
-  labelsPath,
+  labelsPath = null,
   imagePath = null,
+  imageSize = null,
   selfCheck = false,
 }) {
   const args = [scriptPath];
@@ -85,8 +129,14 @@ function buildCommandArgs({
   }
   if (imagePath) {
     args.push('--image', imagePath);
+    if (Number.isFinite(Number(imageSize)) && Number(imageSize) > 0) {
+      args.push('--image-size', String(Math.trunc(Number(imageSize))));
+    }
   }
-  args.push('--model', modelPath, '--labels', labelsPath);
+  args.push('--model', modelPath);
+  if (labelsPath) {
+    args.push('--labels', labelsPath);
+  }
   return args;
 }
 
@@ -170,9 +220,29 @@ function parsePredictionPayload(raw) {
         .slice(0, 5)
     : [];
 
+  const detectedFoods = Array.isArray(parsed.detectedFoods)
+    ? parsed.detectedFoods
+        .map((entry) => {
+          const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+          if (!name) {
+            return null;
+          }
+          return {
+            name,
+            confidence: normalizeNumericValue(entry.confidence, 4),
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 8)
+    : [];
+
   return {
     name: typeof parsed.name === 'string' ? parsed.name.trim() : '',
     confidence: normalizeNumericValue(parsed.confidence, 4),
+    isReliable: parsed.isReliable !== false,
+    reliabilityThreshold: normalizeNumericValue(parsed.reliabilityThreshold, 4),
+    reliabilityReason:
+      typeof parsed.reliabilityReason === 'string' ? parsed.reliabilityReason.trim() : null,
     calories: normalizeNumericValue(parsed.calories, 0),
     protein: normalizeNumericValue(parsed.protein, 1),
     carbs: normalizeNumericValue(parsed.carbs, 1),
@@ -180,6 +250,7 @@ function parsePredictionPayload(raw) {
     weightAmount: normalizeNumericValue(parsed.weightAmount, 1),
     weightUnit: typeof parsed.weightUnit === 'string' ? parsed.weightUnit.trim().toLowerCase() : null,
     topMatches,
+    detectedFoods,
   };
 }
 
@@ -208,6 +279,17 @@ function mapExecutionError(
   if (error instanceof NutritionPhotoAnalysisError) {
     return error;
   }
+  const stderr = String(error?.stderr || '').trim();
+  const combinedMessage = `${stderr} ${String(error?.message || '').trim()}`.trim();
+  if (/cannot identify image file/i.test(combinedMessage)) {
+    return new NutritionPhotoAnalysisError(
+      'Unsupported or corrupted image format. Use a JPG or PNG photo and try again.',
+      {
+        status: 400,
+        code: 'PHOTO_UNSUPPORTED_FORMAT',
+      }
+    );
+  }
   if (error?.code === 'ENOENT') {
     return new NutritionPhotoAnalysisError(
       `Python runtime not found: ${pythonBin}. Install the NUT model dependencies first.`,
@@ -223,7 +305,6 @@ function mapExecutionError(
       code: timeoutCode,
     });
   }
-  const stderr = String(error?.stderr || '').trim();
   return new NutritionPhotoAnalysisError(stderr || error?.message || fallbackMessage, {
     status: 502,
     code: fallbackCode,
@@ -237,9 +318,11 @@ async function runSetupCheck({
   modelPath = DEFAULT_MODEL_PATH,
   labelsPath = DEFAULT_LABELS_PATH,
 } = {}) {
-  await ensureFileExists(scriptPath, 'predict.py');
+  await ensureFileExists(scriptPath, 'inference script');
   await ensureFileExists(modelPath, 'model weights');
-  await ensureFileExists(labelsPath, 'label map');
+  if (labelsPath) {
+    await ensureFileExists(labelsPath, 'label map');
+  }
 
   try {
     const { stdout, stderr } = await execFileAsync(
@@ -333,6 +416,7 @@ async function verifyNutritionPhotoModelSetup(options = {}) {
 async function analyzeNutritionPhoto({
   photoData,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  imageSize = DEFAULT_IMAGE_SIZE,
   pythonBin = DEFAULT_PYTHON_BIN,
   scriptPath = DEFAULT_SCRIPT_PATH,
   modelPath = DEFAULT_MODEL_PATH,
@@ -346,13 +430,11 @@ async function analyzeNutritionPhoto({
     });
   }
 
-  await verifyNutritionPhotoModelSetup({
-    timeoutMs,
-    pythonBin,
-    scriptPath,
-    modelPath,
-    labelsPath,
-  });
+  await ensureFileExists(scriptPath, 'inference script');
+  await ensureFileExists(modelPath, 'model weights');
+  if (labelsPath) {
+    await ensureFileExists(labelsPath, 'label map');
+  }
 
   const imageBuffer = Buffer.from(normalizedPhotoData, 'base64');
   if (!imageBuffer.length) {
@@ -375,6 +457,7 @@ async function analyzeNutritionPhoto({
       buildCommandArgs({
         scriptPath,
         imagePath: tempFile,
+        imageSize,
         modelPath,
         labelsPath,
       }),

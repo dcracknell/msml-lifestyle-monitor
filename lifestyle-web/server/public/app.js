@@ -4,6 +4,201 @@ if (!Chart) {
 }
 
 let chartWarningShown = false;
+function resolveRequestErrorMessage(error, fallback = 'Request failed.') {
+  const message = typeof error?.message === 'string' ? error.message.trim() : '';
+  if (!message) {
+    return fallback;
+  }
+  const normalized = message.toLowerCase();
+  if (
+    normalized === 'failed to fetch' ||
+    normalized.includes('networkerror') ||
+    normalized.includes('load failed')
+  ) {
+    return 'Cannot reach the server. Make sure it is running, then reload this page.';
+  }
+  return message;
+}
+
+const API_BASE_STORAGE_KEY = 'msml.api.base-url';
+const API_BASE_QUERY_PARAM = 'apiBaseUrl';
+
+function normalizeApiBaseUrl(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return '';
+    }
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/+$/, '');
+  } catch (error) {
+    return '';
+  }
+}
+
+function persistApiBaseUrl(value) {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      if (value) {
+        window.localStorage.setItem(API_BASE_STORAGE_KEY, value);
+      } else {
+        window.localStorage.removeItem(API_BASE_STORAGE_KEY);
+      }
+    }
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
+
+function resolveApiBaseUrl() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    const params = new URLSearchParams(window.location?.search || '');
+    if (params.has(API_BASE_QUERY_PARAM)) {
+      const queryOverride = normalizeApiBaseUrl(params.get(API_BASE_QUERY_PARAM) || '');
+      persistApiBaseUrl(queryOverride);
+      if (queryOverride) {
+        return queryOverride;
+      }
+    }
+  } catch (error) {
+    // Ignore query parsing issues.
+  }
+
+  const runtimeOverride = normalizeApiBaseUrl(window.__MSML_API_BASE_URL || '');
+  if (runtimeOverride) {
+    return runtimeOverride;
+  }
+
+  const metaOverride = normalizeApiBaseUrl(
+    document.querySelector('meta[name="msml-api-base-url"]')?.content || ''
+  );
+  if (metaOverride) {
+    return metaOverride;
+  }
+
+  try {
+    const stored = normalizeApiBaseUrl(window.localStorage?.getItem(API_BASE_STORAGE_KEY) || '');
+    if (stored) {
+      return stored;
+    }
+  } catch (error) {
+    // Ignore storage failures.
+  }
+
+  if (window.location?.protocol === 'file:') {
+    return 'http://localhost:4000';
+  }
+
+  return '';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+const nativeFetch =
+  typeof window !== 'undefined' && typeof window.fetch === 'function'
+    ? window.fetch.bind(window)
+    : null;
+
+function resolveApiRequestUrl(targetUrl) {
+  if (!API_BASE_URL || typeof targetUrl !== 'string') {
+    return targetUrl;
+  }
+
+  if (/^\/api(?:\/|$)/i.test(targetUrl)) {
+    return `${API_BASE_URL}${targetUrl}`;
+  }
+
+  return targetUrl;
+}
+
+function apiFetch(input, init) {
+  if (!nativeFetch) {
+    throw new Error('Fetch is unavailable in this browser.');
+  }
+
+  if (typeof input === 'string') {
+    return nativeFetch(resolveApiRequestUrl(input), init);
+  }
+
+  if (typeof URL !== 'undefined' && input instanceof URL) {
+    return nativeFetch(resolveApiRequestUrl(input.toString()), init);
+  }
+
+  if (typeof Request !== 'undefined' && input instanceof Request) {
+    const resolvedUrl = resolveApiRequestUrl(input.url);
+    if (resolvedUrl !== input.url) {
+      return nativeFetch(new Request(resolvedUrl, input), init);
+    }
+  }
+
+  return nativeFetch(input, init);
+}
+
+function destroyChartBoundToCanvas(canvas) {
+  if (!Chart || !canvas) {
+    return;
+  }
+
+  const candidates = new Set();
+  if (typeof Chart.getChart === 'function') {
+    const direct = Chart.getChart(canvas);
+    if (direct) {
+      candidates.add(direct);
+    }
+  }
+  const tracked = canvas.__msmlChartInstance;
+  if (tracked) {
+    candidates.add(tracked);
+  }
+  const registry = Chart.instances;
+  if (registry && typeof registry === 'object') {
+    const instances = Array.isArray(registry) ? registry : Object.values(registry);
+    instances.forEach((instance) => {
+      if (!instance) return;
+      if (instance.canvas === canvas || instance.ctx?.canvas === canvas) {
+        candidates.add(instance);
+      }
+    });
+  }
+
+  candidates.forEach((instance) => {
+    try {
+      instance.destroy();
+    } catch (error) {
+      console.warn('Unable to destroy stale chart instance.', error);
+    }
+  });
+
+  if (canvas.__msmlChartInstance) {
+    delete canvas.__msmlChartInstance;
+  }
+}
+
+function replaceCanvasElement(canvas) {
+  if (!canvas || !canvas.parentNode) {
+    return canvas;
+  }
+  const replacement = canvas.cloneNode(false);
+  replacement.width = canvas.width;
+  replacement.height = canvas.height;
+  replacement.className = canvas.className;
+  replacement.style.cssText = canvas.style.cssText;
+  canvas.parentNode.replaceChild(replacement, canvas);
+  return replacement;
+}
+
 function createChart(ctx, config) {
   if (!Chart) {
     if (!chartWarningShown) {
@@ -12,7 +207,47 @@ function createChart(ctx, config) {
     }
     return null;
   }
-  return new Chart(ctx, config);
+  const canvas = ctx?.canvas || ctx;
+  if (canvas) {
+    destroyChartBoundToCanvas(canvas);
+  }
+  try {
+    const chart = new Chart(ctx, config);
+    if (canvas) {
+      canvas.__msmlChartInstance = chart;
+    }
+    return chart;
+  } catch (error) {
+    const initialMessage = typeof error?.message === 'string' ? error.message : '';
+    if (canvas && initialMessage.includes('Canvas is already in use')) {
+      try {
+        destroyChartBoundToCanvas(canvas);
+        const recovered = new Chart(ctx, config);
+        canvas.__msmlChartInstance = recovered;
+        return recovered;
+      } catch (retryError) {
+        const retryMessage = typeof retryError?.message === 'string' ? retryError.message : '';
+        if (retryMessage.includes('Canvas is already in use')) {
+          try {
+            const replacementCanvas = replaceCanvasElement(canvas);
+            destroyChartBoundToCanvas(replacementCanvas);
+            const replacementCtx = replacementCanvas?.getContext?.('2d');
+            if (replacementCtx) {
+              const recovered = new Chart(replacementCtx, config);
+              replacementCanvas.__msmlChartInstance = recovered;
+              return recovered;
+            }
+          } catch (replacementError) {
+            console.warn('Unable to recover chart canvas after reuse conflict.', replacementError);
+          }
+        } else {
+          console.warn('Unable to recover chart after initial reuse conflict.', retryError);
+        }
+      }
+    }
+    console.warn('Skipping chart render due to Chart.js error.', error);
+    return null;
+  }
 }
 
 const SMART_CHART_MAX_VISIBLE_POINTS = 14;
@@ -364,6 +599,8 @@ const state = {
   nutritionEntryFilter: 'all',
   nutritionLogShouldScrollToTop: false,
   nutritionDeletingEntries: new Set(),
+  nutritionPhotoData: null,
+  nutritionPhotoPreparing: false,
   suggestionTimer: null,
   suggestionQuery: '',
   suggestions: [],
@@ -748,6 +985,13 @@ const nutritionScanButton = document.getElementById('nutritionScanButton');
 const nutritionScanStatus = document.getElementById('nutritionScanStatus');
 const nutritionScanPreviewWrapper = document.getElementById('nutritionScanPreviewWrapper');
 const nutritionScanPreview = document.getElementById('nutritionScanPreview');
+const nutritionPhotoInput = document.getElementById('nutritionPhotoInput');
+const nutritionPhotoButton = document.getElementById('nutritionPhotoButton');
+const nutritionPhotoClearButton = document.getElementById('nutritionPhotoClearButton');
+const nutritionPhotoStatus = document.getElementById('nutritionPhotoStatus');
+const nutritionPhotoPreviewWrapper = document.getElementById('nutritionPhotoPreviewWrapper');
+const nutritionPhotoPreview = document.getElementById('nutritionPhotoPreview');
+const nutritionPhotoDropZone = document.getElementById('nutritionPhotoDropZone');
 const macroTargetToggleButton = document.getElementById('macroTargetToggle');
 const macroTargetForm = document.getElementById('macroTargetForm');
 const macroTargetDateInput = document.getElementById('macroTargetDate');
@@ -938,6 +1182,199 @@ function setProfileAvatarPreview(src) {
   if (profileAvatarFallback) {
     profileAvatarFallback.classList.toggle('hidden', Boolean(src));
   }
+}
+
+function normalizeBase64ImageData(data) {
+  if (typeof data !== 'string') {
+    return '';
+  }
+  const trimmed = data.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.startsWith('data:image')) {
+    return trimmed.split(',').pop() || '';
+  }
+  return trimmed;
+}
+
+function isHeicLikeFile(file) {
+  const mime = String(file?.type || '').toLowerCase();
+  const name = String(file?.name || '').toLowerCase();
+  return (
+    mime.includes('heic') ||
+    mime.includes('heif') ||
+    name.endsWith('.heic') ||
+    name.endsWith('.heif')
+  );
+}
+
+function canTranscodeNutritionPhoto() {
+  return (
+    typeof document !== 'undefined' &&
+    typeof document.createElement === 'function' &&
+    typeof Image !== 'undefined'
+  );
+}
+
+async function transcodeNutritionPhotoDataUrl(dataUrl, { maxDimension = 1600, quality = 0.86 } = {}) {
+  if (typeof dataUrl !== 'string' || !dataUrl.trim().startsWith('data:image/')) {
+    return normalizeBase64ImageData(dataUrl);
+  }
+  if (!canTranscodeNutritionPhoto()) {
+    return normalizeBase64ImageData(dataUrl);
+  }
+
+  const image = new Image();
+  image.decoding = 'async';
+  await new Promise((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error('image-load-failed'));
+    image.src = dataUrl;
+  });
+
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0) {
+    return normalizeBase64ImageData(dataUrl);
+  }
+
+  const targetMax = Number.isFinite(maxDimension) && maxDimension > 0 ? maxDimension : 1600;
+  const scale = Math.min(1, targetMax / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    return normalizeBase64ImageData(dataUrl);
+  }
+  context.drawImage(image, 0, 0, width, height);
+
+  const normalizedQuality =
+    Number.isFinite(quality) && quality > 0 && quality <= 1 ? Number(quality) : 0.86;
+  const convertedDataUrl = canvas.toDataURL('image/jpeg', normalizedQuality);
+  const converted = normalizeBase64ImageData(convertedDataUrl);
+  return converted || normalizeBase64ImageData(dataUrl);
+}
+
+function getNutritionPhotoDataUri(photoData) {
+  const normalized = normalizeBase64ImageData(photoData);
+  if (!normalized) {
+    return null;
+  }
+  const mime = detectBase64ImageMime(normalized);
+  return `data:${mime};base64,${normalized}`;
+}
+
+function setNutritionPhotoStatus(message = '', { isError = false } = {}) {
+  if (!nutritionPhotoStatus) return;
+  const nextMessage = message || DEFAULT_NUTRITION_PHOTO_STATUS;
+  nutritionPhotoStatus.textContent = nextMessage;
+  nutritionPhotoStatus.classList.toggle('error', Boolean(isError));
+}
+
+function renderNutritionPhotoPreview() {
+  const photoUri = getNutritionPhotoDataUri(state.nutritionPhotoData);
+  if (nutritionPhotoPreview) {
+    if (photoUri) {
+      nutritionPhotoPreview.src = photoUri;
+      nutritionPhotoPreview.classList.remove('hidden');
+    } else {
+      nutritionPhotoPreview.removeAttribute('src');
+      nutritionPhotoPreview.classList.add('hidden');
+    }
+  }
+  nutritionPhotoPreviewWrapper?.classList.toggle('hidden', !photoUri);
+  nutritionPhotoClearButton?.classList.toggle('hidden', !photoUri);
+}
+
+function clearNutritionPhotoSelection({ keepStatus = false } = {}) {
+  state.nutritionPhotoData = null;
+  state.nutritionPhotoPreparing = false;
+  if (nutritionPhotoInput) {
+    nutritionPhotoInput.value = '';
+  }
+  renderNutritionPhotoPreview();
+  if (!keepStatus) {
+    setNutritionPhotoStatus('');
+  }
+  toggleNutritionPhotoDropZone(false);
+}
+
+function processNutritionPhotoFile(file) {
+  if (!file) return;
+  if (!canModifyOwnNutrition()) {
+    setNutritionPhotoStatus('Switch back to your profile to import meal photos.', { isError: true });
+    return;
+  }
+  if (!String(file.type || '').startsWith('image/')) {
+    clearNutritionPhotoSelection({ keepStatus: true });
+    setNutritionPhotoStatus('Choose a valid image file.', { isError: true });
+    return;
+  }
+  if (isHeicLikeFile(file)) {
+    clearNutritionPhotoSelection({ keepStatus: true });
+    setNutritionPhotoStatus('HEIC/HEIF photos are not supported here. Convert to JPG or PNG first.', {
+      isError: true,
+    });
+    return;
+  }
+  if (file.size > MAX_NUTRITION_PHOTO_BYTES) {
+    clearNutritionPhotoSelection({ keepStatus: true });
+    setNutritionPhotoStatus('Meal photo must be smaller than 12 MB.', { isError: true });
+    return;
+  }
+  state.nutritionPhotoPreparing = true;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = typeof reader.result === 'string' ? reader.result : '';
+    void (async () => {
+      const normalized = normalizeBase64ImageData(result);
+      if (!normalized) {
+        clearNutritionPhotoSelection({ keepStatus: true });
+        setNutritionPhotoStatus('Could not read photo. Try another file.', { isError: true });
+        return;
+      }
+      let prepared = normalized;
+      try {
+        setNutritionPhotoStatus('Preparing meal photo...');
+        prepared = await transcodeNutritionPhotoDataUrl(result, {
+          maxDimension: 1600,
+          quality: 0.86,
+        });
+      } catch (error) {
+        prepared = normalized;
+      } finally {
+        state.nutritionPhotoPreparing = false;
+      }
+      state.nutritionPhotoData = prepared || normalized;
+      renderNutritionPhotoPreview();
+      setNutritionPhotoStatus('Meal photo ready. Submit to analyze and log food items.');
+    })();
+  };
+  reader.onerror = () => {
+    clearNutritionPhotoSelection({ keepStatus: true });
+    setNutritionPhotoStatus('Could not read photo. Try another file.', { isError: true });
+  };
+  reader.readAsDataURL(file);
+}
+
+function handleNutritionPhotoUpload(event) {
+  processNutritionPhotoFile(event?.target?.files?.[0]);
+}
+
+function toggleNutritionPhotoDropZone(isDragging) {
+  nutritionPhotoDropZone?.classList.toggle('dragging', Boolean(isDragging));
+}
+
+function handleNutritionPhotoDrop(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleNutritionPhotoDropZone(false);
+  const file = event?.dataTransfer?.files?.[0];
+  processNutritionPhotoFile(file);
 }
 
 function scrubSensitiveQueryParams() {
@@ -2534,6 +2971,62 @@ function clearSuggestions() {
   }
 }
 
+function normalizePhotoDetectedFoods(photoAnalysis, { minConfidence = 0.08, maxItems = 6 } = {}) {
+  const source = Array.isArray(photoAnalysis?.detectedFoods)
+    ? photoAnalysis.detectedFoods
+    : Array.isArray(photoAnalysis?.topMatches)
+      ? photoAnalysis.topMatches
+      : [];
+  const foods = [];
+  const seen = new Set();
+  source.forEach((entry, index) => {
+    if (foods.length >= maxItems) {
+      return;
+    }
+    const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+    if (!name) {
+      return;
+    }
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    const confidenceRaw = Number(entry?.confidence);
+    const confidence =
+      Number.isFinite(confidenceRaw) && confidenceRaw >= 0 && confidenceRaw <= 1
+        ? Number(confidenceRaw.toFixed(4))
+        : null;
+    if (confidence !== null && confidence < minConfidence) {
+      return;
+    }
+    seen.add(key);
+    foods.push({
+      id: `photo-${index}-${key.replace(/\s+/g, '-')}`,
+      name,
+      confidence,
+    });
+  });
+  return foods;
+}
+
+function applyPhotoDetectedSuggestions(foods = []) {
+  state.suggestions = foods.map((food) => ({
+    id: food.id,
+    name: food.name,
+    source: 'Photo analysis',
+    serving:
+      Number.isFinite(food.confidence) && food.confidence >= 0
+        ? `${Math.round(food.confidence * 100)}% confidence`
+        : 'Detected from photo',
+  }));
+  state.activeSuggestionIndex = -1;
+  renderSuggestions();
+  if (nutritionNameInput && !nutritionNameInput.value.trim() && foods[0]?.name) {
+    nutritionNameInput.value = foods[0].name;
+    maybeAutoSelectLiquid(foods[0].name);
+  }
+}
+
 function renderSuggestions() {
   if (!nutritionSuggestions) return;
   nutritionSuggestions.innerHTML = '';
@@ -2834,6 +3327,12 @@ function updateNutritionFormVisibility() {
   }
   if (!ownsProfile && nutritionFeedback) {
     nutritionFeedback.textContent = '';
+  }
+  if (!ownsProfile) {
+    clearNutritionPhotoSelection({ keepStatus: true });
+    setNutritionPhotoStatus('Switch back to your profile to import meal photos.');
+  } else if (!state.nutritionPhotoData) {
+    setNutritionPhotoStatus('');
   }
   if (!ownsProfile) {
     stopBarcodeScan({
@@ -3381,6 +3880,8 @@ const LIQUID_KEYWORDS = [
   'flavored water',
 ];
 const POUNDS_PER_KG = 2.2046226218;
+const MAX_NUTRITION_PHOTO_BYTES = 12 * 1024 * 1024;
+const DEFAULT_NUTRITION_PHOTO_STATUS = nutritionPhotoStatus?.textContent || '';
 
 const resolveRoleLabel = (role = '') => {
   const key = role?.toString().trim().toLowerCase();
@@ -3488,7 +3989,7 @@ async function lookupNutritionFromApi() {
     } else if (query) {
       params.set('q', query);
     }
-    const response = await fetch(`/api/nutrition/lookup?${params.toString()}`, {
+    const response = await apiFetch(`/api/nutrition/lookup?${params.toString()}`, {
       headers: { Authorization: `Bearer ${state.token}` },
     });
     const payload = await response.json().catch(() => null);
@@ -3574,7 +4075,7 @@ function scheduleSuggestionFetch() {
   state.suggestionTimer = setTimeout(async () => {
     const activeQuery = state.suggestionQuery;
     try {
-      const response = await fetch(`/api/nutrition/search?q=${encodeURIComponent(query)}`, {
+      const response = await apiFetch(`/api/nutrition/search?q=${encodeURIComponent(query)}`, {
         headers: { Authorization: `Bearer ${state.token}` },
       });
       const payload = await response.json().catch(() => null);
@@ -3616,7 +4117,7 @@ async function deleteNutritionEntry(entryId) {
     nutritionFeedback.textContent = 'Removing item...';
   }
   try {
-    const response = await fetch(`/api/nutrition/${entryId}`, {
+    const response = await apiFetch(`/api/nutrition/${entryId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${state.token}` },
     });
@@ -3883,7 +4384,7 @@ async function submitAdminAction({ endpoint, method = 'POST', body, pending, suc
   if (!state.token) return;
   setAdminFeedback(pending);
   try {
-    const response = await fetch(endpoint, {
+    const response = await apiFetch(endpoint, {
       method,
       headers: {
         Authorization: `Bearer ${state.token}`,
@@ -4067,7 +4568,7 @@ async function loadCoachDirectory(force = false) {
   shareCoachSelect.innerHTML = '<option value="">Loading coaches...</option>';
 
   try {
-    const response = await fetch('/api/share/coaches', {
+    const response = await apiFetch('/api/share/coaches', {
       headers: {
         Authorization: `Bearer ${state.token}`,
       },
@@ -4151,7 +4652,7 @@ function renderCoachPanel() {
 async function fetchRoster() {
   if (!coachPanel) return;
   try {
-    const response = await fetch('/api/athletes', {
+    const response = await apiFetch('/api/athletes', {
       headers: { Authorization: `Bearer ${state.token}` },
     });
     if (!response.ok) {
@@ -4518,7 +5019,7 @@ shareForm?.addEventListener('submit', async (event) => {
 
   shareFeedback.textContent = 'Sending access...';
   try {
-    const response = await fetch('/api/share', {
+    const response = await apiFetch('/api/share', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -4550,6 +5051,27 @@ nutritionScanButton?.addEventListener('click', () => {
   }
   startBarcodeScan();
 });
+nutritionPhotoButton?.addEventListener('click', () => nutritionPhotoInput?.click());
+nutritionPhotoInput?.addEventListener('change', handleNutritionPhotoUpload);
+nutritionPhotoClearButton?.addEventListener('click', () => clearNutritionPhotoSelection());
+nutritionPhotoDropZone?.addEventListener('dragenter', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleNutritionPhotoDropZone(true);
+});
+nutritionPhotoDropZone?.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleNutritionPhotoDropZone(true);
+});
+nutritionPhotoDropZone?.addEventListener('dragleave', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleNutritionPhotoDropZone(false);
+});
+nutritionPhotoDropZone?.addEventListener('drop', handleNutritionPhotoDrop);
+renderNutritionPhotoPreview();
+setNutritionPhotoStatus('');
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && barcodeScanState.active) {
@@ -4700,9 +5222,14 @@ nutritionForm?.addEventListener('submit', async (event) => {
   const barcode = nutritionBarcodeInput?.value.trim();
   const type = nutritionTypeSelect?.value || 'Food';
   const caloriesValue = Number.parseInt(nutritionCaloriesInput?.value, 10);
+  const photoData = state.nutritionPhotoData;
+  if (state.nutritionPhotoPreparing) {
+    nutritionFeedback.textContent = 'Preparing photo. Please wait a moment and submit again.';
+    return;
+  }
 
-  if (!name && !barcode) {
-    nutritionFeedback.textContent = 'Provide a name or barcode.';
+  if (!name && !barcode && !photoData) {
+    nutritionFeedback.textContent = 'Provide a name, barcode, or meal photo.';
     return;
   }
 
@@ -4711,6 +5238,9 @@ nutritionForm?.addEventListener('submit', async (event) => {
     barcode,
     type,
   };
+  if (photoData) {
+    payload.photoData = photoData;
+  }
   const activeDate = getActiveNutritionDate();
   if (activeDate) {
     payload.date = activeDate;
@@ -4731,25 +5261,87 @@ nutritionForm?.addEventListener('submit', async (event) => {
   if (carbValue > 0) payload.carbs = carbValue;
   if (fatValue > 0) payload.fats = fatValue;
 
-  nutritionFeedback.textContent = 'Logging item...';
+  nutritionFeedback.textContent =
+    photoData && !name && !barcode ? 'Analyzing meal photo...' : 'Logging item...';
   try {
-    const response = await fetch('/api/nutrition', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${state.token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const result = await response.json().catch(() => null);
+    const postNutrition = async (requestPayload) => {
+      const response = await apiFetch('/api/nutrition', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${state.token}`,
+        },
+        body: JSON.stringify(requestPayload),
+      });
+      const result = await response.json().catch(() => null);
+      return { response, result };
+    };
+
+    let { response, result } = await postNutrition(payload);
+    if (
+      (!response.ok || !result) &&
+      response.status === 422 &&
+      result?.code === 'PHOTO_ANALYSIS_UNCERTAIN' &&
+      photoData
+    ) {
+      const detectedFoods = normalizePhotoDetectedFoods(result?.photoAnalysis);
+      applyPhotoDetectedSuggestions(detectedFoods);
+      const autoItems = detectedFoods
+        .filter((item) => item.confidence === null || item.confidence >= 0.12)
+        .slice(0, 4);
+      if (autoItems.length >= 2) {
+        nutritionFeedback.textContent = 'Multiple foods detected. Logging detected items...';
+        const multiPayload = {
+          type,
+          date: activeDate,
+          photoData,
+          items: autoItems.map((item) => ({
+            name: item.name,
+            type,
+          })),
+        };
+        const retry = await postNutrition(multiPayload);
+        if (retry.response.ok && retry.result) {
+          response = retry.response;
+          result = retry.result;
+        } else {
+          nutritionFeedback.textContent =
+            result?.message ||
+            retry.result?.message ||
+            'Meal photo result is uncertain. Pick a suggestion or edit the name.';
+          setNutritionPhotoStatus(
+            'Photo is uncertain. Suggestions are shown; select one or edit and submit again.'
+          );
+          return;
+        }
+      } else {
+        nutritionFeedback.textContent =
+          result?.message || 'Meal photo result is uncertain. Pick a suggestion or edit the name.';
+        setNutritionPhotoStatus(
+          'Photo is uncertain. Suggestions are shown; select one or edit and submit again.'
+        );
+        return;
+      }
+    }
+
     if (!response.ok || !result) {
-      throw new Error(result?.message || 'Unable to log that item.');
+      const fallback = `Unable to log that item (HTTP ${response.status || 'unknown'}).`;
+      const detail = result?.message || fallback;
+      const codeSuffix = result?.code ? ` [${result.code}]` : '';
+      throw new Error(`${detail}${codeSuffix}`);
     }
     const note = result.autoLookup ? ' (nutrition estimated automatically)' : '';
-    nutritionFeedback.textContent = `${result.message}${note}`;
+    const detectedName = result.photoAnalysis?.name ? ` Detected: ${result.photoAnalysis.name}.` : '';
+    nutritionFeedback.textContent = `${result.message}${note}${detectedName}`;
     nutritionForm.reset();
     if (nutritionTypeSelect) {
       nutritionTypeSelect.value = 'Food';
+    }
+    clearNutritionPhotoSelection({ keepStatus: true });
+    if (result.photoAnalysis?.name) {
+      setNutritionPhotoStatus(`Detected and logged: ${result.photoAnalysis.name}.`);
+    } else {
+      setNutritionPhotoStatus('');
     }
     state.nutritionAmountBaseline = null;
     state.nutritionMacroReference = null;
@@ -4763,12 +5355,16 @@ nutritionForm?.addEventListener('submit', async (event) => {
     clearSuggestions();
   } catch (error) {
     nutritionFeedback.textContent = error.message;
+    if (photoData) {
+      setNutritionPhotoStatus(error.message, { isError: true });
+    }
   }
 });
 
 nutritionClearButton?.addEventListener('click', () => {
   stopBarcodeScan();
   nutritionForm?.reset();
+  clearNutritionPhotoSelection();
   clearSuggestions();
   if (nutritionTypeSelect) {
     nutritionTypeSelect.value = 'Food';
@@ -4851,7 +5447,7 @@ macroTargetForm?.addEventListener('submit', async (event) => {
   }
 
   try {
-    const response = await fetch('/api/nutrition/macros', {
+    const response = await apiFetch('/api/nutrition/macros', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -4905,7 +5501,7 @@ forgotForm?.addEventListener('submit', async (event) => {
   }
   if (forgotFeedback) forgotFeedback.textContent = 'Notifying the head coach...';
   try {
-    const response = await fetch('/api/password/forgot', {
+    const response = await apiFetch('/api/password/forgot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
@@ -4946,7 +5542,7 @@ profileForm?.addEventListener('submit', async (event) => {
   profileFeedback.textContent = 'Saving changes...';
 
   try {
-    const response = await fetch('/api/profile', {
+    const response = await apiFetch('/api/profile', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -5038,7 +5634,7 @@ async function handleLogout(event) {
   }
 
   try {
-    await fetch('/api/login/logout', {
+    await apiFetch('/api/login/logout', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${state.token}`,
@@ -5060,7 +5656,7 @@ loginForm?.addEventListener('submit', async (event) => {
   loginFeedback.textContent = 'Signing you in...';
 
   try {
-    const response = await fetch('/api/login', {
+    const response = await apiFetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -5075,7 +5671,10 @@ loginForm?.addEventListener('submit', async (event) => {
     loginFeedback.textContent = '';
     await completeAuthentication(payload);
   } catch (error) {
-    loginFeedback.textContent = error.message;
+    loginFeedback.textContent = resolveRequestErrorMessage(
+      error,
+      'Unable to sign in right now.'
+    );
   }
 });
 
@@ -5092,7 +5691,7 @@ signupForm?.addEventListener('submit', async (event) => {
   }
 
   try {
-    const response = await fetch('/api/signup', {
+    const response = await apiFetch('/api/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, email, password, avatar }),
@@ -5110,7 +5709,10 @@ signupForm?.addEventListener('submit', async (event) => {
     await completeAuthentication(payload);
   } catch (error) {
     if (signupFeedback) {
-      signupFeedback.textContent = error.message;
+      signupFeedback.textContent = resolveRequestErrorMessage(
+        error,
+        'Unable to create your account right now.'
+      );
     }
   }
 });
@@ -5120,101 +5722,109 @@ async function loadMetrics(subjectOverrideId) {
   const targetId = subjectOverrideId ?? state.viewing?.id ?? state.user.id;
   const query =
     targetId && targetId !== state.user.id ? `?athleteId=${encodeURIComponent(targetId)}` : '';
+  try {
+    const response = await apiFetch(`/api/metrics${query}`, {
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+      },
+    });
 
-  const response = await fetch(`/api/metrics${query}`, {
-    headers: {
-      Authorization: `Bearer ${state.token}`,
-    },
-  });
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      resetToAuth('Session expired. Please log in again.');
-    } else if (response.status === 403) {
-      handleAthleteSelection('self');
-      if (loginFeedback) {
-        loginFeedback.textContent = 'Access revoked for that athlete.';
+    if (!response.ok) {
+      if (response.status === 401) {
+        resetToAuth('Session expired. Please log in again.');
+      } else if (response.status === 403) {
+        handleAthleteSelection('self');
+        if (loginFeedback) {
+          loginFeedback.textContent = 'Access revoked for that athlete.';
+        }
+      } else if (response.status === 404) {
+        handleAthleteSelection('self');
+        if (loginFeedback) {
+          loginFeedback.textContent = 'That athlete is no longer available.';
+        }
+      } else if (loginFeedback) {
+        loginFeedback.textContent = 'Unable to fetch metrics.';
       }
-    } else if (response.status === 404) {
-      handleAthleteSelection('self');
-      if (loginFeedback) {
-        loginFeedback.textContent = 'That athlete is no longer available.';
+      return;
+    }
+
+    const metrics = await response.json();
+    if (metrics.subject) {
+      updateSubjectContext(metrics.subject);
+      if (metrics.subject.id !== state.user.id) {
+        state.viewing = metrics.subject;
+        highlightRanking(metrics.subject.id);
+      } else {
+        highlightRanking(null);
       }
-    } else if (loginFeedback) {
-      loginFeedback.textContent = 'Unable to fetch metrics.';
+    } else if (state.viewing) {
+      updateSubjectContext(state.viewing);
     }
-    return;
-  }
-
-  const metrics = await response.json();
-  if (metrics.subject) {
-    updateSubjectContext(metrics.subject);
-    if (metrics.subject.id !== state.user.id) {
-      state.viewing = metrics.subject;
-      highlightRanking(metrics.subject.id);
-    } else {
-      highlightRanking(null);
+    state.hydrationEntries = Array.isArray(metrics.hydration) ? metrics.hydration.slice() : [];
+    const resolvedGoalSleep =
+      metrics.subject?.goal_sleep ??
+      state.subject?.goal_sleep ??
+      state.viewing?.goal_sleep ??
+      state.user?.goal_sleep ??
+      null;
+    const numericGoalSleep = Number(resolvedGoalSleep);
+    const activeSleepGoal = Number.isFinite(numericGoalSleep) ? numericGoalSleep : 8;
+    if (sleepGoalInput) {
+      sleepGoalInput.value = activeSleepGoal.toFixed(1);
     }
-  } else if (state.viewing) {
-    updateSubjectContext(state.viewing);
-  }
-  state.hydrationEntries = Array.isArray(metrics.hydration) ? metrics.hydration.slice() : [];
-  const resolvedGoalSleep =
-    metrics.subject?.goal_sleep ??
-    state.subject?.goal_sleep ??
-    state.viewing?.goal_sleep ??
-    state.user?.goal_sleep ??
-    null;
-  const numericGoalSleep = Number(resolvedGoalSleep);
-  const activeSleepGoal = Number.isFinite(numericGoalSleep) ? numericGoalSleep : 8;
-  if (sleepGoalInput) {
-    sleepGoalInput.value = activeSleepGoal.toFixed(1);
-  }
-  const resolvedGoalSteps =
-    metrics.subject?.goal_steps ??
-    state.subject?.goal_steps ??
-    state.viewing?.goal_steps ??
-    state.user?.goal_steps ??
-    null;
-  const resolvedGoalCalories =
-    metrics.subject?.goal_calories ??
-    state.subject?.goal_calories ??
-    state.viewing?.goal_calories ??
-    state.user?.goal_calories ??
-    null;
-  const goalStepsValue = Number.isFinite(Number(resolvedGoalSteps))
-    ? Number(resolvedGoalSteps)
-    : null;
-  const goalCaloriesValue = Number.isFinite(Number(resolvedGoalCalories))
-    ? Number(resolvedGoalCalories)
-    : null;
+    const resolvedGoalSteps =
+      metrics.subject?.goal_steps ??
+      state.subject?.goal_steps ??
+      state.viewing?.goal_steps ??
+      state.user?.goal_steps ??
+      null;
+    const resolvedGoalCalories =
+      metrics.subject?.goal_calories ??
+      state.subject?.goal_calories ??
+      state.viewing?.goal_calories ??
+      state.user?.goal_calories ??
+      null;
+    const goalStepsValue = Number.isFinite(Number(resolvedGoalSteps))
+      ? Number(resolvedGoalSteps)
+      : null;
+    const goalCaloriesValue = Number.isFinite(Number(resolvedGoalCalories))
+      ? Number(resolvedGoalCalories)
+      : null;
 
-  state.overview.summary = metrics.summary || null;
-  state.overview.timeline = Array.isArray(metrics.timeline) ? metrics.timeline : [];
-  state.overview.sleepStages = metrics.sleepStages || null;
-  state.overview.goals = {
-    steps: goalStepsValue,
-    calories: goalCaloriesValue,
-    sleep: activeSleepGoal,
-  };
+    state.overview.summary = metrics.summary || null;
+    state.overview.timeline = Array.isArray(metrics.timeline) ? metrics.timeline : [];
+    state.overview.sleepStages = metrics.sleepStages || null;
+    state.overview.goals = {
+      steps: goalStepsValue,
+      calories: goalCaloriesValue,
+      sleep: activeSleepGoal,
+    };
 
-  renderSummary(state.overview.summary, {
-    goalSteps: goalStepsValue,
-    goalCalories: goalCaloriesValue,
-    goalSleep: activeSleepGoal,
-  });
-  renderHydration(state.hydrationEntries);
-  renderHeartRate(metrics.heartRateZones);
-  renderSleepOverview(metrics.sleepStages);
-  renderSleepDetails({
-    summary: state.overview.summary,
-    timeline: state.overview.timeline,
-    sleepStages: state.overview.sleepStages,
-    goalSleep: activeSleepGoal,
-  });
-  renderSessions(state.activity.sessions);
-  renderNutritionDetails(metrics.macros, state.hydrationEntries);
-  updateCharts(metrics);
+    renderSummary(state.overview.summary, {
+      goalSteps: goalStepsValue,
+      goalCalories: goalCaloriesValue,
+      goalSleep: activeSleepGoal,
+    });
+    renderHydration(state.hydrationEntries);
+    renderHeartRate(metrics.heartRateZones);
+    renderSleepOverview(metrics.sleepStages);
+    renderSleepDetails({
+      summary: state.overview.summary,
+      timeline: state.overview.timeline,
+      sleepStages: state.overview.sleepStages,
+      goalSleep: activeSleepGoal,
+    });
+    renderSessions(state.activity.sessions);
+    renderNutritionDetails(metrics.macros, state.hydrationEntries);
+    updateCharts(metrics);
+  } catch (error) {
+    if (loginFeedback) {
+      loginFeedback.textContent = resolveRequestErrorMessage(
+        error,
+        'Unable to fetch metrics right now.'
+      );
+    }
+  }
 }
 
 async function loadNutrition(subjectOverrideId, options = {}) {
@@ -5237,7 +5847,7 @@ async function loadNutrition(subjectOverrideId, options = {}) {
   const query = params.toString() ? `?${params.toString()}` : '';
 
   try {
-    const response = await fetch(`/api/nutrition${query}`, {
+    const response = await apiFetch(`/api/nutrition${query}`, {
       headers: {
         Authorization: `Bearer ${state.token}`,
       },
@@ -5327,7 +5937,7 @@ async function loadActivity(subjectOverrideId) {
     targetId && targetId !== state.user.id ? `?athleteId=${encodeURIComponent(targetId)}` : '';
 
   try {
-    const response = await fetch(`/api/activity${query}`, {
+    const response = await apiFetch(`/api/activity${query}`, {
       headers: {
         Authorization: `Bearer ${state.token}`,
       },
@@ -5401,7 +6011,7 @@ async function loadVitals(subjectOverrideId) {
     targetId && targetId !== state.user.id ? `?athleteId=${encodeURIComponent(targetId)}` : '';
 
   try {
-    const response = await fetch(`/api/vitals${query}`, {
+    const response = await apiFetch(`/api/vitals${query}`, {
       headers: {
         Authorization: `Bearer ${state.token}`,
       },
@@ -5459,7 +6069,7 @@ async function loadWeight(subjectOverrideId) {
     targetId && targetId !== state.user.id ? `?athleteId=${encodeURIComponent(targetId)}` : '';
 
   try {
-    const response = await fetch(`/api/weight${query}`, {
+    const response = await apiFetch(`/api/weight${query}`, {
       headers: {
         Authorization: `Bearer ${state.token}`,
       },
@@ -5519,7 +6129,7 @@ async function handleStravaConnect(event) {
     stravaFeedback.textContent = 'Opening Strava...';
   }
   try {
-    const response = await fetch('/api/activity/strava/connect', {
+    const response = await apiFetch('/api/activity/strava/connect', {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.token}` },
     });
@@ -5549,7 +6159,7 @@ async function handleStravaSync(event) {
     stravaFeedback.textContent = 'Syncing Strava...';
   }
   try {
-    const response = await fetch('/api/activity/strava/sync', {
+    const response = await apiFetch('/api/activity/strava/sync', {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.token}` },
     });
@@ -5616,7 +6226,7 @@ async function handleStravaExportSelectedSession(event) {
   }
 
   try {
-    const response = await fetch('/api/activity/strava/export', {
+    const response = await apiFetch('/api/activity/strava/export', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${state.token}`,
@@ -5649,7 +6259,7 @@ async function handleStravaDisconnect(event) {
     stravaFeedback.textContent = 'Disconnecting Strava...';
   }
   try {
-    const response = await fetch('/api/activity/strava/disconnect', {
+    const response = await apiFetch('/api/activity/strava/disconnect', {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.token}` },
     });
@@ -5702,7 +6312,7 @@ async function handleWeightSubmit(event) {
   }
 
   try {
-    const response = await fetch('/api/weight', {
+    const response = await apiFetch('/api/weight', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -5744,7 +6354,7 @@ async function handleWeightDelete(entryId, trigger) {
   }
 
   try {
-    const response = await fetch(`/api/weight/${entryId}`, {
+    const response = await apiFetch(`/api/weight/${entryId}`, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${state.token}`,

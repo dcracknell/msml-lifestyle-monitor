@@ -89,6 +89,17 @@ export const createNutritionEntryRequest = (payload: {
   weightUnit?: string;
   date?: string;
   photoData?: string;
+  items?: Array<{
+    name?: string;
+    barcode?: string;
+    type?: 'Food' | 'Liquid';
+    calories?: number;
+    protein?: number;
+    carbs?: number;
+    fats?: number;
+    weightAmount?: number;
+    weightUnit?: string;
+  }>;
 }) => apiClient.post<MessageResponse>('/api/nutrition', payload);
 
 export const deleteNutritionEntryRequest = (entryId: number) =>

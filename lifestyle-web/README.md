@@ -97,6 +97,12 @@ npm run dev
 ```
 The server reads environment variables from `.env` (copy from `.env.example`). By default it listens on `http://localhost:4000` and hot-reloads backend + frontend assets.
 
+If you open the dashboard from a different origin (or `file://`), set the API target once with a query parameter:
+```text
+http://<dashboard-host>/?apiBaseUrl=http://localhost:4000
+```
+The client stores that value in `localStorage` under `msml.api.base-url` and reuses it for future requests (including `/bluetooth.html`).
+
 ## Configuration
 | Name | Description | Default |
 | --- | --- | --- |
@@ -114,10 +120,15 @@ The server reads environment variables from `.env` (copy from `.env.example`). B
 | `DB_STORAGE_DIR` | Optional override for writable SQLite directory | `./database/storage` |
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
 | `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference | `python` |
-| `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/predict.py` |
+| `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/nut_estimator.py` |
 | `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/canet_NUT.pth` |
-| `NUT_MODEL_LABELS` | Path to the FoodSeg103 label map JSON | `./server/NUT_model/foodseg103_labels.json` |
+| `NUT_MODEL_LABELS` | Optional path to a custom FoodSeg103 label map JSON (built-in labels are used if omitted) | — |
 | `NUT_MODEL_TIMEOUT_MS` | Max server wait for meal photo inference | `15000` |
+| `NUT_MODEL_MAX_PHOTO_BASE64_LENGTH` | Max accepted base64 photo payload length for `/api/nutrition` | `12582912` |
+| `NUT_MODEL_MIN_CONFIDENCE` | Minimum confidence required for most auto photo labels | `0.60` |
+| `NUT_MODEL_STRICT_MIN_CONFIDENCE` | Higher confidence floor for commonly confused baked/bread classes (toast, croissant, etc.) | `0.70` |
+| `NUT_MODEL_MULTI_MIN_CONFIDENCE` | Minimum confidence for secondary `detectedFoods` candidates returned by the model | `0.08` |
+| `NUT_MODEL_MULTI_MAX_ITEMS` | Max number of `detectedFoods` candidates returned by the model | `6` |
 | `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach password baked into the SQL seed | `Password` |
 | `COACH_SEED_PASSWORD` | Optional override for the coach password baked into the SQL seed | `Password` |
 | `ATHLETE_SEED_PASSWORD` | Optional override for the athlete password baked into the SQL seed | `Password` |
@@ -175,7 +186,29 @@ cd lifestyle-web/server
 python -m pip install -r NUT_model/requirements.txt
 npm run check:nut-model
 ```
-Keep `NUT_model/canet_NUT.pth`, `NUT_model/predict.py`, and `NUT_model/foodseg103_labels.json` together, or point the `NUT_MODEL_*` environment variables at your custom locations. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
+To run inference on a single test image (and verify the model is reading your files correctly), use:
+```bash
+cd lifestyle-web/server
+NUT_model/.venv/bin/python NUT_model/nut_estimator.py \
+  --image /path/to/test-image.jpg \
+  --model NUT_model/canet_NUT.pth
+```
+
+Keep `NUT_model/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, built-in FoodSeg103 labels are used. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
+
+If a single photo contains multiple foods, `/api/nutrition` also accepts an `items` array so one request can log multiple entries from the same image. Example payload:
+```json
+{
+  "date": "2030-01-05",
+  "photoData": "<base64>",
+  "items": [
+    { "name": "Fish", "calories": 220, "protein": 30, "carbs": 0, "fats": 9, "weightAmount": 150, "weightUnit": "g" },
+    { "name": "Peas", "calories": 84, "protein": 5, "carbs": 15, "fats": 0, "weightAmount": 120, "weightUnit": "g" }
+  ]
+}
+```
+
+When the model is uncertain, the route returns `422 PHOTO_ANALYSIS_UNCERTAIN` with `photoAnalysis.detectedFoods` suggestions so clients can prompt for confirmation instead of logging a bad guess.
 
 You can also verify readiness through the API after signing in:
 ```bash

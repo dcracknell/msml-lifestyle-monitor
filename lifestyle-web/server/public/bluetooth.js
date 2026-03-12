@@ -2,6 +2,125 @@ const SESSION_STORAGE_KEY = 'msml:lifestyle:session';
 const FLUSH_INTERVAL_MS = 2500;
 const MIN_FLUSH_SAMPLES = 10;
 const LOCAL_BATCH_LIMIT = 400;
+const API_BASE_STORAGE_KEY = 'msml.api.base-url';
+const API_BASE_QUERY_PARAM = 'apiBaseUrl';
+
+function normalizeApiBaseUrl(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return '';
+    }
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/+$/, '');
+  } catch (error) {
+    return '';
+  }
+}
+
+function resolveApiBaseUrl() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    const params = new URLSearchParams(window.location?.search || '');
+    if (params.has(API_BASE_QUERY_PARAM)) {
+      const queryOverride = normalizeApiBaseUrl(params.get(API_BASE_QUERY_PARAM) || '');
+      try {
+        if (window.localStorage) {
+          if (queryOverride) {
+            window.localStorage.setItem(API_BASE_STORAGE_KEY, queryOverride);
+          } else {
+            window.localStorage.removeItem(API_BASE_STORAGE_KEY);
+          }
+        }
+      } catch (error) {
+        // Ignore storage failures.
+      }
+      if (queryOverride) {
+        return queryOverride;
+      }
+    }
+  } catch (error) {
+    // Ignore query parsing errors.
+  }
+
+  const runtimeOverride = normalizeApiBaseUrl(window.__MSML_API_BASE_URL || '');
+  if (runtimeOverride) {
+    return runtimeOverride;
+  }
+
+  const metaOverride = normalizeApiBaseUrl(
+    document.querySelector('meta[name="msml-api-base-url"]')?.content || ''
+  );
+  if (metaOverride) {
+    return metaOverride;
+  }
+
+  try {
+    const stored = normalizeApiBaseUrl(window.localStorage?.getItem(API_BASE_STORAGE_KEY) || '');
+    if (stored) {
+      return stored;
+    }
+  } catch (error) {
+    // Ignore storage failures.
+  }
+
+  if (window.location?.protocol === 'file:') {
+    return 'http://localhost:4000';
+  }
+
+  return '';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+const nativeFetch =
+  typeof window !== 'undefined' && typeof window.fetch === 'function'
+    ? window.fetch.bind(window)
+    : null;
+
+function resolveApiRequestUrl(targetUrl) {
+  if (!API_BASE_URL || typeof targetUrl !== 'string') {
+    return targetUrl;
+  }
+  if (/^\/api(?:\/|$)/i.test(targetUrl)) {
+    return `${API_BASE_URL}${targetUrl}`;
+  }
+  return targetUrl;
+}
+
+function apiFetch(input, init) {
+  if (!nativeFetch) {
+    throw new Error('Fetch is unavailable in this browser.');
+  }
+
+  if (typeof input === 'string') {
+    return nativeFetch(resolveApiRequestUrl(input), init);
+  }
+
+  if (typeof URL !== 'undefined' && input instanceof URL) {
+    return nativeFetch(resolveApiRequestUrl(input.toString()), init);
+  }
+
+  if (typeof Request !== 'undefined' && input instanceof Request) {
+    const resolvedUrl = resolveApiRequestUrl(input.url);
+    if (resolvedUrl !== input.url) {
+      return nativeFetch(new Request(resolvedUrl, input), init);
+    }
+  }
+
+  return nativeFetch(input, init);
+}
 
 const bluetoothForm = document.getElementById('bluetoothForm');
 const connectButton = document.getElementById('connectButton');
@@ -216,7 +335,7 @@ async function flushSamples(force) {
   updateStats();
 
   try {
-    const response = await fetch('/api/streams', {
+    const response = await apiFetch('/api/streams', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

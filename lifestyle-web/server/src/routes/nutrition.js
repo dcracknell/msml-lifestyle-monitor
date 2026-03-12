@@ -43,7 +43,8 @@ const keepAliveAgent = new https.Agent({
 const remoteSuggestionCache = new Map();
 const barcodeLookupCache = new Map();
 const barcodeLookupInflight = new Map();
-const MAX_PHOTO_BASE64_LENGTH = 5 * 1024 * 1024;
+const MAX_PHOTO_BASE64_LENGTH =
+  Number.parseInt(process.env.NUT_MODEL_MAX_PHOTO_BASE64_LENGTH, 10) || 12 * 1024 * 1024;
 const PHOTO_ANALYSIS_EXCLUDED_LABELS = new Set(['other ingredients', 'other ingredient', 'background']);
 const PHOTO_ANALYSIS_LOOKUP_OVERRIDES = new Map([
   ['hamburg', 'hamburger'],
@@ -60,6 +61,13 @@ const PHOTO_ANALYSIS_LOOKUP_OVERRIDES = new Map([
   ['bean sprouts', 'beansprouts'],
   ['ascida', 'asida'],
   ['crema', 'cream dessert'],
+  ['fish and chips', 'breaded fish fillet'],
+  ['fried fish', 'breaded fish fillet'],
+  ['fish finger', 'breaded fish fillet'],
+  ['fish fingers', 'breaded fish fillet'],
+  ['mashed potato', 'baked potato'],
+  ['mashed potatoes', 'baked potato'],
+  ['green peas', 'green peas'],
 ]);
 
 const LOOKUP_NETWORK_ERROR_CODES = new Set([
@@ -689,6 +697,36 @@ const QUICK_ADD_ITEMS = [
     },
   },
   {
+    id: 'quick-breaded-fish',
+    name: 'Breaded Fish Fillet (2 pieces)',
+    keywords: ['breaded fish', 'fish finger', 'fish fingers', 'fish fillet', 'fried fish'],
+    serving: '2 pieces',
+    prefill: {
+      type: 'Food',
+      calories: 280,
+      protein: 22,
+      carbs: 18,
+      fats: 12,
+      weightAmount: 160,
+      weightUnit: 'g',
+    },
+  },
+  {
+    id: 'quick-peas',
+    name: 'Green Peas (1/2 cup)',
+    keywords: ['peas', 'green peas', 'garden peas'],
+    serving: '1/2 cup',
+    prefill: {
+      type: 'Food',
+      calories: 84,
+      protein: 5,
+      carbs: 15,
+      fats: 0,
+      weightAmount: 80,
+      weightUnit: 'g',
+    },
+  },
+  {
     id: 'quick-ground-turkey',
     name: 'Ground Turkey (lean, 4 oz)',
     keywords: ['turkey', 'ground turkey'],
@@ -1221,7 +1259,14 @@ function normalizePositiveNumber(value, { decimals = 1 } = {}) {
   return Math.round(numeric * multiplier) / multiplier;
 }
 
-function resolvePhotoAnalysisQuery(photoAnalysis) {
+function hasFiniteNumericValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return false;
+  }
+  return Number.isFinite(Number(value));
+}
+
+function resolvePhotoAnalysisCandidates(photoAnalysis) {
   const candidates = [
     photoAnalysis?.name,
     ...(Array.isArray(photoAnalysis?.topMatches)
@@ -1229,14 +1274,84 @@ function resolvePhotoAnalysisQuery(photoAnalysis) {
       : []),
   ];
 
+  const resolved = [];
+  const seen = new Set();
   for (const candidate of candidates) {
     const normalized = normalizeText(candidate);
     if (!normalized || PHOTO_ANALYSIS_EXCLUDED_LABELS.has(normalized)) {
       continue;
     }
-    return PHOTO_ANALYSIS_LOOKUP_OVERRIDES.get(normalized) || candidate.trim();
+    const mapped = PHOTO_ANALYSIS_LOOKUP_OVERRIDES.get(normalized) || candidate.trim();
+    const key = normalizeText(mapped);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    resolved.push(mapped);
   }
-  return '';
+  return resolved;
+}
+
+function resolvePhotoAnalysisQuery(photoAnalysis) {
+  const candidates = resolvePhotoAnalysisCandidates(photoAnalysis);
+  return candidates[0] || '';
+}
+
+function resolveQuickAddProductFromPhotoAnalysis(photoAnalysis) {
+  const candidates = resolvePhotoAnalysisCandidates(photoAnalysis);
+  for (const candidate of candidates) {
+    const quickMatch = lookupQuickAddByQuery(candidate);
+    if (quickMatch) {
+      return quickMatch;
+    }
+  }
+  return null;
+}
+
+function resolvePhotoDetectedFoods(photoAnalysis, options = {}) {
+  const minConfidence =
+    Number.isFinite(Number(options.minConfidence)) && Number(options.minConfidence) >= 0
+      ? Number(options.minConfidence)
+      : 0.08;
+  const maxItems =
+    Number.isFinite(Number(options.maxItems)) && Number(options.maxItems) > 0
+      ? Math.floor(Number(options.maxItems))
+      : 6;
+
+  const ranked = Array.isArray(photoAnalysis?.detectedFoods) && photoAnalysis.detectedFoods.length
+    ? photoAnalysis.detectedFoods
+    : Array.isArray(photoAnalysis?.topMatches)
+      ? photoAnalysis.topMatches
+      : [];
+
+  const resolved = [];
+  const seen = new Set();
+  ranked.forEach((entry) => {
+    if (resolved.length >= maxItems) {
+      return;
+    }
+    const confidence = Number(entry?.confidence);
+    if (!Number.isFinite(confidence) || confidence < minConfidence) {
+      return;
+    }
+    const candidate = typeof entry?.name === 'string' ? entry.name.trim() : '';
+    const normalized = normalizeText(candidate);
+    if (!normalized || PHOTO_ANALYSIS_EXCLUDED_LABELS.has(normalized)) {
+      return;
+    }
+    const mapped = PHOTO_ANALYSIS_LOOKUP_OVERRIDES.get(normalized) || candidate;
+    const key = normalizeText(mapped);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    resolved.push({
+      name: mapped,
+      confidence: Number(confidence.toFixed(4)),
+    });
+  });
+
+  return resolved;
 }
 
 function canViewSubject(viewerId, viewerRole, subjectId) {
@@ -1712,6 +1827,10 @@ async function lookupProduct({ barcode, query, userId }) {
     if (result) return result;
   }
   if (query) {
+    const quickMatch = lookupQuickAddByQuery(query);
+    if (quickMatch) {
+      return quickMatch;
+    }
     return lookupByQuery(query);
   }
   return null;
@@ -2104,6 +2223,42 @@ function searchQuickAddSuggestions(query) {
     .sort((a, b) => (a.score ?? 99) - (b.score ?? 99))
     .slice(0, 6);
 }
+
+function mapQuickSuggestionToProduct(item) {
+  if (!item?.prefill) {
+    return null;
+  }
+  const weightAmount = parseNullableNumber(item.prefill.weightAmount);
+  const weightUnit = item.prefill.weightUnit || null;
+  return {
+    name: item.name || 'Unknown item',
+    barcode: item.prefill.barcode || null,
+    calories: parseNullableNumber(item.prefill.calories),
+    protein: parseNullableNumber(item.prefill.protein),
+    carbs: parseNullableNumber(item.prefill.carbs),
+    fats: parseNullableNumber(item.prefill.fats),
+    weightAmount,
+    weightUnit,
+    weightGramsEquivalent: weightUnit === 'g' ? weightAmount : null,
+    weightMlEquivalent: weightUnit === 'ml' ? weightAmount : null,
+  };
+}
+
+function lookupQuickAddByQuery(query) {
+  if (!query || !query.trim()) {
+    return null;
+  }
+  const suggestions = searchQuickAddSuggestions(query);
+  if (!suggestions.length) {
+    return null;
+  }
+  const best = suggestions[0];
+  if (!best || (best.score ?? 99) > 0.45) {
+    return null;
+  }
+  return mapQuickSuggestionToProduct(best);
+}
+
 async function searchProducts(query) {
   const searchParams = new URLSearchParams({
     search_terms: query,
@@ -2382,6 +2537,7 @@ router.post('/', authenticate, async (req, res) => {
     weightAmount,
     weightUnit,
     photoData,
+    items,
   } = req.body || {};
 
   let normalizedPhotoData = null;
@@ -2390,6 +2546,141 @@ router.post('/', authenticate, async (req, res) => {
   } catch (error) {
     return res.status(413).json({
       message: error.message || 'Photo is too large. Try a smaller image or lower quality capture.',
+    });
+  }
+
+  const rawItems = Array.isArray(items)
+    ? items.filter((entry) => entry && typeof entry === 'object')
+    : [];
+  if (rawItems.length) {
+    if (rawItems.length > 12) {
+      return res.status(400).json({
+        message: 'Too many items in one request. Limit is 12.',
+      });
+    }
+
+    const entryDate = resolveDate(date);
+    const loggedEntries = [];
+    const skippedItems = [];
+
+    for (let index = 0; index < rawItems.length; index += 1) {
+      const item = rawItems[index] || {};
+      const itemName = typeof item.name === 'string' ? item.name.trim() : '';
+      const itemBarcode = typeof item.barcode === 'string' ? item.barcode.trim() : '';
+      const itemType = item.type === 'Liquid' ? 'Liquid' : 'Food';
+      const defaultUnit = itemType === 'Liquid' ? 'ml' : 'g';
+      const itemRequestedUnit =
+        typeof item.weightUnit === 'string' ? item.weightUnit.trim().toLowerCase() : null;
+      let itemWeightUnit =
+        itemRequestedUnit && ['g', 'ml', 'portion'].includes(itemRequestedUnit)
+          ? itemRequestedUnit
+          : defaultUnit;
+      let itemWeightAmount = normalizePositiveNumber(item.weightAmount, { decimals: 1 });
+      if (itemWeightUnit === 'portion' && (!itemWeightAmount || itemWeightAmount <= 0)) {
+        itemWeightAmount = 1;
+      }
+
+      let calorieValue = Number.parseInt(item.calories, 10);
+      let proteinValue = Number(item.protein);
+      let carbValue = Number(item.carbs);
+      let fatValue = Number(item.fats);
+      let productData = null;
+
+      if (!Number.isFinite(calorieValue)) {
+        if (!itemName && !itemBarcode) {
+          skippedItems.push({
+            index,
+            reason: 'Each item needs a name, barcode, or calories value.',
+          });
+          continue;
+        }
+        try {
+          productData = await lookupProduct({
+            barcode: itemBarcode,
+            query: itemName,
+            userId,
+          });
+        } catch (error) {
+          skippedItems.push({
+            index,
+            reason: error?.message || 'Nutrition lookup failed for item.',
+          });
+          continue;
+        }
+      }
+
+      if (productData?.calories) {
+        calorieValue = Number.isFinite(calorieValue) ? calorieValue : productData.calories;
+        proteinValue = Number.isFinite(proteinValue) ? proteinValue : productData.protein ?? proteinValue;
+        carbValue = Number.isFinite(carbValue) ? carbValue : productData.carbs ?? carbValue;
+        fatValue = Number.isFinite(fatValue) ? fatValue : productData.fats ?? fatValue;
+        if (!itemWeightAmount && productData.weightAmount) {
+          itemWeightAmount = Number(productData.weightAmount);
+          if (['ml', 'g', 'portion'].includes(productData.weightUnit)) {
+            itemWeightUnit = productData.weightUnit;
+          }
+        }
+      }
+
+      if (!Number.isFinite(calorieValue) || calorieValue < 0) {
+        skippedItems.push({
+          index,
+          reason: 'Calories missing and no lookup result found.',
+        });
+        continue;
+      }
+
+      const payload = {
+        protein: Number.isFinite(proteinValue) && proteinValue > 0 ? proteinValue : 0,
+        carbs: Number.isFinite(carbValue) && carbValue > 0 ? carbValue : 0,
+        fats: Number.isFinite(fatValue) && fatValue > 0 ? fatValue : 0,
+      };
+
+      const displayName =
+        itemName ||
+        productData?.name ||
+        (itemBarcode ? `Barcode ${itemBarcode}` : `Photo item ${index + 1}`);
+      const storedBarcode = itemBarcode || productData?.barcode || null;
+
+      insertEntryStatement.run(
+        userId,
+        entryDate,
+        displayName,
+        itemType,
+        storedBarcode,
+        calorieValue,
+        payload.protein,
+        payload.carbs,
+        payload.fats,
+        itemWeightAmount,
+        itemWeightUnit,
+        index === 0 ? normalizedPhotoData : null
+      );
+
+      loggedEntries.push({
+        name: displayName,
+        calories: calorieValue,
+        protein: payload.protein,
+        carbs: payload.carbs,
+        fats: payload.fats,
+        weightAmount: itemWeightAmount,
+        weightUnit: itemWeightUnit,
+        barcode: storedBarcode,
+      });
+    }
+
+    if (!loggedEntries.length) {
+      return res.status(400).json({
+        message: 'No items could be logged from the provided list.',
+        skippedItems,
+      });
+    }
+
+    return res.json({
+      message: `${loggedEntries.length} items logged${normalizedPhotoData ? ' from photo.' : '.'}`,
+      date: entryDate,
+      entriesLogged: loggedEntries,
+      skippedItems,
     });
   }
 
@@ -2416,6 +2707,25 @@ router.post('/', authenticate, async (req, res) => {
         code: error?.code || 'PHOTO_ANALYSIS_FAILED',
       });
     }
+    if (photoAnalysis?.isReliable === false) {
+      const detectedFoods = resolvePhotoDetectedFoods(photoAnalysis, {
+        minConfidence: 0.05,
+        maxItems: 8,
+      });
+      return res.status(422).json({
+        message:
+          'Meal photo result is uncertain. Try a closer photo, type the food name, or submit an items[] list to log multiple foods from one photo.',
+        code: 'PHOTO_ANALYSIS_UNCERTAIN',
+        photoAnalysis: {
+          name: photoAnalysis.name || null,
+          confidence: photoAnalysis.confidence,
+          reliabilityThreshold: photoAnalysis.reliabilityThreshold,
+          reliabilityReason: photoAnalysis.reliabilityReason || null,
+          topMatches: photoAnalysis.topMatches || [],
+          detectedFoods,
+        },
+      });
+    }
   }
   const detectedPhotoName = resolvePhotoAnalysisQuery(photoAnalysis);
   if (!trimmedName && detectedPhotoName) {
@@ -2439,16 +2749,16 @@ router.post('/', authenticate, async (req, res) => {
     normalizedWeightAmount = 1;
   }
 
-  if (!Number.isFinite(calorieValue) && Number.isFinite(Number(photoAnalysis?.calories))) {
+  if (!Number.isFinite(calorieValue) && hasFiniteNumericValue(photoAnalysis?.calories)) {
     calorieValue = Number.parseInt(photoAnalysis.calories, 10);
   }
-  if (!Number.isFinite(proteinValue) && Number.isFinite(Number(photoAnalysis?.protein))) {
+  if (!Number.isFinite(proteinValue) && hasFiniteNumericValue(photoAnalysis?.protein)) {
     proteinValue = Number(photoAnalysis.protein);
   }
-  if (!Number.isFinite(carbValue) && Number.isFinite(Number(photoAnalysis?.carbs))) {
+  if (!Number.isFinite(carbValue) && hasFiniteNumericValue(photoAnalysis?.carbs)) {
     carbValue = Number(photoAnalysis.carbs);
   }
-  if (!Number.isFinite(fatValue) && Number.isFinite(Number(photoAnalysis?.fats))) {
+  if (!Number.isFinite(fatValue) && hasFiniteNumericValue(photoAnalysis?.fats)) {
     fatValue = Number(photoAnalysis.fats);
   }
   if (!normalizedWeightAmount && Number.isFinite(Number(photoAnalysis?.weightAmount))) {
@@ -2465,14 +2775,19 @@ router.post('/', authenticate, async (req, res) => {
   const needsLookup = !Number.isFinite(calorieValue);
   if (needsLookup) {
     const lookupQuery = trimmedName || detectedPhotoName;
-    try {
-      productData = await lookupProduct({
-        barcode: trimmedBarcode,
-        query: lookupQuery,
-        userId: req.user.id,
-      });
-    } catch (error) {
-      return res.status(502).json({ message: error.message || 'Nutrition lookup failed.' });
+    if (photoAnalysis) {
+      productData = resolveQuickAddProductFromPhotoAnalysis(photoAnalysis);
+    }
+    if (!productData) {
+      try {
+        productData = await lookupProduct({
+          barcode: trimmedBarcode,
+          query: lookupQuery,
+          userId: req.user.id,
+        });
+      } catch (error) {
+        return res.status(502).json({ message: error.message || 'Nutrition lookup failed.' });
+      }
     }
     if (productData?.calories) {
       calorieValue = productData.calories;
@@ -2534,7 +2849,11 @@ router.post('/', authenticate, async (req, res) => {
       ? {
           name: photoAnalysis.name || displayName,
           confidence: photoAnalysis.confidence,
+          isReliable: photoAnalysis.isReliable !== false,
+          reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
+          reliabilityReason: photoAnalysis.reliabilityReason || null,
           topMatches: photoAnalysis.topMatches || [],
+          detectedFoods: photoAnalysis.detectedFoods || [],
         }
       : null,
   });
@@ -2766,6 +3085,8 @@ router.__private__ = {
   getRemoteSuggestions,
   clearRemoteSuggestionCache,
   REMOTE_SEARCH_TIMEOUT_MS,
+  lookupQuickAddByQuery,
+  resolveQuickAddProductFromPhotoAnalysis,
   normalizeBarcodeValue,
   buildBarcodeCandidates,
   parseBarcodeListInput,

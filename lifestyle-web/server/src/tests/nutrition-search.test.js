@@ -4,6 +4,8 @@ const {
   getRemoteSuggestions,
   clearRemoteSuggestionCache,
   REMOTE_SEARCH_TIMEOUT_MS,
+  lookupQuickAddByQuery,
+  resolveQuickAddProductFromPhotoAnalysis,
   normalizeBarcodeValue,
   buildBarcodeCandidates,
   parseBarcodeListInput,
@@ -89,5 +91,63 @@ describe('barcode normalization', () => {
     const outcome = parseBarcodeListInput(payload);
     expect(outcome.barcodes.length).toBe(BARCODE_BATCH_LOOKUP_MAX);
     expect(outcome.truncated).toBe(5);
+  });
+});
+
+describe('quick add lookup fallback', () => {
+  it('maps recognized meal names to local nutrition data', () => {
+    const product = lookupQuickAddByQuery('porridge');
+    expect(product).toEqual(
+      expect.objectContaining({
+        name: 'Oatmeal (cooked)',
+        calories: 150,
+        protein: 6,
+        carbs: 27,
+        fats: 3,
+        weightAmount: 240,
+        weightUnit: 'g',
+      })
+    );
+  });
+
+  it('returns null for unrelated queries', () => {
+    expect(lookupQuickAddByQuery('this is not real food text')).toBeNull();
+  });
+
+  it('reuses top matches from photo analysis when the primary label is weak', () => {
+    const product = resolveQuickAddProductFromPhotoAnalysis({
+      name: 'unknown blend',
+      topMatches: [
+        { name: 'croissant' },
+        { name: 'porridge' },
+      ],
+    });
+    expect(product).toEqual(
+      expect.objectContaining({
+        name: 'Oatmeal (cooked)',
+        calories: 150,
+      })
+    );
+  });
+
+  it('maps fish-and-peas labels to local quick-add fallback foods', () => {
+    const fish = resolveQuickAddProductFromPhotoAnalysis({
+      name: 'fish and chips',
+      topMatches: [{ name: 'green peas' }],
+    });
+    expect(fish).toEqual(
+      expect.objectContaining({
+        name: 'Breaded Fish Fillet (2 pieces)',
+        calories: 280,
+      })
+    );
+
+    const peas = lookupQuickAddByQuery('green peas');
+    expect(peas).toEqual(
+      expect.objectContaining({
+        name: 'Green Peas (1/2 cup)',
+        calories: 84,
+      })
+    );
   });
 });

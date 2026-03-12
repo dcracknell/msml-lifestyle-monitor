@@ -394,6 +394,75 @@ describe('CORS configuration', () => {
     expect(response.body).toHaveProperty('status', 'ok');
   });
 
+  it('allows loopback dev origins even when the port is not pre-listed', async () => {
+    const customApp = createApp({ appOrigin: 'http://localhost:4000' });
+    const origins = [
+      'http://localhost:5173',
+      'http://127.0.0.1:8081',
+      'http://127.0.0.1:19006',
+      'https://localhost:7443',
+      'http://[::1]:8081',
+      'http://192.168.1.44:8081',
+      'http://10.0.2.2:8081',
+    ];
+
+    for (const origin of origins) {
+      // eslint-disable-next-line no-await-in-loop
+      const response = await request(customApp)
+        .get('/api/health')
+        .set('Host', 'localhost:4000')
+        .set('Origin', origin);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('status', 'ok');
+    }
+  });
+
+  it('allows null origins for local-network hosts', async () => {
+    const customApp = createApp({ appOrigin: 'http://localhost:4000' });
+    const response = await request(customApp)
+      .get('/api/health')
+      .set('Host', 'localhost:4000')
+      .set('Origin', 'null');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('status', 'ok');
+  });
+
+  it('does not allow local-network origins against a public host unless explicitly configured', async () => {
+    const customApp = createApp({ appOrigin: 'https://www.msmls.org' });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const response = await request(customApp)
+        .get('/api/health')
+        .set('Host', 'www.msmls.org')
+        .set('Origin', 'http://192.168.1.44:8081');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toHaveProperty('message', 'Not allowed by CORS');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('still rejects null origins against public hosts', async () => {
+    const customApp = createApp({ appOrigin: 'https://www.msmls.org' });
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const response = await request(customApp)
+        .get('/api/health')
+        .set('Host', 'www.msmls.org')
+        .set('Origin', 'null');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toHaveProperty('message', 'Not allowed by CORS');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('still rejects origins that do not match the allowed list or host', async () => {
     const customApp = createApp({ appOrigin: 'http://localhost:4000' });
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});

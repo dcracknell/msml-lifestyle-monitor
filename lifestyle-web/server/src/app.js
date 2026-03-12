@@ -107,6 +107,80 @@ function parseOriginHost(origin) {
   }
 }
 
+function stripIpv6Brackets(hostname = '') {
+  return hostname.replace(/^\[(.*)\]$/, '$1');
+}
+
+function parseHostHeaderHostname(hostHeader = '') {
+  if (!hostHeader) {
+    return null;
+  }
+  try {
+    return stripIpv6Brackets(new URL(`http://${hostHeader}`).hostname.toLowerCase());
+  } catch (error) {
+    return null;
+  }
+}
+
+function isPrivateIpv4Address(hostname = '') {
+  const octets = hostname.split('.').map((segment) => Number.parseInt(segment, 10));
+  if (octets.length !== 4 || octets.some((segment) => !Number.isInteger(segment) || segment < 0 || segment > 255)) {
+    return false;
+  }
+
+  if (octets[0] === 10) {
+    return true;
+  }
+  if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) {
+    return true;
+  }
+  if (octets[0] === 192 && octets[1] === 168) {
+    return true;
+  }
+  if (octets[0] === 169 && octets[1] === 254) {
+    return true;
+  }
+
+  return false;
+}
+
+function isLocalNetworkHostname(hostname = '') {
+  const normalized = stripIpv6Brackets(String(hostname || '').trim().toLowerCase());
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') {
+    return true;
+  }
+  if (normalized === '0.0.0.0') {
+    return true;
+  }
+  if (normalized.endsWith('.local')) {
+    return true;
+  }
+  return isPrivateIpv4Address(normalized);
+}
+
+function isLocalNetworkOrigin(origin = '') {
+  if (!origin) {
+    return false;
+  }
+  try {
+    const parsed = new URL(origin);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return false;
+    }
+    return isLocalNetworkHostname(parsed.hostname);
+  } catch (error) {
+    return false;
+  }
+}
+
+function isLocalNetworkRequest(req) {
+  const hostname = parseHostHeaderHostname(req.get('host') || '');
+  return isLocalNetworkHostname(hostname || '');
+}
+
 function isRequestSelfOrigin(req, origin) {
   const requestHost = resolveRequestHost(req);
   const originHost = parseOriginHost(origin);
@@ -118,7 +192,7 @@ function isRequestSelfOrigin(req, origin) {
 
 function createApp(options = {}) {
   const app = express();
-  const bodyLimit = options.bodyLimit || process.env.API_BODY_LIMIT || '6mb';
+  const bodyLimit = options.bodyLimit || process.env.API_BODY_LIMIT || '20mb';
   const requireHttps = options.requireHttps ?? process.env.REQUIRE_HTTPS === 'true';
   const { allowAllOrigins, allowedOrigins, allowedOriginsSet } = resolveAllowedOrigins(
     options.appOrigin
@@ -131,7 +205,17 @@ function createApp(options = {}) {
     }
 
     const normalizedOrigin = normalizeOrigin(originHeader);
-    if (allowedOriginsSet.has(normalizedOrigin) || isRequestSelfOrigin(req, normalizedOrigin)) {
+    const nullOriginLocalRequest =
+      normalizedOrigin === 'null' && isLocalNetworkRequest(req);
+    const localNetworkDevOrigin =
+      isLocalNetworkOrigin(normalizedOrigin) && isLocalNetworkRequest(req);
+
+    if (
+      allowedOriginsSet.has(normalizedOrigin) ||
+      isRequestSelfOrigin(req, normalizedOrigin) ||
+      localNetworkDevOrigin ||
+      nullOriginLocalRequest
+    ) {
       return callback(null, { origin: true });
     }
 
@@ -172,9 +256,9 @@ function createApp(options = {}) {
 
   app.use((error, req, res, next) => {
     if (error && error.type === 'entity.too.large') {
-      return res
-        .status(413)
-        .json({ message: 'Upload too large. Try a smaller image (under 5 MB).' });
+      return res.status(413).json({
+        message: `Upload too large. Try a smaller image or reduce quality (request limit: ${bodyLimit}).`,
+      });
     }
     if (error) {
       return res.status(400).json({ message: error.message || 'Invalid request payload.' });

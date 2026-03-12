@@ -122,6 +122,122 @@ describe('Nutrition photo logging', () => {
     ).toBe(true);
   });
 
+  it('uses quick-add fallback when photo analysis has no macro values', async () => {
+    analyzeNutritionPhoto.mockResolvedValue({
+      name: 'porridge',
+      confidence: 0.88,
+      calories: null,
+      protein: null,
+      carbs: null,
+      fats: null,
+      topMatches: [
+        { name: 'porridge', confidence: 0.88 },
+        { name: 'croissant', confidence: 0.05 },
+      ],
+    });
+
+    const { token } = await loginAsCoach();
+    const date = '2030-01-03';
+    const photoData = Buffer.from('fake-meal-photo').toString('base64');
+
+    const postResponse = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ date, photoData });
+
+    expect(postResponse.status).toBe(200);
+    expect(postResponse.body.message).toContain('porridge');
+
+    const fetchResponse = await request(app)
+      .get(`/api/nutrition?date=${date}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(fetchResponse.status).toBe(200);
+    expect(
+      fetchResponse.body.entries.some(
+        (entry) =>
+          entry.name === 'porridge' &&
+          entry.calories === 150 &&
+          entry.protein === 6 &&
+          entry.carbs === 27 &&
+          entry.fats === 3
+      )
+    ).toBe(true);
+  });
+
+  it('rejects low-confidence photo guesses to avoid incorrect auto labels', async () => {
+    analyzeNutritionPhoto.mockResolvedValue({
+      name: 'toast',
+      confidence: 0.67,
+      isReliable: false,
+      reliabilityThreshold: 0.78,
+      reliabilityReason: 'Top prediction confidence 0.6700 is below required threshold 0.78.',
+      topMatches: [
+        { name: 'toast', confidence: 0.67 },
+        { name: 'croissant', confidence: 0.1 },
+      ],
+    });
+
+    const { token } = await loginAsCoach();
+    const date = '2030-01-04';
+    const photoData = Buffer.from('fake-meal-photo').toString('base64');
+
+    const response = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ date, photoData });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toMatchObject({
+      code: 'PHOTO_ANALYSIS_UNCERTAIN',
+      photoAnalysis: {
+        name: 'toast',
+        confidence: 0.67,
+        reliabilityThreshold: 0.78,
+      },
+    });
+  });
+
+  it('logs multiple food items from one photo when items[] is provided', async () => {
+    const { token } = await loginAsCoach();
+    const date = '2030-01-05';
+    const photoData = Buffer.from('fake-meal-photo').toString('base64');
+
+    const response = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        date,
+        photoData,
+        items: [
+          { name: 'Fish', calories: 220, protein: 30, carbs: 0, fats: 9, weightAmount: 150, weightUnit: 'g' },
+          { name: 'Peas', calories: 84, protein: 5, carbs: 15, fats: 0, weightAmount: 120, weightUnit: 'g' },
+        ],
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.entriesLogged).toHaveLength(2);
+    expect(response.body.entriesLogged.map((entry) => entry.name)).toEqual(
+      expect.arrayContaining(['Fish', 'Peas'])
+    );
+
+    const fetchResponse = await request(app)
+      .get(`/api/nutrition?date=${date}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(fetchResponse.status).toBe(200);
+    expect(
+      fetchResponse.body.entries.some(
+        (entry) => entry.name === 'Fish' && entry.calories === 220 && typeof entry.photoData === 'string'
+      )
+    ).toBe(true);
+    expect(
+      fetchResponse.body.entries.some(
+        (entry) => entry.name === 'Peas' && entry.calories === 84
+      )
+    ).toBe(true);
+  });
+
   it('returns a clear model setup error when the NUT runtime is unavailable', async () => {
     const error = new Error('NUT model is not configured on the server.');
     error.status = 503;
