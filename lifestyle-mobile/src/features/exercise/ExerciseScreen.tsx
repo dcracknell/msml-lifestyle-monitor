@@ -1,16 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';
+import Svg, { Circle, Defs, FeBlend, FeGaussianBlur, Filter, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
 import {
-  AppButton,
   AppText,
-  Card,
-  ProgressRing,
-  SectionHeader,
   TrendChart,
 } from '../../components';
 import {
@@ -56,8 +51,12 @@ const DEVICE_METRICS = {
   heartRate: 'exercise.hr',
 };
 
-const PROGRESS_MAX_MINUTES = 120;
-const HERO_GRADIENT = colors.gradient as [string, string, ...string[]];
+// ── Design tokens ────────────────────────────────────────────────────────────
+const TEAL = '#00d2a5';
+const ORANGE = '#ff9132';
+const PURPLE = '#a080ff';
+const GRAY = 'rgba(255,255,255,0.25)';
+
 const WATCH_COMMAND_TIMEOUT_MS = 3500;
 const PHONE_TRACKER_START_TIMEOUT_MS = 4000;
 const PHONE_UPLOAD_INTERVAL_MS = 15_000;
@@ -767,172 +766,216 @@ export function ExerciseScreen() {
     void sendExerciseCommand('stop', 'idle');
   };
 
-  const elapsedMinutes = Math.floor(elapsedMs / 60000);
   const timerLabel = formatElapsed(elapsedMs);
   const isSportSelectionDisabled = sessionState !== 'idle';
 
+  const sessionPillLabel =
+    sessionState === 'recording' ? 'Active' : sessionState === 'paused' ? 'Paused' : 'Ready';
+  const sessionPillColor =
+    sessionState === 'recording' ? TEAL : sessionState === 'paused' ? ORANGE : TEAL;
+
   return (
     <ScrollView
+      style={styles.screen}
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      <Card padded={false} style={styles.heroCard}>
-        <LinearGradient colors={HERO_GRADIENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.heroGradient}>
-          <View style={styles.heroHeader}>
-            <AppText variant="eyebrow">Exercise</AppText>
-            <AppText variant="heading" style={styles.heroTitle}>
-              {sportConfig.label}
-            </AppText>
-            <AppText variant="body">{heroStatusCopy}</AppText>
+      {/* ── EXERCISE hero card ── */}
+      <View style={styles.card}>
+        <EyebrowLabel>EXERCISE</EyebrowLabel>
+        <View style={styles.heroTopRow}>
+          <IconCircle color={TEAL}>
+            <AppText style={styles.iconGlyph}>▶</AppText>
+          </IconCircle>
+          <View style={styles.heroTopMeta}>
+            <AppText style={styles.heroTitle}>{sportConfig.label}</AppText>
+            <StatusPill label={sessionPillLabel} color={sessionPillColor} />
           </View>
-          <View style={styles.sportRow}>
-            {SPORT_OPTIONS.map((option) => (
-              <Pressable
-                key={option.id}
-                onPress={() => {
-                  if (!isSportSelectionDisabled) {
-                    setSelectedSport(option.id);
-                  }
-                }}
-                disabled={isSportSelectionDisabled && option.id !== selectedSport}
-                style={[
-                  styles.sportChip,
-                  option.id === selectedSport ? styles.sportChipActive : null,
-                  isSportSelectionDisabled && option.id !== selectedSport ? styles.sportChipDisabled : null,
-                ]}
-              >
-                <AppText variant="label" style={styles.sportTagline}>
-                  {option.tagline}
-                </AppText>
-                <AppText variant="heading">{option.label}</AppText>
-              </Pressable>
-            ))}
-          </View>
-          <View style={styles.timerBlock}>
-            <ProgressRing value={elapsedMinutes} max={PROGRESS_MAX_MINUTES} size={160} label="min" />
-            <View style={styles.timerMeta}>
-              <AppText variant="eyebrow">Duration</AppText>
-              <AppText variant="heading" style={styles.timerValue}>
-                {timerLabel}
-              </AppText>
-              <View style={styles.timerMetrics}>
-                <InlineMetric label="Distance" value={formatKilometers(displayDistanceKm)} />
-                <InlineMetric label="Pace" value={formatPace(displayPaceSeconds)} />
-                <InlineMetric label="Heart rate" value={formatHeartRate(displayHeartRate)} />
-              </View>
-            </View>
-          </View>
-          <View style={styles.controlRow}>
-            {sessionState === 'idle' ? (
-              <AppButton
-                title={`Start ${sportConfig.label.toLowerCase()}`}
-                onPress={handleStart}
-                loading={controlLoading}
-                style={styles.primaryControl}
-              />
-            ) : (
-              <>
-                <AppButton
-                  title={sessionState === 'recording' ? 'Pause' : 'Resume'}
-                  variant="secondary"
-                  onPress={sessionState === 'recording' ? handlePause : handleResume}
-                  loading={controlLoading}
-                  style={styles.controlButton}
-                />
-                <AppButton
-                  title="Finish"
-                  variant="ghost"
-                  onPress={handleFinish}
-                  disabled={controlLoading}
-                  style={styles.controlButton}
-                />
-              </>
-            )}
-          </View>
-          {feedback ? (
-            <AppText variant="muted" style={styles.feedbackText}>
-              {feedback}
-            </AppText>
-          ) : null}
-        </LinearGradient>
-      </Card>
-
-      <Card>
-        <SectionHeader title={routeTitle} subtitle={routeSubtitle} />
-        <View style={styles.routeCard}>
-          <RoutePreview points={routePoints} active={sessionState === 'recording'} />
-          <View style={styles.summaryGrid}>
-            {routeSummary.map((item) => (
-              <SummaryTile key={item.label} label={item.label} value={item.value} compact />
-            ))}
-          </View>
-          <AppText variant="muted" style={styles.liveHint}>
-            Route drawing uses phone GPS during a live workout. When there is no active route, this screen falls back to
-            your latest session metrics.
-          </AppText>
         </View>
-        {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
-      </Card>
 
-      <Card>
-        <SectionHeader title="Training snapshot" subtitle="This week" />
-        <View style={styles.summaryGrid}>
-          {trainingSnapshot.map((item) => (
-            <SummaryTile key={item.label} label={item.label} value={item.value} />
+        {/* Sport selector */}
+        <View style={styles.sportGrid}>
+          {SPORT_OPTIONS.map((option) => (
+            <Pressable
+              key={option.id}
+              onPress={() => { if (!isSportSelectionDisabled) setSelectedSport(option.id); }}
+              disabled={isSportSelectionDisabled && option.id !== selectedSport}
+              style={[
+                styles.sportCell,
+                option.id === selectedSport ? styles.sportCellActive : null,
+                isSportSelectionDisabled && option.id !== selectedSport ? styles.sportCellDisabled : null,
+              ]}
+            >
+              <AppText style={[styles.sportCellLabel, option.id === selectedSport ? styles.sportCellLabelActive : null]}>
+                {option.label}
+              </AppText>
+              <AppText style={styles.sportCellTagline}>{option.tagline}</AppText>
+            </Pressable>
           ))}
         </View>
-      </Card>
 
-      <Card>
-        <SectionHeader title="Exercise trends" subtitle="Heart rate and distance over the last 21 days" />
+        {/* 4-stat strip */}
+        <View style={styles.statStrip}>
+          <StatStripItem label="DURATION" value={timerLabel} />
+          <View style={styles.stripDivider} />
+          <StatStripItem label="KM" value={displayDistanceKm != null ? displayDistanceKm.toFixed(2) : '--'} />
+          <View style={styles.stripDivider} />
+          <StatStripItem label="BPM" value={displayHeartRate != null ? String(Math.round(displayHeartRate)) : '--'} />
+          <View style={styles.stripDivider} />
+          <StatStripItem label="PACE" value={formatPace(displayPaceSeconds)} />
+        </View>
+
+        {/* CTA */}
+        {sessionState === 'idle' ? (
+          <Pressable style={[styles.ctaButton, controlLoading ? styles.ctaButtonDisabled : null]} onPress={handleStart} disabled={controlLoading}>
+            <AppText style={styles.ctaText}>Start {sportConfig.label.toLowerCase()}</AppText>
+          </Pressable>
+        ) : (
+          <View style={styles.controlPair}>
+            <Pressable
+              style={styles.secondaryButton}
+              onPress={sessionState === 'recording' ? handlePause : handleResume}
+              disabled={controlLoading}
+            >
+              <AppText style={styles.secondaryButtonText}>
+                {sessionState === 'recording' ? 'Pause' : 'Resume'}
+              </AppText>
+            </Pressable>
+            <Pressable style={styles.ghostButton} onPress={handleFinish} disabled={controlLoading}>
+              <AppText style={styles.ghostButtonText}>Finish</AppText>
+            </Pressable>
+          </View>
+        )}
+
+        {feedback ? <AppText style={styles.feedbackText}>{feedback}</AppText> : null}
+      </View>
+
+      {/* ── LAST SESSION card ── */}
+      <View style={styles.card}>
+        <EyebrowLabel>LAST SESSION</EyebrowLabel>
+        <View style={styles.cardTitleRow}>
+          <AppText style={styles.cardTitle}>Last effort</AppText>
+          {lastSessionForSport ? (
+            <AppText style={styles.cardSubtitle}>
+              {formatDateTime(lastSessionForSport.startTime, 'MMM D · HH:mm')}
+            </AppText>
+          ) : null}
+          <Pressable onPress={() => navigation.navigate('Sessions' as never)} disabled={isFetching}>
+            <AppText style={styles.linkText}>See all</AppText>
+          </Pressable>
+        </View>
+
+        {isFetching && !data ? (
+          <AppText style={styles.mutedText}>Syncing activity…</AppText>
+        ) : lastSessionForSport ? (
+          <>
+            <View style={styles.sixGrid}>
+              <MetricSubCard label="DISTANCE" value={formatDistance(lastSessionForSport.distance)} />
+              <MetricSubCard label="PACE" value={formatPace(lastSessionForSport.averagePace)} />
+              <MetricSubCard label="AVG HR" value={formatHeartRate(lastSessionForSport.averageHr)} sublabel="bpm" />
+              <MetricSubCard label="ELEVATION" value="--" sublabel="m" />
+              <MetricSubCard label="CALORIES" value="--" sublabel="kcal" />
+              <MetricSubCard
+                label="DURATION"
+                value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
+              />
+            </View>
+            <RouteMapCard
+              points={routePoints}
+              active={sessionState === 'recording'}
+              distanceKm={displayDistanceKm}
+            />
+          </>
+        ) : (
+          <AppText style={styles.mutedText}>No {sportConfig.label.toLowerCase()} recorded yet.</AppText>
+        )}
+
+        {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
+      </View>
+
+      {/* ── TRAINING card ── */}
+      <View style={styles.card}>
+        <EyebrowLabel>TRAINING</EyebrowLabel>
+        <View style={styles.cardTitleRow}>
+          <IconCircle color={ORANGE}>
+            <AppText style={styles.iconGlyph}>◈</AppText>
+          </IconCircle>
+          <AppText style={[styles.cardTitle, { flex: 1 }]}>Training snapshot</AppText>
+          <StatusPill label="Low activity" color={ORANGE} />
+        </View>
+        <View style={styles.twoColGrid}>
+          {trainingSnapshot.map((item) => (
+            <MetricSubCard key={item.label} label={item.label.toUpperCase()} value={item.value} />
+          ))}
+        </View>
+      </View>
+
+      {/* ── STRAVA card ── */}
+      <View style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <AppText style={[styles.cardTitle, { flex: 1 }]}>Strava</AppText>
+          <StatusPill label="Setup required" color={ORANGE} />
+          <View style={styles.toggleDisabled}>
+            <View style={styles.toggleThumb} />
+          </View>
+        </View>
+        <AppText style={styles.fineprint}>
+          Connect Strava to automatically sync workouts and activity data. Requires an active Strava account.
+        </AppText>
+      </View>
+
+      {/* ── EXERCISE TRENDS card ── */}
+      <View style={styles.card}>
+        <EyebrowLabel>EXERCISE TRENDS</EyebrowLabel>
+        <AppText style={styles.cardTitle}>Heart rate & distance</AppText>
+        <View style={styles.pillRow}>
+          <StatusPill label="Heart rate" color={ORANGE} dot />
+          <StatusPill label="Distance" color={ORANGE} dot />
+        </View>
         {heartRateTrend.length ? (
           <TrendChart data={heartRateTrend} yLabel="bpm" />
         ) : (
-          <AppText variant="muted">Heart-rate history will appear after you record or sync sessions.</AppText>
+          <AppText style={styles.mutedText}>Heart-rate history will appear after you record or sync sessions.</AppText>
         )}
         {distanceTrend.length ? (
           <View style={styles.trendSpacing}>
             <TrendChart data={distanceTrend} yLabel="km" />
           </View>
         ) : (
-          <AppText variant="muted">Distance history will appear after you record or sync sessions.</AppText>
+          <AppText style={[styles.mutedText, styles.trendSpacing]}>
+            Distance history will appear after you record or sync sessions.
+          </AppText>
         )}
-      </Card>
+      </View>
 
-      <Card>
-        <SectionHeader
-          title="Last effort"
-          subtitle={lastSessionForSport ? formatDateTime(lastSessionForSport.startTime, 'MMM D · HH:mm') : 'Awaiting sync'}
-          action={
-            <AppButton
-              title="See sessions"
-              variant="ghost"
-              onPress={() => navigation.navigate('Sessions' as never)}
-              disabled={isFetching}
+      {/* ── WATCH LINK card ── */}
+      <View style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <IconCircle color={PURPLE}>
+            <AppText style={styles.iconGlyph}>◎</AppText>
+          </IconCircle>
+          <View style={{ flex: 1 }}>
+            <AppText style={styles.cardTitle}>Watch link</AppText>
+            <StatusPill
+              label={connectedDevice ? 'Connected' : 'No watch connected'}
+              color={connectedDevice ? TEAL : GRAY}
             />
-          }
-        />
-        {isFetching && !data ? (
-          <AppText variant="muted">Syncing activity…</AppText>
-        ) : lastSessionForSport ? (
-          <View style={styles.lastSession}>
-            <AppText variant="heading">{lastSessionForSport.name}</AppText>
-            <AppText variant="muted">Source: {lastSessionForSport.source || 'session history'}</AppText>
-            <View style={styles.lastSessionStats}>
-              <InlineMetric label="Distance" value={formatDistance(lastSessionForSport.distance)} />
-              <InlineMetric label="Pace" value={formatPace(lastSessionForSport.averagePace)} />
-              <InlineMetric label="Avg HR" value={formatHeartRate(lastSessionForSport.averageHr)} />
-              <InlineMetric
-                label="Duration"
-                value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
-              />
-            </View>
           </View>
-        ) : (
-          <AppText variant="muted">No {sportConfig.label.toLowerCase()} recorded yet.</AppText>
-        )}
-      </Card>
+        </View>
+        <Pressable
+          style={styles.purpleScanButton}
+          onPress={() => navigation.navigate('Devices' as never)}
+        >
+          <AppText style={styles.purpleScanText}>Scan for devices</AppText>
+        </Pressable>
+        <Pressable
+          style={styles.ghostDevicesButton}
+          onPress={() => navigation.navigate('Devices' as never)}
+        >
+          <AppText style={styles.ghostDevicesText}>View all devices</AppText>
+        </Pressable>
+      </View>
     </ScrollView>
   );
 }
@@ -1145,66 +1188,132 @@ function haversineDistanceMeters(start: PhoneGeoPoint, end: PhoneGeoPoint) {
   return earthRadiusMeters * c;
 }
 
-function RoutePreview({ points, active }: { points: PhoneGeoPoint[]; active: boolean }) {
+// ── Small helper components ───────────────────────────────────────────────────
+
+function EyebrowLabel({ children }: { children: string }) {
+  return <AppText style={styles.eyebrow}>{children}</AppText>;
+}
+
+function IconCircle({ color, children }: { color: string; children: React.ReactNode }) {
+  return (
+    <View style={[styles.iconCircle, { backgroundColor: `${color}22`, borderColor: `${color}44` }]}>
+      {children}
+    </View>
+  );
+}
+
+function StatusPill({ label, color, dot }: { label: string; color: string; dot?: boolean }) {
+  return (
+    <View style={[styles.pill, { backgroundColor: `${color}1a`, borderColor: `${color}44` }]}>
+      {dot ? <View style={[styles.pillDot, { backgroundColor: color }]} /> : null}
+      <AppText style={[styles.pillText, { color }]}>{label}</AppText>
+    </View>
+  );
+}
+
+function StatStripItem({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.statStripItem}>
+      <AppText style={styles.statStripLabel}>{label}</AppText>
+      <AppText style={styles.statStripValue}>{value}</AppText>
+    </View>
+  );
+}
+
+function MetricSubCard({ label, value, sublabel }: { label: string; value: string; sublabel?: string }) {
+  return (
+    <View style={styles.metricSubCard}>
+      <AppText style={styles.metricSubLabel}>{label}</AppText>
+      <AppText style={styles.metricSubValue}>{value}</AppText>
+      {sublabel ? <AppText style={styles.metricSubSublabel}>{sublabel}</AppText> : null}
+    </View>
+  );
+}
+
+function RouteMapCard({
+  points,
+  active,
+  distanceKm,
+}: {
+  points: PhoneGeoPoint[];
+  active: boolean;
+  distanceKm: number | null;
+}) {
   const preview = buildRoutePreview(points);
 
+  // Static placeholder loop route when no live points
+  const placeholderPoints =
+    '18,72 24,58 32,50 38,42 46,36 54,34 62,36 70,44 76,54 80,64 78,72 70,78 58,80 46,78 34,76 24,76 18,72';
+
+  const liveOrPlaceholder = preview?.points ?? placeholderPoints;
+  const isLive = Boolean(preview);
+  const startPt = preview?.start ?? { x: 18, y: 72 };
+  const endPt = preview?.end ?? { x: 18, y: 72 };
+
+  // Km waypoint markers spaced evenly along the placeholder
+  const waypointPositions = [
+    { x: 38, y: 42 },
+    { x: 62, y: 36 },
+    { x: 80, y: 64 },
+    { x: 46, y: 78 },
+  ];
+
   return (
-    <View style={styles.routeCanvas}>
+    <View style={styles.routeMapCard}>
       <Svg width="100%" height="100%" viewBox="0 0 100 100">
-        <Rect x={0} y={0} width={100} height={100} rx={18} fill="rgba(255,255,255,0.02)" />
-        {[20, 40, 60, 80].map((offset) => (
-          <Line
-            key={`horizontal-${offset}`}
-            x1={10}
-            y1={offset}
-            x2={90}
-            y2={offset}
-            stroke="rgba(255,255,255,0.06)"
-            strokeWidth={0.6}
-          />
+        <Defs>
+          <Filter id="glow">
+            <FeGaussianBlur stdDeviation="2.5" result="coloredBlur" />
+            <FeBlend in="SourceGraphic" in2="coloredBlur" mode="normal" />
+          </Filter>
+        </Defs>
+        <Rect x={0} y={0} width={100} height={100} fill="#0a1420" />
+        {/* Grid */}
+        {[20, 40, 60, 80].map((o) => (
+          <Line key={`h${o}`} x1={8} y1={o} x2={92} y2={o} stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
         ))}
-        {[20, 40, 60, 80].map((offset) => (
-          <Line
-            key={`vertical-${offset}`}
-            x1={offset}
-            y1={10}
-            x2={offset}
-            y2={90}
-            stroke="rgba(255,255,255,0.06)"
-            strokeWidth={0.6}
-          />
+        {[20, 40, 60, 80].map((o) => (
+          <Line key={`v${o}`} x1={o} y1={8} x2={o} y2={88} stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
         ))}
+        {/* Glow line */}
         <Polyline
-          points="16,70 30,54 42,59 55,41 72,47 84,33"
+          points={liveOrPlaceholder}
           fill="none"
-          stroke="rgba(255,255,255,0.12)"
-          strokeWidth={2}
-          strokeDasharray="4 6"
+          stroke={TEAL}
+          strokeWidth={6}
+          strokeOpacity={0.18}
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        {preview ? (
-          <>
-            <Polyline
-              points={preview.points}
-              fill="none"
-              stroke={active ? colors.accent : colors.accentStrong}
-              strokeWidth={3.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <Circle cx={preview.start.x} cy={preview.start.y} r={2.8} fill={colors.success} />
-            <Circle cx={preview.end.x} cy={preview.end.y} r={3.2} fill={colors.accent} />
-          </>
-        ) : null}
+        {/* Main route line */}
+        <Polyline
+          points={liveOrPlaceholder}
+          fill="none"
+          stroke={active ? TEAL : isLive ? TEAL : `${TEAL}aa`}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {/* Km waypoints */}
+        {!isLive
+          ? waypointPositions.map((pt, i) => (
+              <Circle key={i} cx={pt.x} cy={pt.y} r={2.2} fill={TEAL} fillOpacity={0.7} />
+            ))
+          : null}
+        {/* Start dot */}
+        <Circle cx={startPt.x} cy={startPt.y} r={3} fill="#22c55e" />
+        {/* Finish dot */}
+        <Circle cx={endPt.x} cy={endPt.y} r={3} fill={ORANGE} />
       </Svg>
-      <View style={styles.routeOverlay}>
-        <AppText variant="label" style={styles.routeOverlayLabel}>
-          {preview ? 'Start to finish' : 'Preview'}
+      {/* Bottom bar */}
+      <View style={styles.routeBottomBar}>
+        <AppText style={styles.routeBottomItem}>
+          {distanceKm != null ? `${distanceKm.toFixed(2)} km` : '--'}
         </AppText>
-        <AppText variant="body" style={styles.routeOverlayText}>
-          {preview ? 'Live route locked to your GPS path.' : 'Start moving outdoors to draw your route.'}
-        </AppText>
+        <View style={styles.routeBottomDivider} />
+        <AppText style={styles.routeBottomItem}>↑ --</AppText>
+        <View style={styles.routeBottomDivider} />
+        <AppText style={styles.routeBottomItem}>--</AppText>
       </View>
     </View>
   );
@@ -1257,187 +1366,382 @@ function clampMapValue(value: number) {
   return Math.max(10, Math.min(90, Math.round(value * 10) / 10));
 }
 
-function SummaryTile({
-  label,
-  value,
-  compact = false,
-}: {
-  label: string;
-  value: string;
-  compact?: boolean;
-}) {
-  return (
-    <View style={[styles.summaryTile, compact ? styles.summaryTileCompact : null]}>
-      <AppText variant="label">{label}</AppText>
-      <AppText variant="heading" style={[styles.summaryValue, compact ? styles.summaryValueCompact : null]}>
-        {value}
-      </AppText>
-    </View>
-  );
-}
-
-function InlineMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.inlineMetric}>
-      <AppText variant="label">{label}</AppText>
-      <AppText variant="body">{value}</AppText>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#05080f',
+  },
   container: {
     padding: spacing.lg,
     gap: spacing.lg,
+    paddingBottom: spacing.lg * 2,
   },
-  heroCard: {
-    borderRadius: 28,
-    overflow: 'hidden',
-    borderColor: colors.border,
-    borderWidth: 1,
-  },
-  heroGradient: {
-    width: '100%',
-    padding: spacing.lg,
-    gap: spacing.lg,
-  },
-  heroHeader: {
-    gap: spacing.xs,
-  },
-  heroTitle: {
-    fontSize: 42,
-  },
-  sportRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  sportChip: {
-    flex: 1,
-    minWidth: 110,
+
+  // ── Card shell ───────────────────────────────────────────────────────────────
+  card: {
+    backgroundColor: '#0c1222',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.sm,
-    backgroundColor: 'rgba(0,0,0,0.12)',
+    borderColor: 'rgba(255,255,255,0.07)',
+    padding: spacing.lg,
+    gap: spacing.md,
   },
-  sportChipActive: {
-    borderColor: colors.accent,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-  },
-  sportChipDisabled: {
-    opacity: 0.5,
-  },
-  sportTagline: {
+
+  // ── Eyebrow ──────────────────────────────────────────────────────────────────
+  eyebrow: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.8,
     color: colors.muted,
+    textTransform: 'uppercase',
   },
-  timerBlock: {
+
+  // ── Hero card ────────────────────────────────────────────────────────────────
+  heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.lg,
-  },
-  timerMeta: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  timerValue: {
-    fontSize: 44,
-  },
-  timerMetrics: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    flexWrap: 'wrap',
-    marginTop: spacing.xs,
-  },
-  controlRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  primaryControl: {
-    flex: 1,
-  },
-  controlButton: {
-    flex: 1,
-    minWidth: 140,
-  },
-  feedbackText: {
-    marginTop: spacing.xs,
-  },
-  routeCard: {
     gap: spacing.md,
   },
-  routeCanvas: {
-    height: 240,
+  heroTopMeta: {
+    flex: 1,
+    gap: 6,
+  },
+  heroTitle: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
     borderRadius: 22,
-    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: 'rgba(1, 9, 21, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  routeOverlay: {
-    position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
-    bottom: spacing.md,
-    padding: spacing.sm,
-    borderRadius: 16,
-    backgroundColor: 'rgba(1, 9, 21, 0.72)',
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.xs,
-  },
-  routeOverlayLabel: {
-    color: colors.accent,
-  },
-  routeOverlayText: {
+  iconGlyph: {
+    fontSize: 18,
     color: colors.text,
   },
-  liveHint: {
-    marginTop: spacing.sm,
-  },
-  summaryGrid: {
+
+  // ── Status pill ──────────────────────────────────────────────────────────────
+  pill: {
     flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    borderRadius: 100,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    gap: 5,
+  },
+  pillDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  pillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+
+  // ── Sport selector ───────────────────────────────────────────────────────────
+  sportGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  sportCell: {
+    flex: 1,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: '#060b16',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    gap: 3,
+  },
+  sportCellActive: {
+    borderColor: TEAL,
+    backgroundColor: `${TEAL}14`,
+  },
+  sportCellDisabled: {
+    opacity: 0.4,
+  },
+  sportCellLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.muted,
+    letterSpacing: -0.2,
+  },
+  sportCellLabelActive: {
+    color: TEAL,
+  },
+  sportCellTagline: {
+    fontSize: 9,
+    color: 'rgba(142,162,200,0.6)',
+    letterSpacing: 0.3,
+  },
+
+  // ── 4-stat strip ─────────────────────────────────────────────────────────────
+  statStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#060b16',
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+  },
+  statStripItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 3,
+  },
+  statStripLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  statStripValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  stripDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+
+  // ── CTA / controls ───────────────────────────────────────────────────────────
+  ctaButton: {
+    backgroundColor: TEAL,
+    borderRadius: 13,
+    paddingVertical: 15,
+    alignItems: 'center',
+  },
+  ctaButtonDisabled: {
+    opacity: 0.5,
+  },
+  ctaText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#05080f',
+    letterSpacing: 0.2,
+  },
+  controlPair: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  ghostButton: {
+    flex: 1,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  ghostButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  feedbackText: {
+    fontSize: 12,
+    color: colors.muted,
+    textAlign: 'center',
+  },
+
+  // ── Card header row ───────────────────────────────────────────────────────────
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.sm,
     flexWrap: 'wrap',
   },
-  summaryTile: {
-    minWidth: 140,
-    flex: 1,
-    borderRadius: 18,
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.2,
+  },
+  cardSubtitle: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  linkText: {
+    fontSize: 12,
+    color: TEAL,
+    marginLeft: 'auto',
+  },
+
+  // ── 6-stat grid ──────────────────────────────────────────────────────────────
+  sixGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+
+  // ── 2-col grid (training) ─────────────────────────────────────────────────────
+  twoColGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+
+  // ── Metric sub-card ───────────────────────────────────────────────────────────
+  metricSubCard: {
+    width: '30%',
+    flexGrow: 1,
+    backgroundColor: '#060b16',
+    borderRadius: 13,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    padding: spacing.md,
-    gap: spacing.xs,
+    borderColor: 'rgba(255,255,255,0.05)',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    gap: 2,
   },
-  summaryTileCompact: {
-    minWidth: 96,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
+  metricSubLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
   },
-  summaryValue: {
-    fontSize: 28,
+  metricSubValue: {
+    fontSize: 21,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
   },
-  summaryValueCompact: {
-    fontSize: 20,
+  metricSubSublabel: {
+    fontSize: 9,
+    color: colors.muted,
+    letterSpacing: 0.3,
+  },
+
+  // ── Route map card ────────────────────────────────────────────────────────────
+  routeMapCard: {
+    height: 220,
+    borderRadius: 13,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: '#0a1420',
+  },
+  routeBottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(5,8,15,0.82)',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  routeBottomItem: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  routeBottomDivider: {
+    width: 1,
+    height: 12,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+  },
+
+  // ── Strava card ───────────────────────────────────────────────────────────────
+  toggleDisabled: {
+    width: 40,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  toggleThumb: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+  },
+  fineprint: {
+    fontSize: 11,
+    color: colors.muted,
+    lineHeight: 16,
+  },
+
+  // ── Trends card ───────────────────────────────────────────────────────────────
+  pillRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
   },
   trendSpacing: {
     marginTop: spacing.md,
   },
-  lastSession: {
-    gap: spacing.sm,
+
+  // ── Watch link card ───────────────────────────────────────────────────────────
+  purpleScanButton: {
+    backgroundColor: `${PURPLE}22`,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: `${PURPLE}55`,
+    paddingVertical: 13,
+    alignItems: 'center',
   },
-  lastSessionStats: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    flexWrap: 'wrap',
+  purpleScanText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: PURPLE,
   },
-  inlineMetric: {
-    flex: 1,
+  ghostDevicesButton: {
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  ghostDevicesText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+
+  // ── Misc ──────────────────────────────────────────────────────────────────────
+  mutedText: {
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 18,
   },
   errorText: {
     marginTop: spacing.sm,
     color: colors.danger,
+    fontSize: 13,
   },
 });

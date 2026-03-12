@@ -12,7 +12,7 @@ import {
   TrendChart,
   RefreshableScrollView,
 } from '../../components';
-import { spacing } from '../../theme';
+import { colors, spacing } from '../../theme';
 import { formatDate, formatNumber } from '../../utils/format';
 
 const VITALS_STREAM_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
@@ -91,6 +91,9 @@ export function VitalsScreen() {
     timeline.length > 0 ? timeline[timeline.length - 1]?.date : data.latest?.date;
   const latestVitalsDate = latestStreamTs > 0 ? new Date(latestStreamTs).toISOString() : latestFallbackDate;
 
+  const hrvValue = data.latest?.hrvScore ?? null;
+  const hrv = hrvValue !== null ? `${hrvValue} ms` : '--';
+
   return (
     <RefreshableScrollView
       contentContainerStyle={styles.container}
@@ -98,51 +101,52 @@ export function VitalsScreen() {
       onRefresh={refetch}
       showsVerticalScrollIndicator={false}
     >
-      <Card>
-        <SectionHeader title="Latest vitals" subtitle={formatDate(latestVitalsDate)} />
-        <View style={styles.metricsRow}>
-          <Metric
-            label="Resting HR"
-            value={`${toRoundedIntegerLabel(latestRestingHrValue)} bpm`}
-          />
-          <Metric label="HRV" value={`${data.latest?.hrvScore ?? '--'} ms`} />
+      {/* Hero */}
+      <View style={styles.heroCard}>
+        <AppText style={styles.eyebrow}>VITALS · {latestVitalsDate ? formatDate(latestVitalsDate) : 'No data'}</AppText>
+        <AppText style={styles.heroNumber}>{hrv}</AppText>
+        <AppText style={styles.heroLabel}>Heart Rate Variability</AppText>
+        <View style={styles.heroBadge}>
+          <View style={[styles.badgeDot, { backgroundColor: colors.accent }]} />
+          <AppText style={[styles.badgeText, { color: colors.accent }]}>Recovery signal</AppText>
         </View>
-        <View style={styles.metricsRow}>
-          <Metric label="SpO₂" value={`${data.latest?.spo2 ?? '--'} %`} />
-          <Metric label="Stress" value={formatNumber(data.latest?.stressScore)} />
-        </View>
-        <View style={styles.metricsRow}>
-          <Metric label="Blood pressure" value={`${data.latest?.systolic ?? '--'}/${data.latest?.diastolic ?? '--'}`} />
-          <Metric label="Glucose" value={`${toRoundedIntegerLabel(latestGlucoseValue)} mg/dL`} />
-        </View>
-      </Card>
-      <Card>
-        <SectionHeader title="Resting HR" subtitle="14-day trend" />
-        <TrendChart
-          data={restingTrend}
-          yLabel="bpm"
-          yDomain={[40, 200]}
-          yTickStep={10}
-        />
-      </Card>
-      <Card>
-        <SectionHeader title="Glucose" subtitle="14-day trend" />
-        <TrendChart
-          data={glucoseTrend}
-          yLabel="mg/dL"
-          yDomain={[70, 200]}
-          yTickStep={10}
-        />
-      </Card>
+      </View>
+
+      {/* 2×3 metric grid */}
+      <View style={styles.metricGrid}>
+        <MetricCard label="RESTING HR" value={`${toRoundedIntegerLabel(latestRestingHrValue)}`} unit="bpm" />
+        <MetricCard label="SPO₂" value={`${data.latest?.spo2 ?? '--'}`} unit="%" />
+        <MetricCard label="STRESS" value={formatNumber(data.latest?.stressScore)} unit="score" />
+        <MetricCard label="BLOOD PRESSURE" value={`${data.latest?.systolic ?? '--'}/${data.latest?.diastolic ?? '--'}`} unit="mmHg" />
+        <MetricCard label="GLUCOSE" value={`${toRoundedIntegerLabel(latestGlucoseValue)}`} unit="mg/dL" />
+        <MetricCard label="HRV" value={hrv} unit="" />
+      </View>
+
+      {/* Resting HR trend */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>TREND · RESTING HR</AppText>
+        <AppText style={styles.cardTitle}>Resting heart rate</AppText>
+        <AppText style={styles.cardSubtitle}>14-day window</AppText>
+        <TrendChart data={restingTrend} yLabel="bpm" yDomain={[40, 200]} yTickStep={10} />
+      </View>
+
+      {/* Glucose trend */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>TREND · GLUCOSE</AppText>
+        <AppText style={styles.cardTitle}>Blood glucose</AppText>
+        <AppText style={styles.cardSubtitle}>14-day window</AppText>
+        <TrendChart data={glucoseTrend} yLabel="mg/dL" yDomain={[70, 200]} yTickStep={10} />
+      </View>
     </RefreshableScrollView>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function MetricCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
-    <View style={styles.metric}>
-      <AppText variant="label">{label}</AppText>
-      <AppText variant="heading">{value}</AppText>
+    <View style={styles.metricCard}>
+      <AppText style={styles.metricLabel}>{label}</AppText>
+      <AppText style={styles.metricValue}>{value}</AppText>
+      {unit ? <AppText style={styles.metricUnit}>{unit}</AppText> : null}
     </View>
   );
 }
@@ -197,14 +201,102 @@ function buildDailyTrendFromStream(
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
-    gap: spacing.lg,
+    gap: 12,
+    paddingBottom: spacing.lg * 2,
   },
-  metricsRow: {
+  // Hero card
+  heroCard: {
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 6,
+  },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  heroNumber: {
+    fontSize: 52,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -1,
+    lineHeight: 56,
+  },
+  heroLabel: {
+    fontSize: 14,
+    color: colors.muted,
+  },
+  heroBadge: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
   },
-  metric: {
-    flex: 1,
+  badgeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // Metric grid
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  metricCard: {
+    width: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 4,
+  },
+  metricLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  metricValue: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.5,
+  },
+  metricUnit: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  // Generic card
+  card: {
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 6,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  cardSubtitle: {
+    fontSize: 13,
+    color: colors.muted,
+    marginBottom: 8,
   },
 });

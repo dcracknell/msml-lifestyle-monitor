@@ -1,5 +1,5 @@
 import { Component, ReactNode, useCallback, useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as WebBrowser from 'expo-web-browser';
@@ -441,6 +441,13 @@ export function ActivityScreen() {
   const longestRunKm = chartSummary.longestRunKm ?? summary?.longestRunKm ?? null;
   const longestRunLabel = chartSummary.longestRunLabel || summary?.longestRunName || 'Awaiting sync';
 
+  const loadBadgeColor = weeklyTrainingLoad == null
+    ? colors.muted
+    : weeklyTrainingLoad > 400 ? colors.warning : weeklyTrainingLoad > 100 ? colors.accent : colors.warning;
+  const loadBadgeLabel = weeklyTrainingLoad == null
+    ? 'No data'
+    : weeklyTrainingLoad > 400 ? 'High load' : weeklyTrainingLoad > 100 ? 'On track' : 'Low activity';
+
   return (
     <RefreshableScrollView
       contentContainerStyle={styles.container}
@@ -449,10 +456,23 @@ export function ActivityScreen() {
       showsVerticalScrollIndicator={false}
     >
       {isError ? (
-        <Card>
-          <AppText variant="muted">{extractErrorMessage(error, 'Showing cached activity data.')}</AppText>
-        </Card>
+        <View style={styles.errorBanner}>
+          <AppText style={styles.errorText}>{extractErrorMessage(error, 'Showing cached activity data.')}</AppText>
+        </View>
       ) : null}
+
+      {/* Hero: training load */}
+      <View style={styles.heroCard}>
+        <AppText style={styles.eyebrow}>TRAINING · {data.subject?.name ?? 'Athlete'}</AppText>
+        <AppText style={styles.heroNumber}>{formatNumber(weeklyTrainingLoad)}</AppText>
+        <AppText style={styles.heroLabel}>Weekly training load</AppText>
+        <View style={[styles.heroBadge, { backgroundColor: `${loadBadgeColor}1a`, borderColor: `${loadBadgeColor}44` }]}>
+          <View style={[styles.badgeDot, { backgroundColor: loadBadgeColor }]} />
+          <AppText style={[styles.badgeText, { color: loadBadgeColor }]}>{loadBadgeLabel}</AppText>
+        </View>
+      </View>
+
+      {/* Goals card */}
       {goalsReady ? (
         <ActivityGoalCard
           summaryDistanceKm={weeklyDistanceKm ?? 0}
@@ -463,25 +483,104 @@ export function ActivityScreen() {
           onToggleMinimized={toggleMinimized}
         />
       ) : null}
-      <SectionHeader title="Training summary" subtitle={data.subject?.name} />
-      <View style={styles.statRow}>
-        <StatCard label="Weekly distance" value={formatKilometers(weeklyDistanceKm)} />
-        <StatCard label="Weekly duration" value={formatWeeklyDuration(weeklyDurationMin)} />
+
+      {/* 2×3 metric grid */}
+      <View style={styles.metricGrid}>
+        <ActivityMetric label="WEEKLY DISTANCE" value={formatKilometers(weeklyDistanceKm)} />
+        <ActivityMetric label="WEEKLY DURATION" value={formatWeeklyDuration(weeklyDurationMin)} />
+        <ActivityMetric label="AVG PACE" value={formatPace(averagePaceSeconds)} />
+        <ActivityMetric label="LONGEST RUN" value={formatKilometers(longestRunKm)} sub={longestRunLabel ?? undefined} />
+        <ActivityMetric label="TRAINING LOAD" value={formatNumber(weeklyTrainingLoad)} />
+        <ActivityMetric label="VO₂ MAX" value={formatDecimal(summary?.vo2maxEstimate ?? null, 1)} />
       </View>
-      <View style={styles.statRow}>
-        <StatCard label="Training load" value={formatNumber(weeklyTrainingLoad)} />
-        <StatCard label="VO₂ max" value={formatDecimal(summary?.vo2maxEstimate ?? null, 1)} />
+
+      {/* Training load chart */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>TREND · TRAINING LOAD</AppText>
+        <AppText style={styles.cardTitle}>Training load</AppText>
+        <AppText style={styles.cardSubtitle}>Recent sessions</AppText>
+        <ChartErrorBoundary fallback="Training load chart is unavailable on this device.">
+          <TrendChart data={trainingTrend} yLabel="Load" />
+        </ChartErrorBoundary>
       </View>
-      <View style={styles.statRow}>
-        <StatCard label="Avg pace" value={formatPace(averagePaceSeconds)} />
-        <StatCard
-          label="Longest run"
-          value={formatKilometers(longestRunKm)}
-          trend={longestRunLabel}
-        />
+
+      {/* Mileage vs duration */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>CHART · VOLUME</AppText>
+        <AppText style={styles.cardTitle}>Mileage vs duration</AppText>
+        <AppText style={styles.cardSubtitle}>Last sessions</AppText>
+        <ChartErrorBoundary fallback="Mileage chart is unavailable on this device.">
+          <MultiSeriesLineChart series={mileageSeries} yLabel="Volume" />
+        </ChartErrorBoundary>
+        <ChartLegend items={legendItems} />
       </View>
-      <Card>
-        <SectionHeader title="Phone data export" subtitle="Permission-based" />
+
+      {/* Pace vs HR scatter */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>CHART · EFFICIENCY</AppText>
+        <AppText style={styles.cardTitle}>Pace vs heart rate</AppText>
+        <AppText style={styles.cardSubtitle}>Session comparison</AppText>
+        <ChartErrorBoundary fallback="Pace vs heart rate chart is unavailable on this device.">
+          <ScatterChart
+            data={pacePoints}
+            xLabel="Pace (per km)"
+            yLabel="Avg heart rate"
+            xFormatter={(value) => formatPace(Number(value))}
+            yFormatter={(value) => formatHeartRateAxis(Number(value))}
+          />
+        </ChartErrorBoundary>
+      </View>
+
+      {/* Best efforts */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>BEST EFFORTS</AppText>
+        <AppText style={styles.cardTitle}>Personal bests</AppText>
+        {efforts.length ? (
+          efforts.map((effort) => (
+            <View key={effort.label} style={styles.effortRow}>
+              <AppText style={styles.effortLabel}>{effort.label}</AppText>
+              <View style={styles.effortRight}>
+                <AppText style={styles.effortValue}>{formatDistance(effort.distance || 0)}</AppText>
+                <AppText style={styles.mutedText}>{formatPace(effort.paceSeconds)}</AppText>
+              </View>
+            </View>
+          ))
+        ) : (
+          <AppText style={styles.mutedText}>Not enough data yet.</AppText>
+        )}
+      </View>
+
+      {/* Recent sessions */}
+      <View style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <AppText style={styles.eyebrow}>RECENT SESSIONS</AppText>
+          <Pressable onPress={() => navigation.navigate('Sessions' as never)} style={styles.seeAllBtn}>
+            <AppText style={styles.seeAllText}>See all</AppText>
+          </Pressable>
+        </View>
+        <AppText style={styles.cardTitle}>Latest 3</AppText>
+        {sessions.length ? (
+          sessions.slice(0, 3).map((session) => (
+            <View key={session.id} style={styles.sessionRow}>
+              <View style={{ flex: 1 }}>
+                <AppText style={styles.sessionName}>{session.name}</AppText>
+                <AppText style={styles.mutedText}>{formatDate(session.startTime)} · {session.sportType}</AppText>
+              </View>
+              <View style={styles.sessionRight}>
+                <AppText style={styles.sessionDistance}>{formatDistance(session.distance || 0)}</AppText>
+                <AppText style={styles.mutedText}>{formatPace(session.averagePace)}</AppText>
+              </View>
+            </View>
+          ))
+        ) : (
+          <AppText style={styles.mutedText}>No sessions available yet.</AppText>
+        )}
+      </View>
+
+      {/* Phone export */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>PHONE DATA</AppText>
+        <AppText style={styles.cardTitle}>Step count export</AppText>
         <View style={styles.phoneExportActions}>
           <AppButton
             title={isPhoneExporting ? 'Exporting…' : 'Export now'}
@@ -496,84 +595,30 @@ export function ActivityScreen() {
             disabled={isPhoneExporting}
           />
         </View>
-        <AppText variant="muted" style={styles.phoneExportHint}>
-          Reads your phone step count after permission and sends it to streams as {`phone.steps`} every 15 minutes while this screen is open.
+        <AppText style={styles.mutedText}>
+          Reads phone step count every 15 min while this screen is open.
         </AppText>
-        <StatCard label="Today from phone" value={formatNumber(todayPhoneSteps)} />
-        {phoneExportFeedback ? <AppText variant="muted">{phoneExportFeedback}</AppText> : null}
-      </Card>
+        <View style={styles.phoneStepRow}>
+          <AppText style={styles.phoneStepLabel}>TODAY FROM PHONE</AppText>
+          <AppText style={styles.phoneStepValue}>{formatNumber(todayPhoneSteps)}</AppText>
+        </View>
+        {phoneExportFeedback ? <AppText style={styles.mutedText}>{phoneExportFeedback}</AppText> : null}
+      </View>
 
-      <Card>
-        <SectionHeader title="Mileage vs duration" subtitle="Last sessions" />
-        <ChartErrorBoundary fallback="Mileage chart is unavailable on this device.">
-          <MultiSeriesLineChart series={mileageSeries} yLabel="Volume" />
-        </ChartErrorBoundary>
-        <ChartLegend items={legendItems} />
-      </Card>
-      <Card>
-        <SectionHeader title="Training load" subtitle="Recent sync" />
-        <ChartErrorBoundary fallback="Training load chart is unavailable on this device.">
-          <TrendChart data={trainingTrend} yLabel="Load" />
-        </ChartErrorBoundary>
-      </Card>
-      <Card>
-        <SectionHeader title="Pace vs heart rate" subtitle="Session comparison" />
-        <ChartErrorBoundary fallback="Pace vs heart rate chart is unavailable on this device.">
-          <ScatterChart
-            data={pacePoints}
-            xLabel="Pace (per km)"
-            yLabel="Avg heart rate"
-            xFormatter={(value) => formatPace(Number(value))}
-            yFormatter={(value) => formatHeartRateAxis(Number(value))}
-          />
-        </ChartErrorBoundary>
-      </Card>
-      <Card>
-        <SectionHeader title="Best efforts" subtitle="Auto-detected" />
-        {efforts.length ? (
-          efforts.map((effort) => (
-            <View key={effort.label} style={styles.effortRow}>
-              <AppText variant="body">{effort.label}</AppText>
-              <View>
-                <AppText variant="heading">{formatDistance(effort.distance || 0)}</AppText>
-                <AppText variant="muted">{formatPace(effort.paceSeconds)}</AppText>
-              </View>
-            </View>
-          ))
-        ) : (
-          <AppText variant="muted">Not enough data yet.</AppText>
-        )}
-      </Card>
-      <Card>
-        <SectionHeader title="Recent sessions" subtitle="Latest 3" action={
-          <AppButton title="See all" variant="ghost" onPress={() => navigation.navigate('Sessions' as never)} />
-        } />
-        {sessions.length ? (
-          sessions.slice(0, 3).map((session) => (
-            <View key={session.id} style={styles.sessionRow}>
-              <View>
-                <AppText variant="body">{session.name}</AppText>
-                <AppText variant="muted">{formatDate(session.startTime)} · {session.sportType}</AppText>
-              </View>
-              <View>
-                <AppText variant="heading">{formatDistance(session.distance || 0)}</AppText>
-                <AppText variant="muted">{formatPace(session.averagePace)}</AppText>
-              </View>
-            </View>
-          ))
-        ) : (
-          <AppText variant="muted">No sessions available yet.</AppText>
-        )}
-      </Card>
+      {/* Strava */}
       {data.strava?.enabled || data.strava?.canManage ? (
-        <Card>
-          <SectionHeader
-            title="Strava"
-            subtitle={
-              data.strava.connected ? 'Connected' : data.strava.requiresSetup ? 'Unavailable' : 'Not linked'
-            }
-          />
-          <AppText variant="muted">
+        <View style={styles.card}>
+          <AppText style={styles.eyebrow}>STRAVA</AppText>
+          <View style={styles.cardTitleRow}>
+            <AppText style={styles.cardTitle}>Strava</AppText>
+            <View style={[styles.stravaPill, data.strava.connected && styles.stravaPillConnected]}>
+              <View style={[styles.badgeDot, { backgroundColor: data.strava.connected ? colors.accent : colors.warning }]} />
+              <AppText style={[styles.badgeText, { color: data.strava.connected ? colors.accent : colors.warning }]}>
+                {data.strava.connected ? 'Connected' : data.strava.requiresSetup ? 'Unavailable' : 'Not linked'}
+              </AppText>
+            </View>
+          </View>
+          <AppText style={styles.mutedText}>
             {data.strava.connected
               ? `Last sync ${data.strava.lastSync ? formatDate(data.strava.lastSync, 'MMM D, HH:mm') : 'pending'}`
               : data.strava.requiresSetup
@@ -596,17 +641,8 @@ export function ActivityScreen() {
               </>
             ) : null}
           </View>
-          {data.strava.requiresSetup ? (
-            <AppText variant="muted" style={styles.warning}>
-              Strava is not configured on this server yet. Ask the app admin to enable it.
-            </AppText>
-          ) : null}
-          {stravaFeedback ? (
-            <AppText variant="muted" style={styles.stravaFeedback}>
-              {stravaFeedback}
-            </AppText>
-          ) : null}
-        </Card>
+          {stravaFeedback ? <AppText style={styles.mutedText}>{stravaFeedback}</AppText> : null}
+        </View>
       ) : null}
     </RefreshableScrollView>
   );
@@ -973,54 +1009,253 @@ function buildPaceHeartRateScatter(
   return scatter.map(({ x, y, label }) => ({ x, y, label }));
 }
 
+function ActivityMetric({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <View style={styles.activityMetric}>
+      <AppText style={styles.activityMetricLabel}>{label}</AppText>
+      <AppText style={styles.activityMetricValue}>{value}</AppText>
+      {sub ? <AppText style={styles.mutedText}>{sub}</AppText> : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
-    gap: spacing.lg,
+    gap: 12,
+    paddingBottom: spacing.lg * 2,
   },
-  statRow: {
+  // Hero card
+  heroCard: {
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 4,
+  },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  heroNumber: {
+    fontSize: 52,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -1,
+    lineHeight: 56,
+  },
+  heroLabel: {
+    fontSize: 14,
+    color: colors.muted,
+    marginBottom: 4,
+  },
+  heroBadge: {
     flexDirection: 'row',
-    gap: spacing.md,
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    borderRadius: 100,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
+  badgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // Metric grid
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  activityMetric: {
+    width: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 4,
+  },
+  activityMetricLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  activityMetricValue: {
+    fontSize: 21,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  // Generic card
+  card: {
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 8,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  cardSubtitle: {
+    fontSize: 12,
+    color: colors.muted,
+    marginBottom: 4,
+  },
+  cardTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  // Effort rows
   effortRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: spacing.xs,
+    alignItems: 'center',
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  effortLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  effortRight: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  effortValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.accent,
+  },
+  // Session rows
   sessionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  stravaActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
+  sessionName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
   },
-  warning: {
-    marginTop: spacing.sm,
-    color: colors.warning,
+  sessionRight: {
+    alignItems: 'flex-end',
+    gap: 2,
   },
-  stravaFeedback: {
-    marginTop: spacing.sm,
+  sessionDistance: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.accent,
   },
+  seeAllBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  seeAllText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.accent,
+  },
+  // Phone export
   phoneExportActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
-  phoneExportHint: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.sm,
+  phoneStepRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.glass,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginTop: 4,
   },
+  phoneStepLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  phoneStepValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  // Strava
+  stravaActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  stravaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: `${colors.warning}44`,
+    backgroundColor: `${colors.warning}1a`,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  stravaPillConnected: {
+    borderColor: `${colors.accent}44`,
+    backgroundColor: `${colors.accent}1a`,
+  },
+  // Misc
+  mutedText: {
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 18,
+  },
+  errorBanner: {
+    backgroundColor: `${colors.danger}18`,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${colors.danger}44`,
+    padding: 12,
+  },
+  errorText: {
+    fontSize: 13,
+    color: colors.danger,
+  },
+  // Chart fallback (used by ChartErrorBoundary)
   chartFallback: {
     alignItems: 'center',
     paddingVertical: spacing.md,
   },
+  // Goal card styles (ActivityGoalCard / GoalProgressBar)
   goalContent: {
     gap: spacing.md,
   },

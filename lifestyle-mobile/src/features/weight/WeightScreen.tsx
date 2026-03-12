@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, Pressable } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { weightRequest, deleteWeightEntryRequest } from '../../api/endpoints';
 import { WeightStats } from '../../api/types';
@@ -103,6 +103,13 @@ export function WeightScreen() {
     refetch();
   };
 
+  const bmiForHero = bodyMetrics.isReady && latestWeightKg && bodyMetrics.heightCm
+    ? latestWeightKg / Math.pow(bodyMetrics.heightCm / 100, 2)
+    : null;
+  const weeklyChange = unit === 'kg' ? data.stats?.weeklyChangeKg : data.stats?.weeklyChangeLbs;
+  const changeColor = weeklyChange == null ? colors.muted : weeklyChange > 0 ? colors.warning : colors.accent;
+  const changeSign = weeklyChange != null && weeklyChange > 0 ? '+' : '';
+
   return (
     <RefreshableScrollView
       contentContainerStyle={styles.container}
@@ -110,6 +117,51 @@ export function WeightScreen() {
       onRefresh={refetch}
       showsVerticalScrollIndicator={false}
     >
+      {/* Hero */}
+      <View style={styles.heroCard}>
+        <AppText style={styles.eyebrow}>BODY WEIGHT</AppText>
+        <AppText style={styles.heroNumber}>
+          {latestWeightKg !== null ? `${latestWeightKg.toFixed(1)} kg` : '--'}
+        </AppText>
+        <AppText style={styles.heroLabel}>
+          {latestWeightKg !== null && latestWeightLbs !== null ? `${latestWeightLbs.toFixed(1)} lb` : 'No entry yet'}
+        </AppText>
+        <View style={styles.heroBadgeRow}>
+          {bmiForHero !== null ? (
+            <View style={styles.heroBadge}>
+              <AppText style={styles.badgeText}>BMI {bmiForHero.toFixed(1)}</AppText>
+            </View>
+          ) : null}
+          {weeklyChange != null ? (
+            <View style={[styles.heroBadge, { borderColor: `${changeColor}44`, backgroundColor: `${changeColor}12` }]}>
+              <View style={[styles.badgeDot, { backgroundColor: changeColor }]} />
+              <AppText style={[styles.badgeText, { color: changeColor }]}>
+                {changeSign}{weeklyChange.toFixed(1)} {unit} this week
+              </AppText>
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      {/* 4-metric grid */}
+      {data.stats ? (
+        <View style={styles.metricGrid}>
+          <WeightMetric label="BMI" value={bmiForHero !== null ? bmiForHero.toFixed(1) : '--'} />
+          <WeightMetric label={`AVG ${unit.toUpperCase()}`} value={formatNumber(unit === 'kg' ? data.stats.avgWeightKg : data.stats.avgWeightLbs, { suffix: ` ${unit}` })} />
+          <WeightMetric label="WEEKLY CHANGE" value={weeklyChange != null ? `${changeSign}${weeklyChange.toFixed(1)} ${unit}` : '--'} />
+          <WeightMetric label="CALORIE AVG" value={formatNumber(data.stats.caloriesAvg, { suffix: ' kcal' })} />
+        </View>
+      ) : null}
+
+      {/* Timeline chart */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>TIMELINE · 14 DAYS</AppText>
+        <AppText style={styles.cardTitle}>Weight trend</AppText>
+        <AppText style={styles.cardSubtitle}>Avg weekly change {formatNumber(data.stats?.weeklyChangeKg)} kg</AppText>
+        <TrendChart data={trend} yLabel={unit} />
+      </View>
+
+      {/* Body metrics (BMI detail) */}
       {bodyMetrics.isReady ? (
         <BodyMetricsCard
           latestWeightKg={latestWeightKg}
@@ -119,16 +171,14 @@ export function WeightScreen() {
           onSaveHeight={bodyMetrics.saveHeight}
         />
       ) : null}
-      <Card>
-        <SectionHeader title="Log weight" subtitle="Sync with goals" />
+
+      {/* Log weight */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>LOG WEIGHT</AppText>
+        <AppText style={styles.cardTitle}>Add entry</AppText>
         {viewingOwnData ? (
           <>
-            <AppInput
-              label={`Weight (${unit})`}
-              keyboardType="numeric"
-              value={value}
-              onChangeText={setValue}
-            />
+            <AppInput label={`Weight (${unit})`} keyboardType="numeric" value={value} onChangeText={setValue} />
             <AppButton title={`Save in ${unit}`} onPress={handleAdd} loading={isSubmitting} />
             <AppButton
               title={`Switch to ${unit === 'kg' ? 'lb' : 'kg'}`}
@@ -137,59 +187,158 @@ export function WeightScreen() {
             />
           </>
         ) : (
-          <AppText variant="muted">
+          <AppText style={styles.mutedText}>
             Switch to your own dashboard to log weight. Coaches can only view athlete history.
           </AppText>
         )}
-        {feedback ? (
-          <AppText variant="muted" style={styles.feedback}>
-            {feedback}
-          </AppText>
-        ) : null}
-      </Card>
-      <Card>
-        <SectionHeader title="Recent" subtitle="Last 10 entries" />
+        {feedback ? <AppText style={styles.mutedText}>{feedback}</AppText> : null}
+      </View>
+
+      {/* Recent entries */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>RECENT ENTRIES</AppText>
+        <AppText style={styles.cardTitle}>Last 10</AppText>
         {data.recent.length ? (
           data.recent.map((entry) => (
             <View key={entry.id} style={styles.entryRow}>
               <View>
-                <AppText variant="body">{formatDate(entry.date)}</AppText>
-                <AppText variant="muted">
-                  {entry.weightKg} kg · {entry.weightLbs} lb
-                </AppText>
+                <AppText style={styles.entryDate}>{formatDate(entry.date)}</AppText>
+                <AppText style={styles.mutedText}>{entry.weightKg} kg · {entry.weightLbs} lb</AppText>
               </View>
               {viewingOwnData ? (
-                <AppButton title="Remove" variant="ghost" onPress={() => handleDelete(entry.id)} />
+                <Pressable style={styles.removeBtn} onPress={() => handleDelete(entry.id)}>
+                  <AppText style={styles.removeBtnText}>Remove</AppText>
+                </Pressable>
               ) : null}
             </View>
           ))
         ) : (
-          <AppText variant="muted">No entries yet.</AppText>
+          <AppText style={styles.mutedText}>No entries yet.</AppText>
         )}
-      </Card>
-      <WeightStatsCard stats={data.stats} unit={unit} />
-      <Card>
-        <SectionHeader title="Timeline" subtitle={`Avg change ${formatNumber(data.stats?.weeklyChangeKg)} kg`} />
-        <TrendChart data={trend} yLabel={unit} />
-      </Card>
+      </View>
     </RefreshableScrollView>
+  );
+}
+
+function WeightMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metricCard}>
+      <AppText style={styles.metricLabel}>{label}</AppText>
+      <AppText style={styles.metricValue}>{value}</AppText>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
-    gap: spacing.lg,
+    gap: 12,
+    paddingBottom: spacing.lg * 2,
   },
-  entryRow: {
+  // Hero
+  heroCard: {
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 6,
+  },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  heroNumber: {
+    fontSize: 52,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -1,
+    lineHeight: 56,
+  },
+  heroLabel: {
+    fontSize: 14,
+    color: colors.muted,
+  },
+  heroBadgeRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: 4,
+  },
+  heroBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing.xs,
+    gap: 5,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
-  feedback: {
-    marginTop: spacing.sm,
+  badgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  // Metric grid
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  metricCard: {
+    width: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 4,
+  },
+  metricLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  metricValue: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.5,
+  },
+  // Generic card
+  card: {
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 10,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  cardSubtitle: {
+    fontSize: 13,
+    color: colors.muted,
+    marginBottom: 4,
+  },
+  // BMI card (BodyMetricsCard uses Card component which has its own styles)
   bmiRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -215,13 +364,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
   },
   badgeSuccess: {
-    backgroundColor: 'rgba(91,214,162,0.2)',
+    backgroundColor: `${colors.accent}22`,
   },
   badgeWarning: {
-    backgroundColor: 'rgba(244,199,111,0.2)',
+    backgroundColor: `${colors.warning}22`,
   },
   badgeDanger: {
-    backgroundColor: 'rgba(255,107,129,0.2)',
+    backgroundColor: `${colors.danger}22`,
   },
   bmiDetails: {
     flex: 1,
@@ -248,7 +397,41 @@ const styles = StyleSheet.create({
     color: colors.warning,
   },
   trendDown: {
-    color: colors.success,
+    color: colors.accent,
+  },
+  // Entries
+  entryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  entryDate: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  removeBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  removeBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  feedback: {
+    marginTop: spacing.sm,
+  },
+  mutedText: {
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 18,
   },
 });
 

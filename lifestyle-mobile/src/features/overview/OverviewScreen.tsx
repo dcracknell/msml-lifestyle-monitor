@@ -1,13 +1,11 @@
-import { ComponentProps, ReactNode } from 'react';
+import React, { ReactNode } from 'react';
 import dayjs from 'dayjs';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, View } from 'react-native';
 import { useQueries } from '@tanstack/react-query';
 import {
   AppButton,
   AppText,
-  Card,
   ErrorView,
   LoadingView,
   RefreshableScrollView,
@@ -23,10 +21,10 @@ import {
 } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
 import { useSubject } from '../../providers/SubjectProvider';
-import { colors, fonts, spacing } from '../../theme';
+import { colors, spacing } from '../../theme';
 import { formatDate, formatDecimal, formatNumber, formatPace } from '../../utils/format';
 
-type IconName = ComponentProps<typeof Ionicons>['name'];
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type SectionTone = {
   color: string;
@@ -43,31 +41,29 @@ type InsightChip = {
   tone: InsightTone;
 };
 
-const HERO_GRADIENT = ['#071019', '#0b1c29', '#123344'] as const;
-
 const SECTION_TONES: Record<'recovery' | 'training' | 'nutrition' | 'trends', SectionTone> = {
   recovery: {
-    color: '#43d9c9',
-    soft: 'rgba(67, 217, 201, 0.10)',
-    border: 'rgba(67, 217, 201, 0.30)',
+    color: colors.accent,
+    soft: `${colors.accent}18`,
+    border: `${colors.accent}44`,
     icon: 'moon-outline',
   },
   training: {
-    color: '#ff9a52',
-    soft: 'rgba(255, 154, 82, 0.10)',
-    border: 'rgba(255, 154, 82, 0.28)',
+    color: colors.warning,
+    soft: `${colors.warning}18`,
+    border: `${colors.warning}44`,
     icon: 'barbell-outline',
   },
   nutrition: {
-    color: '#78d87a',
-    soft: 'rgba(120, 216, 122, 0.10)',
-    border: 'rgba(120, 216, 122, 0.28)',
+    color: colors.success,
+    soft: `${colors.success}18`,
+    border: `${colors.success}44`,
     icon: 'leaf-outline',
   },
   trends: {
-    color: '#7eaefc',
-    soft: 'rgba(126, 174, 252, 0.10)',
-    border: 'rgba(126, 174, 252, 0.24)',
+    color: colors.accentStrong,
+    soft: `${colors.accentStrong}18`,
+    border: `${colors.accentStrong}44`,
     icon: 'analytics-outline',
   },
 };
@@ -226,82 +222,69 @@ export function OverviewScreen() {
     >
       <SubjectSwitcher />
 
-      <Card padded={false} style={styles.heroCard}>
-        <LinearGradient colors={HERO_GRADIENT} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.heroGradient}>
-          <View style={[styles.heroOrb, styles.heroOrbLeft]} />
-          <View style={[styles.heroOrb, styles.heroOrbRight]} />
-
-          <View style={styles.heroHeader}>
-            <View style={styles.heroTextWrap}>
-              <AppText variant="eyebrow" style={styles.heroEyebrow}>
-                Performance overview
-              </AppText>
-              <AppText style={styles.heroTitle}>{firstName}'s athlete dashboard</AppText>
-              <AppText variant="muted" style={styles.heroSubtitle}>
-                Readiness, sleep, training strain, and fueling in one clean daily view.
-              </AppText>
-            </View>
-            <View style={styles.datePill}>
-              <Ionicons name="time-outline" size={14} color={colors.text} />
-              <AppText variant="label" style={styles.datePillText}>
-                {formatDate(selectedDate, 'ddd, MMM D')}
-              </AppText>
-            </View>
-          </View>
-
-          <View style={styles.heroMetricsRow}>
-            <HeroMetric
-              label="Readiness"
-              value={formatPercent(readinessScore)}
-              helper={readinessGoal ? `Goal ${formatPercent(readinessGoal)}` : 'Recovery score'}
-              icon="sparkles-outline"
-              tone={SECTION_TONES.recovery}
-            />
-            <HeroMetric
-              label="Sleep"
-              value={formatShortHours(sleepAverage)}
-              helper={sleepGoal ? `Goal ${formatShortHours(sleepGoal)}` : 'Nightly average'}
-              icon="moon-outline"
-              tone={SECTION_TONES.recovery}
-            />
-            <HeroMetric
-              label="Training Load"
-              value={formatNumber(trainingLoad)}
-              helper="Weekly strain"
-              icon="barbell-outline"
-              tone={SECTION_TONES.training}
-            />
-          </View>
-        </LinearGradient>
-      </Card>
-
-      <Card style={styles.insightCard}>
-        <View style={styles.insightHeader}>
-          <View style={styles.insightTitleRow}>
-            <View style={styles.insightIconWrap}>
-              <Ionicons name="sparkles-outline" size={16} color={colors.accent} />
-            </View>
-            <View style={styles.insightTextWrap}>
-              <AppText variant="label">Daily Insight</AppText>
-              <AppText style={styles.insightTitle}>{dailyInsight.headline}</AppText>
-            </View>
+      {/* Page header */}
+      <View style={styles.pageHeader}>
+        <AppText style={styles.eyebrow}>OVERVIEW</AppText>
+        <View style={styles.headerRow}>
+          <AppText style={styles.pageTitle}>{firstName}'s dashboard</AppText>
+          <View style={styles.datePill}>
+            <Ionicons name="time-outline" size={13} color={colors.muted} />
+            <AppText style={styles.datePillText}>{formatDate(selectedDate, 'ddd, MMM D')}</AppText>
           </View>
         </View>
-        <AppText variant="muted" style={styles.insightSummary}>
-          {dailyInsight.summary}
-        </AppText>
+      </View>
+
+      {/* Hero: 3 top-line metrics */}
+      <View style={styles.heroCard}>
+        <View style={styles.heroMetricsRow}>
+          <HeroMetric
+            label="Readiness"
+            value={formatPercent(readinessScore)}
+            helper={readinessGoal ? `Goal ${formatPercent(readinessGoal)}` : 'Recovery score'}
+            icon="sparkles-outline"
+            tone={SECTION_TONES.recovery}
+          />
+          <HeroMetric
+            label="Sleep"
+            value={formatShortHours(sleepAverage)}
+            helper={sleepGoal ? `Goal ${formatShortHours(sleepGoal)}` : 'Nightly average'}
+            icon="moon-outline"
+            tone={SECTION_TONES.recovery}
+          />
+          <HeroMetric
+            label="Load"
+            value={formatNumber(trainingLoad)}
+            helper="Weekly strain"
+            icon="barbell-outline"
+            tone={SECTION_TONES.training}
+          />
+        </View>
+      </View>
+
+      {/* Daily insight card */}
+      <View style={styles.insightCard}>
+        <View style={styles.insightTitleRow}>
+          <View style={styles.insightIconWrap}>
+            <Ionicons name="sparkles-outline" size={15} color={colors.accent} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <AppText style={styles.insightLabel}>DAILY INSIGHT</AppText>
+            <AppText style={styles.insightTitle}>{dailyInsight.headline}</AppText>
+          </View>
+        </View>
+        <AppText style={styles.insightSummary}>{dailyInsight.summary}</AppText>
         <View style={styles.insightChipRow}>
           {dailyInsight.chips.map((chip) => (
             <InsightChipBlock key={chip.label} chip={chip} />
           ))}
         </View>
-      </Card>
+      </View>
 
-      <Card style={[styles.sectionCard, { borderColor: SECTION_TONES.recovery.border }]}>
+      {/* Recovery section */}
+      <View style={[styles.sectionCard, { borderColor: SECTION_TONES.recovery.border }]}>
         <SectionLabel
           eyebrow="Recovery"
-          title="Sleep, readiness, and vital recovery markers"
-          subtitle="Your key overnight signals in one section."
+          title="Sleep & vitals"
           tone={SECTION_TONES.recovery}
           badge={recoveryBadge}
         />
@@ -335,13 +318,13 @@ export function OverviewScreen() {
             />
           </View>
         )}
-      </Card>
+      </View>
 
-      <Card style={[styles.sectionCard, { borderColor: SECTION_TONES.training.border }]}>
+      {/* Training section */}
+      <View style={[styles.sectionCard, { borderColor: SECTION_TONES.training.border }]}>
         <SectionLabel
           eyebrow="Training"
-          title="Weekly load, volume, and pace"
-          subtitle="Keep the essentials visible without stacking extra cards."
+          title="Weekly volume & load"
           tone={SECTION_TONES.training}
           badge={trainingBadge}
         />
@@ -375,13 +358,13 @@ export function OverviewScreen() {
             />
           </View>
         )}
-      </Card>
+      </View>
 
-      <Card style={[styles.sectionCard, { borderColor: SECTION_TONES.nutrition.border }]}>
+      {/* Nutrition section */}
+      <View style={[styles.sectionCard, { borderColor: SECTION_TONES.nutrition.border }]}>
         <SectionLabel
           eyebrow="Nutrition"
-          title="Fueling and body metrics"
-          subtitle="Daily intake and body mass condensed into compact summary blocks."
+          title="Fueling & body metrics"
           tone={SECTION_TONES.nutrition}
           badge={nutritionBadge}
         />
@@ -419,13 +402,13 @@ export function OverviewScreen() {
             />
           </View>
         )}
-      </Card>
+      </View>
 
-      <Card style={[styles.sectionCard, { borderColor: SECTION_TONES.trends.border }]}>
+      {/* Trends section */}
+      <View style={[styles.sectionCard, { borderColor: SECTION_TONES.trends.border }]}>
         <SectionLabel
           eyebrow="Trends"
-          title="Recent performance curves"
-          subtitle="Cleaner charts with clearer titles and stronger contrast."
+          title="Performance curves"
           tone={SECTION_TONES.trends}
         />
         <View style={styles.chartStack}>
@@ -492,7 +475,7 @@ export function OverviewScreen() {
             />
           </ChartPanel>
         </View>
-      </Card>
+      </View>
     </RefreshableScrollView>
   );
 }
@@ -511,19 +494,13 @@ function HeroMetric({
   tone: SectionTone;
 }) {
   return (
-    <View style={[styles.heroMetric, { backgroundColor: 'rgba(3, 10, 18, 0.34)', borderColor: tone.border }]}>
-      <View style={styles.heroMetricHeader}>
-        <AppText variant="label" style={styles.heroMetricLabel}>
-          {label}
-        </AppText>
-        <View style={[styles.metricIconBadge, { backgroundColor: tone.soft }]}>
-          <Ionicons name={icon} size={14} color={tone.color} />
-        </View>
+    <View style={[styles.heroMetric, { borderColor: tone.border }]}>
+      <View style={[styles.metricIconBadge, { backgroundColor: tone.soft }]}>
+        <Ionicons name={icon} size={14} color={tone.color} />
       </View>
+      <AppText style={styles.heroMetricLabel}>{label}</AppText>
       <AppText style={styles.heroMetricValue}>{value}</AppText>
-      <AppText variant="muted" style={styles.heroMetricHelper}>
-        {helper}
-      </AppText>
+      <AppText style={styles.heroMetricHelper}>{helper}</AppText>
     </View>
   );
 }
@@ -531,13 +508,11 @@ function HeroMetric({
 function SectionLabel({
   eyebrow,
   title,
-  subtitle,
   tone,
   badge,
 }: {
   eyebrow: string;
   title: string;
-  subtitle: string;
   tone: SectionTone;
   badge?: string | null;
 }) {
@@ -547,19 +522,14 @@ function SectionLabel({
         <View style={[styles.sectionIconWrap, { backgroundColor: tone.soft }]}>
           <Ionicons name={tone.icon} size={16} color={tone.color} />
         </View>
-        <View style={styles.sectionCopy}>
-          <AppText variant="eyebrow">{eyebrow}</AppText>
+        <View style={{ flex: 1, gap: 2 }}>
+          <AppText style={styles.sectionEyebrow}>{eyebrow}</AppText>
           <AppText style={styles.sectionTitle}>{title}</AppText>
-          <AppText variant="muted" style={styles.sectionSubtitle}>
-            {subtitle}
-          </AppText>
         </View>
       </View>
       {badge ? (
         <View style={[styles.sectionBadge, { backgroundColor: tone.soft, borderColor: tone.border }]}>
-          <AppText variant="label" style={[styles.sectionBadgeText, { color: tone.color }]}>
-            {badge}
-          </AppText>
+          <AppText style={[styles.sectionBadgeText, { color: tone.color }]}>{badge}</AppText>
         </View>
       ) : null}
     </View>
@@ -579,11 +549,9 @@ function SummaryBlock({
 }) {
   return (
     <View style={[styles.summaryBlock, { backgroundColor: tone.soft, borderColor: tone.border }]}>
-      <AppText variant="label">{label}</AppText>
+      <AppText style={styles.summaryLabel}>{label}</AppText>
       <AppText style={styles.summaryValue}>{value}</AppText>
-      <AppText variant="muted" style={styles.summaryHelper}>
-        {helper || 'No recent context'}
-      </AppText>
+      <AppText style={styles.summaryHelper}>{helper || 'No recent context'}</AppText>
     </View>
   );
 }
@@ -592,9 +560,7 @@ function InsightChipBlock({ chip }: { chip: InsightChip }) {
   const tint = getInsightTone(chip.tone);
   return (
     <View style={[styles.insightChip, { backgroundColor: tint.soft, borderColor: tint.border }]}>
-      <AppText variant="label" style={[styles.insightChipLabel, { color: tint.color }]}>
-        {chip.label}
-      </AppText>
+      <AppText style={[styles.insightChipLabel, { color: tint.color }]}>{chip.label}</AppText>
       <AppText style={styles.insightChipValue}>{chip.value}</AppText>
     </View>
   );
@@ -620,15 +586,13 @@ function ChartPanel({
   children: ReactNode;
 }) {
   return (
-    <View style={[styles.chartPanel, { backgroundColor: tone.soft, borderColor: tone.border }]}>
+    <View style={[styles.chartPanel, { borderColor: tone.border }]}>
       <View style={styles.chartPanelHeader}>
-        <View style={styles.chartPanelTitleWrap}>
+        <View style={{ flex: 1 }}>
           <AppText style={styles.chartTitle}>{title}</AppText>
-          <AppText variant="muted" style={styles.chartSubtitle}>
-            {subtitle}
-          </AppText>
+          <AppText style={styles.chartSubtitle}>{subtitle}</AppText>
         </View>
-        <AppText style={styles.chartValue}>{value}</AppText>
+        <AppText style={[styles.chartValue, { color: tone.color }]}>{value}</AppText>
       </View>
       {error ? <SectionRetryMessage label={retryLabel} onRetry={onRetry} /> : children}
     </View>
@@ -1006,102 +970,70 @@ function formatMacroProgress(current?: number | null, target?: number | null, su
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
-    paddingBottom: spacing.xxl,
-    gap: spacing.lg,
+    gap: 12,
+    paddingBottom: spacing.lg * 2,
   },
-  heroCard: {
-    overflow: 'hidden',
-    borderColor: 'rgba(255,255,255,0.10)',
-    backgroundColor: '#06111d',
-    shadowColor: '#000',
-    shadowOpacity: 0.28,
-    shadowRadius: 28,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 10,
+  // Page header
+  pageHeader: {
+    gap: 4,
   },
-  heroGradient: {
-    padding: spacing.lg,
-    gap: spacing.lg,
-    position: 'relative',
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
   },
-  heroOrb: {
-    position: 'absolute',
-    borderRadius: 999,
-    opacity: 0.18,
-  },
-  heroOrbLeft: {
-    width: 150,
-    height: 150,
-    backgroundColor: SECTION_TONES.recovery.color,
-    top: -48,
-    left: -36,
-  },
-  heroOrbRight: {
-    width: 190,
-    height: 190,
-    backgroundColor: SECTION_TONES.training.color,
-    bottom: -100,
-    right: -56,
-  },
-  heroHeader: {
+  headerRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.md,
-    alignItems: 'flex-start',
+    gap: 8,
   },
-  heroTextWrap: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  heroEyebrow: {
-    color: 'rgba(245, 247, 255, 0.72)',
-  },
-  heroTitle: {
+  pageTitle: {
+    fontSize: 32,
+    fontWeight: '700',
     color: colors.text,
-    fontFamily: fonts.display,
-    fontSize: 30,
-    lineHeight: 34,
-    letterSpacing: -0.8,
-  },
-  heroSubtitle: {
-    maxWidth: 280,
-    lineHeight: 22,
+    letterSpacing: -0.5,
+    flex: 1,
   },
   datePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 100,
+    backgroundColor: colors.glass,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: colors.border,
   },
   datePillText: {
-    color: colors.text,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  // Hero card
+  heroCard: {
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
   },
   heroMetricsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: 10,
   },
   heroMetric: {
     flexBasis: '31%',
     flexGrow: 1,
-    borderRadius: 18,
+    backgroundColor: colors.panel,
+    borderRadius: 14,
     borderWidth: 1,
-    padding: spacing.md,
-    gap: spacing.xs,
-  },
-  heroMetricHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  heroMetricLabel: {
-    color: 'rgba(245, 247, 255, 0.72)',
+    padding: 14,
+    gap: 4,
   },
   metricIconBadge: {
     width: 28,
@@ -1109,180 +1041,211 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 4,
+  },
+  heroMetricLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+    color: colors.muted,
+    textTransform: 'uppercase',
   },
   heroMetricValue: {
-    fontFamily: fonts.display,
-    fontSize: 30,
-    lineHeight: 32,
-    letterSpacing: -0.8,
+    fontSize: 26,
+    fontWeight: '700',
     color: colors.text,
+    letterSpacing: -0.5,
+    lineHeight: 30,
   },
   heroMetricHelper: {
-    fontSize: 13,
+    fontSize: 11,
+    color: colors.muted,
   },
+  // Insight card
   insightCard: {
-    backgroundColor: 'rgba(9, 22, 45, 0.92)',
-    borderColor: 'rgba(77,245,255,0.18)',
-    gap: spacing.sm,
-  },
-  insightHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: `${colors.accent}44`,
+    padding: 20,
+    gap: 10,
   },
   insightTitleRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    flex: 1,
+    alignItems: 'flex-start',
+    gap: 12,
   },
   insightIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: `${colors.accent}18`,
+    borderWidth: 1,
+    borderColor: `${colors.accent}44`,
+    marginTop: 2,
+  },
+  insightLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.3,
+    color: colors.accent,
+    textTransform: 'uppercase',
+  },
+  insightTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+    lineHeight: 24,
+  },
+  insightSummary: {
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 20,
+  },
+  insightChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  insightChip: {
+    flexBasis: '31%',
+    flexGrow: 1,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 4,
+  },
+  insightChipLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+  },
+  insightChipValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.text,
+    lineHeight: 18,
+  },
+  // Section cards
+  sectionCard: {
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 20,
+    gap: 14,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sectionHeaderMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  sectionIconWrap: {
     width: 34,
     height: 34,
     borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(77,245,255,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(77,245,255,0.18)',
   },
-  insightTextWrap: {
-    flex: 1,
-    gap: spacing.xxs,
-  },
-  insightTitle: {
-    fontFamily: fonts.display,
-    fontSize: 24,
-    lineHeight: 28,
-    letterSpacing: -0.6,
-  },
-  insightSummary: {
-    lineHeight: 21,
-  },
-  insightChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  insightChip: {
-    flexBasis: '31%',
-    flexGrow: 1,
-    padding: spacing.sm,
-    borderRadius: 16,
-    borderWidth: 1,
-    gap: spacing.xxs,
-  },
-  insightChipLabel: {
-    letterSpacing: 0.6,
-  },
-  insightChipValue: {
-    fontFamily: fonts.sansSemi,
-    fontSize: 14,
-    lineHeight: 18,
-  },
-  sectionCard: {
-    backgroundColor: 'rgba(7, 18, 34, 0.92)',
-    gap: spacing.md,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: spacing.md,
-  },
-  sectionHeaderMain: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    flex: 1,
-  },
-  sectionIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  sectionCopy: {
-    flex: 1,
-    gap: spacing.xxs,
+  sectionEyebrow: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.3,
+    color: colors.muted,
+    textTransform: 'uppercase',
   },
   sectionTitle: {
-    fontFamily: fonts.display,
-    fontSize: 22,
-    lineHeight: 26,
-    letterSpacing: -0.5,
+    fontSize: 18,
+    fontWeight: '700',
     color: colors.text,
-  },
-  sectionSubtitle: {
-    lineHeight: 20,
+    letterSpacing: -0.3,
   },
   sectionBadge: {
     borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    borderRadius: 100,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
   sectionBadgeText: {
-    letterSpacing: 0.5,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
   },
+  // Summary grid
   summaryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: 10,
   },
   summaryBlock: {
     flexBasis: '48%',
     flexGrow: 1,
-    borderRadius: 18,
+    borderRadius: 14,
     borderWidth: 1,
-    padding: spacing.md,
-    gap: spacing.xs,
+    padding: 14,
+    gap: 4,
+  },
+  summaryLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: colors.muted,
+    textTransform: 'uppercase',
   },
   summaryValue: {
-    fontFamily: fonts.display,
-    fontSize: 24,
-    lineHeight: 28,
-    letterSpacing: -0.6,
+    fontSize: 22,
+    fontWeight: '700',
     color: colors.text,
+    letterSpacing: -0.4,
   },
   summaryHelper: {
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 11,
+    color: colors.muted,
+    lineHeight: 16,
   },
+  // Chart panels
   chartStack: {
-    gap: spacing.md,
+    gap: 10,
   },
   chartPanel: {
-    borderRadius: 20,
+    borderRadius: 14,
     borderWidth: 1,
-    padding: spacing.sm,
-    paddingTop: spacing.md,
+    backgroundColor: colors.glass,
+    padding: 14,
+    paddingTop: 16,
+    gap: 8,
   },
   chartPanelHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: spacing.md,
-    marginBottom: spacing.xs,
-    paddingHorizontal: spacing.xs,
-  },
-  chartPanelTitleWrap: {
-    flex: 1,
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 4,
   },
   chartTitle: {
-    fontFamily: fonts.sansSemi,
-    fontSize: 16,
+    fontSize: 15,
+    fontWeight: '700',
     color: colors.text,
   },
   chartSubtitle: {
+    fontSize: 11,
+    color: colors.muted,
     marginTop: 2,
-    fontSize: 13,
   },
   chartValue: {
-    fontFamily: fonts.display,
-    fontSize: 22,
+    fontSize: 20,
+    fontWeight: '700',
     letterSpacing: -0.4,
-    color: colors.text,
   },
   sectionError: {
     paddingVertical: spacing.sm,

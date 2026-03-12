@@ -131,6 +131,10 @@ export function SleepScreen() {
     }
   };
 
+  const goalDiff = nightlyAverage - sleepGoal;
+  const goalDiffText = goalDiff >= 0 ? `+${goalDiff.toFixed(1)} h above goal` : `${goalDiff.toFixed(1)} h below goal`;
+  const goalPillColor = goalDiff >= 0 ? colors.accent : colors.warning;
+
   return (
     <RefreshableScrollView
       contentContainerStyle={styles.container}
@@ -138,8 +142,42 @@ export function SleepScreen() {
       onRefresh={refetch}
       showsVerticalScrollIndicator={false}
     >
-      <Card>
-        <SectionHeader title="Sleep focus" subtitle={data.subject?.name || 'Athlete'} />
+      {/* Hero */}
+      <View style={styles.heroCard}>
+        <AppText style={styles.eyebrow}>SLEEP · {data.subject?.name || 'Athlete'}</AppText>
+        <AppText style={styles.heroNumber}>{nightlyAverage.toFixed(1)} h</AppText>
+        <AppText style={styles.heroLabel}>Nightly average</AppText>
+        <View style={styles.heroBadgeRow}>
+          <View style={[styles.heroBadge, { backgroundColor: `${goalPillColor}1a`, borderColor: `${goalPillColor}44` }]}>
+            <View style={[styles.badgeDot, { backgroundColor: goalPillColor }]} />
+            <AppText style={[styles.badgeText, { color: goalPillColor }]}>{goalDiffText}</AppText>
+          </View>
+          <View style={styles.heroBadge}>
+            <View style={[styles.badgeDot, { backgroundColor: colors.muted }]} />
+            <AppText style={[styles.badgeText, { color: colors.muted }]}>{currentStreak} night streak</AppText>
+          </View>
+        </View>
+      </View>
+
+      {/* 4-metric grid */}
+      <View style={styles.metricGrid}>
+        <SleepMetric label="7-DAY AVG" value={`${recentAvg.toFixed(1)} h`} />
+        <SleepMetric label="GOAL" value={sleepGoal ? `${sleepGoal.toFixed(1)} h` : '--'} />
+        <SleepMetric label="NIGHTS MET" value={`${nightsMeetingGoal}`} />
+        <SleepMetric label="STREAK" value={`${currentStreak} nights`} />
+      </View>
+
+      {/* Trend chart */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>TREND · 14 NIGHTS</AppText>
+        <AppText style={styles.cardTitle}>Sleep duration</AppText>
+        <TrendChart data={sleepTrend} yLabel="hours" />
+      </View>
+
+      {/* Goal editor */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>SLEEP GOAL</AppText>
+        <AppText style={styles.cardTitle}>{data.subject?.name || 'Athlete'}</AppText>
         <SleepGoalCard
           average={nightlyAverage}
           goal={sleepGoal}
@@ -152,25 +190,19 @@ export function SleepScreen() {
           feedback={goalFeedback}
           canEdit={canEditGoal}
         />
-      </Card>
+      </View>
 
-      <Card>
-        <SectionHeader title="Sleep trend" subtitle="Last 14 nights" />
-        <TrendChart data={sleepTrend} yLabel="hours" />
-        <View style={styles.statsRow}>
-          <InlineStat label="7-day avg" value={`${recentAvg.toFixed(1)} h`} />
-          <InlineStat label="Goal delta" value={`${(nightlyAverage - sleepGoal).toFixed(1)} h`} />
-          <InlineStat label="Streak" value={`${currentStreak} nights`} />
-        </View>
-      </Card>
-
-      <Card>
-        <SectionHeader title="Stage breakdown" subtitle="Deep · REM · Light" />
+      {/* Stage breakdown */}
+      <View style={styles.card}>
+        <AppText style={styles.eyebrow}>STAGES</AppText>
+        <AppText style={styles.cardTitle}>Sleep stage breakdown</AppText>
+        <AppText style={styles.cardSubtitle}>Deep · REM · Light</AppText>
         <SleepStageCard sample={stageSample} />
-      </Card>
+      </View>
 
-      <Card>
-        <SectionHeader title="Recovery cues" subtitle="Goal readiness" />
+      {/* Recovery insight */}
+      <View style={styles.insightCard}>
+        <AppText style={styles.eyebrow}>RECOVERY CUES</AppText>
         <SleepInsightsCard
           average={nightlyAverage}
           goal={sleepGoal}
@@ -178,8 +210,17 @@ export function SleepScreen() {
           nightsMeetingGoal={nightsMeetingGoal}
           totalNights={sleepTrend.length}
         />
-      </Card>
+      </View>
     </RefreshableScrollView>
+  );
+}
+
+function SleepMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metricCard}>
+      <AppText style={styles.metricLabel}>{label}</AppText>
+      <AppText style={styles.metricValue}>{value}</AppText>
+    </View>
   );
 }
 
@@ -376,17 +417,123 @@ function buildDailyTrendFromStream(
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
-    gap: spacing.lg,
+    gap: 12,
+    paddingBottom: spacing.lg * 2,
   },
-  goalRow: {
+  // Hero
+  heroCard: {
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 6,
+  },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  heroNumber: {
+    fontSize: 52,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -1,
+    lineHeight: 56,
+  },
+  heroLabel: {
+    fontSize: 14,
+    color: colors.muted,
+  },
+  heroBadgeRow: {
     flexDirection: 'row',
-    gap: spacing.lg,
+    gap: 8,
     flexWrap: 'wrap',
+    marginTop: 4,
+  },
+  heroBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 5,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  badgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // 4-metric grid
+  metricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  metricCard: {
+    width: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 4,
+  },
+  metricLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  metricValue: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.5,
+  },
+  // Generic card
+  card: {
+    backgroundColor: colors.panel,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 20,
+    gap: 8,
+  },
+  insightCard: {
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: `${colors.accent}22`,
+    padding: 20,
+    gap: 12,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  cardSubtitle: {
+    fontSize: 13,
+    color: colors.muted,
+  },
+  // Goal form
+  goalRow: {
+    gap: spacing.sm,
   },
   goalMeta: {
-    flex: 1,
-    minWidth: 220,
     gap: spacing.sm,
   },
   goalSave: {
@@ -394,20 +541,13 @@ const styles = StyleSheet.create({
   },
   feedback: {
     marginTop: spacing.xs,
+    fontSize: 13,
+    color: colors.muted,
   },
-  statsRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginTop: spacing.md,
-    flexWrap: 'wrap',
-  },
-  inlineStat: {
-    flex: 1,
-    minWidth: 120,
-    gap: spacing.xs / 2,
-  },
+  // Sleep stages
   stageList: {
     gap: spacing.md,
+    marginTop: 4,
   },
   stageRow: {
     flexDirection: 'row',
@@ -415,25 +555,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   stageSwatch: {
-    width: 16,
-    height: 16,
-    borderRadius: 4,
+    width: 12,
+    height: 12,
+    borderRadius: 3,
   },
   stageMeta: {
     flex: 1,
     gap: spacing.xs / 2,
   },
   stageBar: {
-    height: 8,
+    height: 6,
     borderRadius: 999,
     backgroundColor: colors.border,
     overflow: 'hidden',
+    marginTop: 2,
   },
   stageBarFill: {
     height: '100%',
     borderRadius: 999,
   },
+  // Insight text
   insights: {
-    gap: spacing.xs,
+    gap: spacing.sm,
+  },
+  inlineStat: {
+    flex: 1,
+    gap: 4,
+    alignItems: 'center',
   },
 });
