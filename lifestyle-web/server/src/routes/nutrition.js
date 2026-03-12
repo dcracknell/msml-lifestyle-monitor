@@ -1361,6 +1361,85 @@ function resolvePhotoDetectedFoods(photoAnalysis, options = {}) {
   return resolved;
 }
 
+function resolvePhotoDraftItems(photoAnalysis, options = {}) {
+  const maxItems =
+    Number.isFinite(Number(options.maxItems)) && Number(options.maxItems) > 0
+      ? Math.floor(Number(options.maxItems))
+      : 12;
+  const fallbackType = options.fallbackType === 'Liquid' ? 'Liquid' : 'Food';
+  const defaultUnit = fallbackType === 'Liquid' ? 'ml' : 'g';
+  const candidateGroups = [];
+
+  if (Array.isArray(photoAnalysis?.mealAnalysis?.items) && photoAnalysis.mealAnalysis.items.length) {
+    candidateGroups.push(photoAnalysis.mealAnalysis.items);
+  }
+  if (Array.isArray(photoAnalysis?.detectedFoods) && photoAnalysis.detectedFoods.length) {
+    candidateGroups.push(photoAnalysis.detectedFoods);
+  }
+  if (Array.isArray(photoAnalysis?.topMatches) && photoAnalysis.topMatches.length) {
+    candidateGroups.push(photoAnalysis.topMatches);
+  }
+  if (photoAnalysis?.name) {
+    candidateGroups.push([
+      {
+        name: photoAnalysis.name,
+        confidence: photoAnalysis.confidence,
+        calories: photoAnalysis.calories,
+        protein: photoAnalysis.protein,
+        carbs: photoAnalysis.carbs,
+        fats: photoAnalysis.fats,
+        fiber: photoAnalysis.fiber,
+        weightAmount: photoAnalysis.weightAmount,
+        weightUnit: photoAnalysis.weightUnit,
+      },
+    ]);
+  }
+
+  const resolved = [];
+  const seen = new Set();
+
+  candidateGroups.forEach((entries) => {
+    entries.forEach((entry) => {
+      if (resolved.length >= maxItems) {
+        return;
+      }
+      const rawName = typeof entry?.name === 'string' ? entry.name.trim() : '';
+      const normalized = normalizeText(rawName);
+      if (!normalized || PHOTO_ANALYSIS_EXCLUDED_LABELS.has(normalized)) {
+        return;
+      }
+      const mappedName = PHOTO_ANALYSIS_LOOKUP_OVERRIDES.get(normalized) || rawName;
+      const key = normalizeText(mappedName);
+      if (!key || seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      resolved.push({
+        name: mappedName,
+        type: fallbackType,
+        confidence: hasFiniteNumericValue(entry?.confidence)
+          ? Number(Number(entry.confidence).toFixed(4))
+          : undefined,
+        calories: hasFiniteNumericValue(entry?.calories) ? Number(entry.calories) : undefined,
+        protein: hasFiniteNumericValue(entry?.protein) ? Number(entry.protein) : undefined,
+        carbs: hasFiniteNumericValue(entry?.carbs) ? Number(entry.carbs) : undefined,
+        fats: hasFiniteNumericValue(entry?.fats) ? Number(entry.fats) : undefined,
+        fiber: hasFiniteNumericValue(entry?.fiber) ? Number(entry.fiber) : undefined,
+        weightAmount: hasFiniteNumericValue(entry?.weightAmount) ? Number(entry.weightAmount) : undefined,
+        weightUnit:
+          typeof entry?.weightUnit === 'string' && ['g', 'ml', 'portion'].includes(entry.weightUnit)
+            ? entry.weightUnit
+            : defaultUnit,
+        portionPercent: hasFiniteNumericValue(entry?.portionPercent)
+          ? Number(entry.portionPercent)
+          : undefined,
+      });
+    });
+  });
+
+  return resolved;
+}
+
 function resolvePhotoMealItems(photoAnalysis, options = {}) {
   const maxItems =
     Number.isFinite(Number(options.maxItems)) && Number(options.maxItems) > 0
@@ -1388,11 +1467,11 @@ function resolvePhotoMealItems(photoAnalysis, options = {}) {
       name,
       type: fallbackType,
       calories: hasFiniteNumericValue(entry?.calories) ? Number(entry.calories) : undefined,
-    protein: hasFiniteNumericValue(entry?.protein) ? Number(entry.protein) : undefined,
-    carbs: hasFiniteNumericValue(entry?.carbs) ? Number(entry.carbs) : undefined,
-    fats: hasFiniteNumericValue(entry?.fats) ? Number(entry.fats) : undefined,
-    fiber: hasFiniteNumericValue(entry?.fiber) ? Number(entry.fiber) : undefined,
-    weightAmount: hasFiniteNumericValue(entry?.weightAmount) ? Number(entry.weightAmount) : undefined,
+      protein: hasFiniteNumericValue(entry?.protein) ? Number(entry.protein) : undefined,
+      carbs: hasFiniteNumericValue(entry?.carbs) ? Number(entry.carbs) : undefined,
+      fats: hasFiniteNumericValue(entry?.fats) ? Number(entry.fats) : undefined,
+      fiber: hasFiniteNumericValue(entry?.fiber) ? Number(entry.fiber) : undefined,
+      weightAmount: hasFiniteNumericValue(entry?.weightAmount) ? Number(entry.weightAmount) : undefined,
       weightUnit:
         typeof entry?.weightUnit === 'string' && ['g', 'ml', 'portion'].includes(entry.weightUnit)
           ? entry.weightUnit
@@ -1403,6 +1482,24 @@ function resolvePhotoMealItems(photoAnalysis, options = {}) {
   });
 
   return resolved;
+}
+
+function serializePhotoAnalysis(photoAnalysis, fallbackName = null) {
+  if (!photoAnalysis || typeof photoAnalysis !== 'object') {
+    return null;
+  }
+
+  return {
+    name: photoAnalysis.name || fallbackName || null,
+    confidence: photoAnalysis.confidence,
+    fiber: photoAnalysis.fiber ?? null,
+    isReliable: photoAnalysis.isReliable !== false,
+    reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
+    reliabilityReason: photoAnalysis.reliabilityReason || null,
+    topMatches: photoAnalysis.topMatches || [],
+    detectedFoods: photoAnalysis.detectedFoods || [],
+    mealAnalysis: photoAnalysis.mealAnalysis || null,
+  };
 }
 
 async function logNutritionItems({ userId, entryDate, items, photoData = null }) {
@@ -2663,6 +2760,53 @@ router.get('/photo/health', authenticate, async (req, res) => {
   }
 });
 
+router.post('/photo/analyze', authenticate, async (req, res) => {
+  const normalizedType = req.body?.type === 'Liquid' ? 'Liquid' : 'Food';
+  let normalizedPhotoData = null;
+
+  try {
+    normalizedPhotoData = normalizePhotoDataInput(req.body?.photoData);
+  } catch (error) {
+    return res.status(413).json({
+      message: error.message || 'Photo is too large. Try a smaller image or lower quality capture.',
+    });
+  }
+
+  if (!normalizedPhotoData) {
+    return res.status(400).json({ message: 'Provide a meal photo to analyze.' });
+  }
+
+  try {
+    const photoAnalysis = await analyzeNutritionPhoto({ photoData: normalizedPhotoData });
+    const suggestedItems = resolvePhotoDraftItems(photoAnalysis, {
+      fallbackType: normalizedType,
+      maxItems: 12,
+    });
+
+    return res.json({
+      message:
+        photoAnalysis?.isReliable === false
+          ? 'Meal photo analyzed. Review the detected items before logging.'
+          : 'Meal photo analyzed. Adjust the detected items before logging if needed.',
+      requiresReview: photoAnalysis?.isReliable === false,
+      photoAnalysis: serializePhotoAnalysis(photoAnalysis),
+      mealAnalysis: photoAnalysis?.mealAnalysis || null,
+      suggestedItems,
+    });
+  } catch (error) {
+    const status =
+      Number.isFinite(Number(error?.status)) && Number(error.status) >= 400
+        ? Number(error.status)
+        : 502;
+    return res.status(status).json({
+      message:
+        error?.message ||
+        'Unable to analyze the meal photo. Try a clearer image or enter the food manually.',
+      code: error?.code || 'PHOTO_ANALYSIS_FAILED',
+    });
+  }
+});
+
 router.post('/macros', authenticate, (req, res) => {
   const viewerRole = coerceRole(req.user.role);
   const requestedId = Number.parseInt(req.body?.athleteId, 10);
@@ -2808,14 +2952,8 @@ router.post('/', authenticate, async (req, res) => {
           'Meal photo result is uncertain. Try a closer photo, type the food name, or submit an items[] list to log multiple foods from one photo.',
         code: 'PHOTO_ANALYSIS_UNCERTAIN',
         photoAnalysis: {
-          name: photoAnalysis.name || null,
-          confidence: photoAnalysis.confidence,
-          fiber: photoAnalysis.fiber ?? null,
-          reliabilityThreshold: photoAnalysis.reliabilityThreshold,
-          reliabilityReason: photoAnalysis.reliabilityReason || null,
-          topMatches: photoAnalysis.topMatches || [],
+          ...serializePhotoAnalysis(photoAnalysis),
           detectedFoods,
-          mealAnalysis: photoAnalysis.mealAnalysis || null,
         },
       });
     }
@@ -2839,17 +2977,7 @@ router.post('/', authenticate, async (req, res) => {
           message:
             'Unable to log the detected foods from this photo. Try a clearer image or enter the foods manually.',
           skippedItems,
-          photoAnalysis: {
-            name: photoAnalysis.name || null,
-            confidence: photoAnalysis.confidence,
-            fiber: photoAnalysis.fiber ?? null,
-            isReliable: photoAnalysis.isReliable !== false,
-            reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
-            reliabilityReason: photoAnalysis.reliabilityReason || null,
-            topMatches: photoAnalysis.topMatches || [],
-            detectedFoods: photoAnalysis.detectedFoods || [],
-            mealAnalysis: photoAnalysis.mealAnalysis || null,
-          },
+          photoAnalysis: serializePhotoAnalysis(photoAnalysis),
           mealAnalysis: photoAnalysis.mealAnalysis || null,
         });
       }
@@ -2860,17 +2988,7 @@ router.post('/', authenticate, async (req, res) => {
         autoLookup,
         entriesLogged: loggedEntries,
         skippedItems,
-        photoAnalysis: {
-          name: photoAnalysis.name || loggedEntries[0]?.name || null,
-          confidence: photoAnalysis.confidence,
-          fiber: photoAnalysis.fiber ?? null,
-          isReliable: photoAnalysis.isReliable !== false,
-          reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
-          reliabilityReason: photoAnalysis.reliabilityReason || null,
-          topMatches: photoAnalysis.topMatches || [],
-          detectedFoods: photoAnalysis.detectedFoods || [],
-          mealAnalysis: photoAnalysis.mealAnalysis || null,
-        },
+        photoAnalysis: serializePhotoAnalysis(photoAnalysis, loggedEntries[0]?.name || null),
         mealAnalysis: photoAnalysis.mealAnalysis || null,
       });
     }
@@ -2999,19 +3117,7 @@ router.post('/', authenticate, async (req, res) => {
     message: normalizedPhotoData ? `${displayName} logged from photo.` : `${displayName} logged.`,
     date: entryDate,
     autoLookup: Boolean(productData),
-    photoAnalysis: photoAnalysis
-      ? {
-          name: photoAnalysis.name || displayName,
-          confidence: photoAnalysis.confidence,
-          fiber: photoAnalysis.fiber ?? null,
-          isReliable: photoAnalysis.isReliable !== false,
-          reliabilityThreshold: photoAnalysis.reliabilityThreshold ?? null,
-          reliabilityReason: photoAnalysis.reliabilityReason || null,
-          topMatches: photoAnalysis.topMatches || [],
-          detectedFoods: photoAnalysis.detectedFoods || [],
-          mealAnalysis: photoAnalysis.mealAnalysis || null,
-        }
-      : null,
+    photoAnalysis: serializePhotoAnalysis(photoAnalysis, displayName),
     mealAnalysis: photoAnalysis?.mealAnalysis || null,
   });
 });
@@ -3245,6 +3351,7 @@ router.__private__ = {
   REMOTE_SEARCH_TIMEOUT_MS,
   lookupQuickAddByQuery,
   resolveQuickAddProductFromPhotoAnalysis,
+  resolvePhotoDraftItems,
   normalizeBarcodeValue,
   buildBarcodeCandidates,
   parseBarcodeListInput,

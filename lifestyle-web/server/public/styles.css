@@ -1654,6 +1654,86 @@ button:hover {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.nutrition-photo-analysis-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.nutrition-photo-analysis-hint {
+  margin: 0;
+}
+
+.nutrition-meal-editor-row {
+  gap: 0.75rem;
+}
+
+.nutrition-meal-editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.nutrition-meal-editor-name {
+  display: grid;
+  gap: 0.35rem;
+  flex: 1 1 220px;
+}
+
+.nutrition-meal-editor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.nutrition-meal-editor-controls .link-btn {
+  white-space: nowrap;
+}
+
+.nutrition-meal-editor-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(77, 245, 255, 0.25);
+  background: rgba(77, 245, 255, 0.08);
+  color: #d8fbff;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nutrition-meal-editor-remove {
+  padding: 0.2rem 0.35rem;
+  margin-left: 0.15rem;
+}
+
+.nutrition-meal-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.65rem;
+}
+
+.nutrition-meal-editor-field {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.nutrition-meal-editor-field input,
+.nutrition-meal-editor-field select,
+.nutrition-meal-editor-name input {
+  width: 100%;
+}
+
+.nutrition-meal-editor-summary {
+  margin-top: -0.2rem;
+}
+
 #nutritionPhotoStatus.error {
   color: #ff8ba7;
 }

@@ -93,29 +93,6 @@ DEFAULT_LABELS_PATH = os.path.abspath(os.path.join(DEFAULT_DATASET_ROOT, "catego
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-USDA_QUERY_OVERRIDES = {
-    "hamburg": "hamburger",
-    "hamburg steak": "hamburger steak",
-    "cheese butter": "cheese",
-    "chicken duck": "chicken",
-    "white button mushroom": "mushroom",
-    "king oyster mushroom": "oyster mushroom",
-    "hanamaki baozi": "baozi",
-    "wonton dumplings": "dumplings",
-    "cilantro mint": "mint",
-    "french beans": "green beans",
-    "spring onion": "scallion",
-    "ascida": "asida",
-    "crema": "cream dessert",
-    "fish and chips": "breaded fish fillet",
-    "fried fish": "breaded fish fillet",
-    "fish finger": "breaded fish fillet",
-    "fish fingers": "breaded fish fillet",
-    "mashed potato": "baked potato",
-    "mashed potatoes": "baked potato",
-    "green peas": "green peas",
-}
-
 FOOD_DENSITY = {
     "broccoli": 0.37,
     "cabbage": 0.45,
@@ -276,9 +253,7 @@ def resolve_density(food_name):
 
 
 def resolve_usda_query(food_name):
-    display_name = display_food_name(food_name)
-    normalized = display_name.lower()
-    return USDA_QUERY_OVERRIDES.get(normalized, display_name)
+    return display_food_name(food_name)
 
 
 def extract_usda_nutrients(raw_nutrients):
@@ -313,9 +288,9 @@ def extract_usda_nutrients(raw_nutrients):
         if amount is None:
             continue
 
-        if nutrient_number == "1008" or (
-            nutrient_name == "energy" and unit_name == "KCAL"
-        ):
+        if calories is None and nutrient_name == "energy":
+            calories = amount
+        elif calories is None and nutrient_number == "1008":
             calories = amount
         elif calories is None and (
             nutrient_number == "1007"
@@ -402,8 +377,7 @@ def lookup_usda_nutrients(food_name, session, cache):
         nutrients = extract_usda_nutrients(first_food.get("foodNutrients"))
         description = first_food.get("description")
 
-        # Search responses sometimes omit macro detail, so fall back to the detail endpoint.
-        if food_id and any(value is None for value in nutrients.values()):
+        if food_id:
             detail_response = session.get(
                 f"https://api.nal.usda.gov/fdc/v1/food/{food_id}",
                 params={"api_key": USDA_API_KEY},
@@ -411,10 +385,7 @@ def lookup_usda_nutrients(food_name, session, cache):
             )
             detail_response.raise_for_status()
             detail_payload = detail_response.json()
-            detail_nutrients = extract_usda_nutrients(detail_payload.get("foodNutrients"))
-            for key, value in detail_nutrients.items():
-                if nutrients.get(key) is None:
-                    nutrients[key] = value
+            nutrients = extract_usda_nutrients(detail_payload.get("foodNutrients"))
             description = detail_payload.get("description") or description
 
         result = {
@@ -439,7 +410,8 @@ def detect_plate_scale(image_rgb):
             "mmPerPixel": FALLBACK_MM_PER_PIXEL,
         }
 
-    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+    # Preserve the original plate-scaling conversion so mass and kcal line up with the legacy estimator.
+    gray = cv2.cvtColor(image_rgb, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (9, 9), 2)
 
     circles = cv2.HoughCircles(

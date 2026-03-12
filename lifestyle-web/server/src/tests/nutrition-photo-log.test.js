@@ -32,6 +32,144 @@ async function loginAsCoach() {
 }
 
 describe('Nutrition photo logging', () => {
+  it('previews a meal photo as editable detected items before logging', async () => {
+    analyzeNutritionPhoto.mockResolvedValue({
+      name: 'fish and chips',
+      confidence: 0.82,
+      isReliable: true,
+      detectedFoods: [
+        {
+          name: 'fish and chips',
+          confidence: 0.82,
+          calories: 280,
+          protein: 22,
+          carbs: 18,
+          fats: 12,
+          weightAmount: 160,
+          weightUnit: 'g',
+        },
+        {
+          name: 'green peas',
+          confidence: 0.44,
+          calories: 84,
+          protein: 5,
+          carbs: 15,
+          fats: 0,
+          fiber: 5,
+          weightAmount: 80,
+          weightUnit: 'g',
+        },
+      ],
+      mealAnalysis: {
+        foodCount: 2,
+        totalCalories: 364,
+        totalProtein: 27,
+        totalCarbs: 33,
+        totalFats: 12,
+        totalFiber: 5,
+        totalWeightAmount: 240,
+        weightUnit: 'g',
+        items: [
+          {
+            name: 'fish and chips',
+            confidence: 0.82,
+            calories: 280,
+            protein: 22,
+            carbs: 18,
+            fats: 12,
+            weightAmount: 160,
+            weightUnit: 'g',
+          },
+          {
+            name: 'green peas',
+            confidence: 0.44,
+            calories: 84,
+            protein: 5,
+            carbs: 15,
+            fats: 0,
+            fiber: 5,
+            weightAmount: 80,
+            weightUnit: 'g',
+          },
+        ],
+      },
+    });
+
+    const { token } = await loginAsCoach();
+    const photoData = Buffer.from('editable-preview').toString('base64');
+
+    const response = await request(app)
+      .post('/api/nutrition/photo/analyze')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ photoData, type: 'Food' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      requiresReview: false,
+      photoAnalysis: {
+        name: 'fish and chips',
+        confidence: 0.82,
+      },
+      mealAnalysis: {
+        foodCount: 2,
+        totalCalories: 364,
+      },
+    });
+    expect(response.body.suggestedItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'breaded fish fillet',
+          calories: 280,
+          protein: 22,
+          carbs: 18,
+          fats: 12,
+        }),
+        expect.objectContaining({
+          name: 'green peas',
+          calories: 84,
+          protein: 5,
+          carbs: 15,
+          fiber: 5,
+        }),
+      ])
+    );
+  });
+
+  it('returns an editable review payload for uncertain meal photos', async () => {
+    analyzeNutritionPhoto.mockResolvedValue({
+      name: 'toast',
+      confidence: 0.67,
+      isReliable: false,
+      reliabilityThreshold: 0.78,
+      reliabilityReason: 'Top prediction confidence 0.6700 is below required threshold 0.78.',
+      topMatches: [
+        { name: 'toast', confidence: 0.67 },
+        { name: 'croissant', confidence: 0.1 },
+      ],
+    });
+
+    const { token } = await loginAsCoach();
+    const photoData = Buffer.from('uncertain-preview').toString('base64');
+
+    const response = await request(app)
+      .post('/api/nutrition/photo/analyze')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ photoData, type: 'Food' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      requiresReview: true,
+      photoAnalysis: {
+        name: 'toast',
+        confidence: 0.67,
+        reliabilityThreshold: 0.78,
+      },
+    });
+    expect(response.body.suggestedItems).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'toast', type: 'Food' })])
+    );
+  });
+
   it('reports NUT setup readiness through the health endpoint', async () => {
     verifyNutritionPhotoModelSetup.mockResolvedValue({
       ready: true,

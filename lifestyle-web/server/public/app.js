@@ -601,7 +601,10 @@ const state = {
   nutritionDeletingEntries: new Set(),
   nutritionPhotoData: null,
   nutritionPhotoPreparing: false,
+  nutritionPhotoAnalyzing: false,
   nutritionPhotoAnalysis: null,
+  nutritionMealDraft: null,
+  nutritionMealDraftLookupPendingIds: new Set(),
   suggestionTimer: null,
   suggestionQuery: '',
   suggestions: [],
@@ -1357,13 +1360,344 @@ function resolveNutritionMealAnalysis(result) {
   return nested;
 }
 
+function createNutritionMealDraftId() {
+  return `meal-item-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function normalizeMealDraftNumber(value, fractionDigits = 1) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  const multiplier = 10 ** fractionDigits;
+  return Math.round(numeric * multiplier) / multiplier;
+}
+
+function normalizeNutritionMealDraftItem(entry = {}, options = {}) {
+  const type = entry.type === 'Liquid' || options.fallbackType === 'Liquid' ? 'Liquid' : 'Food';
+  const requestedUnit =
+    typeof entry.weightUnit === 'string' ? entry.weightUnit.trim().toLowerCase() : '';
+  const weightUnit = MEAL_DRAFT_UNITS.has(requestedUnit) ? requestedUnit : getUnitForType(type);
+
+  return {
+    id: typeof entry.id === 'string' && entry.id ? entry.id : createNutritionMealDraftId(),
+    name: typeof entry.name === 'string' ? entry.name : '',
+    type,
+    calories: normalizeMealDraftNumber(entry.calories, 1),
+    protein: normalizeMealDraftNumber(entry.protein, 1),
+    carbs: normalizeMealDraftNumber(entry.carbs, 1),
+    fats: normalizeMealDraftNumber(entry.fats, 1),
+    fiber: normalizeMealDraftNumber(entry.fiber, 1),
+    weightAmount: normalizeMealDraftNumber(entry.weightAmount, 1),
+    weightUnit,
+    confidence: normalizeMealDraftNumber(entry.confidence, 4),
+    portionPercent: normalizeMealDraftNumber(entry.portionPercent, 1),
+    source: entry.source === 'manual' ? 'manual' : 'analysis',
+  };
+}
+
+function cloneNutritionMealDraftItems(items = []) {
+  return items.map((item) => ({ ...item }));
+}
+
+function calculateNutritionMealDraftSummary(draft) {
+  const items = Array.isArray(draft?.items) ? draft.items : [];
+  const summary = {
+    foodCount: 0,
+    totalCalories: null,
+    totalProtein: null,
+    totalCarbs: null,
+    totalFats: null,
+    totalFiber: null,
+    totalWeightAmount: null,
+    weightUnit: null,
+    plateDetected: draft?.analysis?.plateDetected !== false,
+    plateDiameterPx:
+      Number.isFinite(Number(draft?.analysis?.plateDiameterPx)) ? Number(draft.analysis.plateDiameterPx) : null,
+    mmPerPixel: Number.isFinite(Number(draft?.analysis?.mmPerPixel)) ? Number(draft.analysis.mmPerPixel) : null,
+  };
+
+  const totals = {
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fats: 0,
+    fiber: 0,
+  };
+  const seenTotals = {
+    calories: false,
+    protein: false,
+    carbs: false,
+    fats: false,
+    fiber: false,
+  };
+  let totalWeightAmount = 0;
+  let weightUnit = null;
+  let mixedWeightUnits = false;
+  let hasWeight = false;
+
+  items.forEach((item) => {
+    const hasContent =
+      Boolean(item?.name?.trim()) ||
+      Number.isFinite(item?.calories) ||
+      Number.isFinite(item?.weightAmount) ||
+      Number.isFinite(item?.protein) ||
+      Number.isFinite(item?.carbs) ||
+      Number.isFinite(item?.fats) ||
+      Number.isFinite(item?.fiber);
+    if (!hasContent) {
+      return;
+    }
+
+    summary.foodCount += 1;
+
+    ['calories', 'protein', 'carbs', 'fats', 'fiber'].forEach((field) => {
+      const value = Number(item?.[field]);
+      if (Number.isFinite(value)) {
+        totals[field] += value;
+        seenTotals[field] = true;
+      }
+    });
+
+    const itemWeight = Number(item?.weightAmount);
+    if (Number.isFinite(itemWeight)) {
+      const itemWeightUnit = item?.weightUnit || getUnitForType(item?.type || 'Food');
+      hasWeight = true;
+      totalWeightAmount += itemWeight;
+      if (!weightUnit) {
+        weightUnit = itemWeightUnit;
+      } else if (weightUnit !== itemWeightUnit) {
+        mixedWeightUnits = true;
+      }
+    }
+  });
+
+  summary.totalCalories = seenTotals.calories ? normalizeMealDraftNumber(totals.calories, 1) : null;
+  summary.totalProtein = seenTotals.protein ? normalizeMealDraftNumber(totals.protein, 1) : null;
+  summary.totalCarbs = seenTotals.carbs ? normalizeMealDraftNumber(totals.carbs, 1) : null;
+  summary.totalFats = seenTotals.fats ? normalizeMealDraftNumber(totals.fats, 1) : null;
+  summary.totalFiber = seenTotals.fiber ? normalizeMealDraftNumber(totals.fiber, 1) : null;
+  summary.totalWeightAmount =
+    hasWeight && !mixedWeightUnits ? normalizeMealDraftNumber(totalWeightAmount, 1) : null;
+  summary.weightUnit = hasWeight && !mixedWeightUnits ? weightUnit : null;
+
+  return summary.foodCount ? summary : draft?.analysis || null;
+}
+
+function createNutritionMealDraft(analysis, suggestedItems = [], options = {}) {
+  const fallbackType = options.fallbackType === 'Liquid' ? 'Liquid' : 'Food';
+  const normalizedItems = (Array.isArray(suggestedItems) ? suggestedItems : [])
+    .map((item) =>
+      normalizeNutritionMealDraftItem(item, {
+        fallbackType: item?.type || fallbackType,
+      })
+    )
+    .filter(
+      (item) =>
+        item.name.trim() ||
+        Number.isFinite(item.calories) ||
+        Number.isFinite(item.weightAmount) ||
+        Number.isFinite(item.protein) ||
+        Number.isFinite(item.carbs) ||
+        Number.isFinite(item.fats) ||
+        Number.isFinite(item.fiber)
+    );
+
+  return {
+    items: cloneNutritionMealDraftItems(normalizedItems),
+    originalItems: cloneNutritionMealDraftItems(normalizedItems),
+    analysis: normalizeNutritionMealAnalysis(analysis) || null,
+    requiresReview: options.requiresReview === true,
+  };
+}
+
+function getNutritionMealDraftSubmissionItems(items = []) {
+  return items
+    .map((item) => {
+      const name = typeof item?.name === 'string' ? item.name.trim() : '';
+      const type = item?.type === 'Liquid' ? 'Liquid' : 'Food';
+      const weightUnit = MEAL_DRAFT_UNITS.has(item?.weightUnit)
+        ? item.weightUnit
+        : getUnitForType(type);
+      const weightAmount = normalizeMealDraftNumber(item?.weightAmount, 1);
+      const payload = {
+        type,
+        weightUnit,
+      };
+      if (name) {
+        payload.name = name;
+      }
+      ['calories', 'protein', 'carbs', 'fats', 'fiber'].forEach((field) => {
+        const value = normalizeMealDraftNumber(item?.[field], 1);
+        if (Number.isFinite(value)) {
+          payload[field] = value;
+        }
+      });
+      if (Number.isFinite(weightAmount)) {
+        payload.weightAmount = weightAmount;
+      }
+      return payload;
+    })
+    .filter((item) => item.name || Number.isFinite(item.calories));
+}
+
+function setNutritionMealDraft(draft) {
+  state.nutritionMealDraftLookupPendingIds.clear();
+  state.nutritionMealDraft =
+    draft && typeof draft === 'object'
+      ? {
+          items: cloneNutritionMealDraftItems(draft.items || []),
+          originalItems: cloneNutritionMealDraftItems(draft.originalItems || draft.items || []),
+          analysis: normalizeNutritionMealAnalysis(draft.analysis) || null,
+          requiresReview: draft.requiresReview === true,
+        }
+      : null;
+  renderNutritionPhotoAnalysis();
+}
+
+function clearNutritionMealDraft() {
+  state.nutritionMealDraftLookupPendingIds.clear();
+  state.nutritionMealDraft = null;
+  renderNutritionPhotoAnalysis();
+}
+
+function isNutritionMealDraftLookupPending(itemId) {
+  return Boolean(itemId && state.nutritionMealDraftLookupPendingIds.has(itemId));
+}
+
+function duplicateNutritionMealDraftItem(index) {
+  if (!state.nutritionMealDraft || !Array.isArray(state.nutritionMealDraft.items)) {
+    return;
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= state.nutritionMealDraft.items.length) {
+    return;
+  }
+
+  const sourceItem = state.nutritionMealDraft.items[index];
+  if (!sourceItem) {
+    return;
+  }
+
+  const duplicate = normalizeNutritionMealDraftItem(
+    {
+      ...sourceItem,
+      id: createNutritionMealDraftId(),
+      source: 'manual',
+    },
+    { fallbackType: sourceItem.type }
+  );
+
+  const nextItems = [...state.nutritionMealDraft.items];
+  nextItems.splice(index + 1, 0, duplicate);
+  state.nutritionMealDraft.items = nextItems;
+  renderNutritionPhotoAnalysis();
+}
+
+function mapLookupProductToMealDraftItem(product, fallbackType = 'Food') {
+  if (!product || typeof product !== 'object') {
+    return null;
+  }
+
+  const type =
+    fallbackType === 'Liquid' || product.weightUnit === UNIT_LIQUID ? 'Liquid' : 'Food';
+  let weightUnit = MEAL_DRAFT_UNITS.has(product.weightUnit) ? product.weightUnit : getUnitForType(type);
+  let weightAmount = normalizeMealDraftNumber(product.weightAmount, 1);
+  if (weightUnit === UNIT_PORTION && (!Number.isFinite(weightAmount) || weightAmount <= 0)) {
+    weightAmount = 1;
+  }
+
+  return {
+    name: typeof product.name === 'string' ? product.name : '',
+    type,
+    calories: normalizeMealDraftNumber(product.calories, 1),
+    protein: normalizeMealDraftNumber(product.protein, 1),
+    carbs: normalizeMealDraftNumber(product.carbs, 1),
+    fats: normalizeMealDraftNumber(product.fats, 1),
+    fiber: normalizeMealDraftNumber(product.fiber, 1),
+    weightAmount,
+    weightUnit,
+  };
+}
+
+async function lookupNutritionMealDraftItem(index) {
+  if (!state.token || !state.nutritionMealDraft || !Array.isArray(state.nutritionMealDraft.items)) {
+    return;
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= state.nutritionMealDraft.items.length) {
+    return;
+  }
+
+  const item = state.nutritionMealDraft.items[index];
+  const query = item?.name?.trim();
+  if (!query) {
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = 'Enter an item name before filling its macros.';
+    }
+    return;
+  }
+  if (isNutritionMealDraftLookupPending(item.id)) {
+    return;
+  }
+
+  state.nutritionMealDraftLookupPendingIds.add(item.id);
+  renderNutritionPhotoAnalysis();
+  if (nutritionFeedback) {
+    nutritionFeedback.textContent = `Looking up macros for ${query}...`;
+  }
+
+  try {
+    const response = await apiFetch(`/api/nutrition/lookup?q=${encodeURIComponent(query)}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.product) {
+      throw new Error(payload?.message || 'No nutrition data found.');
+    }
+
+    const lookupItem = mapLookupProductToMealDraftItem(payload.product, item.type);
+    if (!lookupItem) {
+      throw new Error('No nutrition data found.');
+    }
+
+    state.nutritionMealDraft.items = state.nutritionMealDraft.items.map((draftItem, itemIndex) =>
+      itemIndex === index
+        ? normalizeNutritionMealDraftItem(
+            {
+              ...draftItem,
+              ...lookupItem,
+              source: draftItem.source,
+            },
+            { fallbackType: lookupItem.type || draftItem.type }
+          )
+        : draftItem
+    );
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = `Filled macros for ${lookupItem.name || query}.`;
+    }
+  } catch (error) {
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = error.message;
+    }
+  } finally {
+    state.nutritionMealDraftLookupPendingIds.delete(item.id);
+    renderNutritionPhotoAnalysis();
+  }
+}
+
 function renderNutritionPhotoAnalysis() {
   if (!nutritionPhotoAnalysis) {
     return;
   }
   nutritionPhotoAnalysis.innerHTML = '';
   const analysis = state.nutritionPhotoAnalysis;
-  if (!analysis) {
+  const mealDraft = state.nutritionMealDraft;
+  const activeSummary = mealDraft ? calculateNutritionMealDraftSummary(mealDraft) : analysis;
+  const displayAnalysis = mealDraft?.analysis || analysis;
+
+  if (!activeSummary && !mealDraft) {
     nutritionPhotoAnalysis.classList.add('hidden');
     return;
   }
@@ -1372,49 +1706,303 @@ function renderNutritionPhotoAnalysis() {
   summary.className = 'nutrition-photo-analysis-summary';
 
   const title = document.createElement('strong');
-  title.textContent = `Meal analysis${analysis.foodCount ? ` • ${analysis.foodCount} items` : ''}`;
+  const titleCount = activeSummary?.foodCount || mealDraft?.items?.length || 0;
+  title.textContent = `${mealDraft ? 'Editable meal' : 'Meal analysis'}${
+    titleCount ? ` • ${titleCount} items` : ''
+  }`;
   summary.appendChild(title);
 
   const totals = [];
-  if (Number.isFinite(analysis.totalCalories)) {
-    totals.push(`${formatDecimal(analysis.totalCalories, 1)} kcal`);
+  if (Number.isFinite(activeSummary?.totalCalories)) {
+    totals.push(`${formatDecimal(activeSummary.totalCalories, 1)} kcal`);
   }
-  if (Number.isFinite(analysis.totalProtein)) {
-    totals.push(`${formatDecimal(analysis.totalProtein, 1)} g protein`);
+  if (Number.isFinite(activeSummary?.totalProtein)) {
+    totals.push(`${formatDecimal(activeSummary.totalProtein, 1)} g protein`);
   }
-  if (Number.isFinite(analysis.totalCarbs)) {
-    totals.push(`${formatDecimal(analysis.totalCarbs, 1)} g carbs`);
+  if (Number.isFinite(activeSummary?.totalCarbs)) {
+    totals.push(`${formatDecimal(activeSummary.totalCarbs, 1)} g carbs`);
   }
-  if (Number.isFinite(analysis.totalFats)) {
-    totals.push(`${formatDecimal(analysis.totalFats, 1)} g fats`);
+  if (Number.isFinite(activeSummary?.totalFats)) {
+    totals.push(`${formatDecimal(activeSummary.totalFats, 1)} g fats`);
   }
-  if (Number.isFinite(analysis.totalFiber)) {
-    totals.push(`${formatDecimal(analysis.totalFiber, 1)} g fiber`);
+  if (Number.isFinite(activeSummary?.totalFiber)) {
+    totals.push(`${formatDecimal(activeSummary.totalFiber, 1)} g fiber`);
   }
-  if (Number.isFinite(analysis.totalWeightAmount)) {
+  if (Number.isFinite(activeSummary?.totalWeightAmount) && activeSummary?.weightUnit) {
     totals.push(
-      `${formatDecimal(analysis.totalWeightAmount, 1)} ${analysis.weightUnit || 'g'} total`
+      `${formatDecimal(activeSummary.totalWeightAmount, 1)} ${activeSummary.weightUnit} total`
     );
   }
 
   const totalsText = document.createElement('span');
   totalsText.className = 'muted small-text';
-  totalsText.textContent = totals.length ? totals.join(' • ') : 'Meal analysis available.';
+  totalsText.textContent = totals.length
+    ? totals.join(' • ')
+    : mealDraft
+      ? 'Add or edit items to build the meal totals.'
+      : 'Meal analysis available.';
   summary.appendChild(totalsText);
 
-  if (analysis.plateDetected && Number.isFinite(analysis.plateDiameterPx)) {
+  if (mealDraft) {
+    const helper = document.createElement('span');
+    helper.className = 'muted tiny-text nutrition-photo-analysis-hint';
+    helper.textContent = mealDraft.requiresReview
+      ? 'The model was not confident. Review the detected foods, fix macros, and add anything it missed.'
+      : 'Review the detected foods, adjust the macros, and add anything the model missed before logging.';
+    summary.appendChild(helper);
+  }
+
+  if (displayAnalysis?.plateDetected && Number.isFinite(displayAnalysis?.plateDiameterPx)) {
     const plateMeta = document.createElement('span');
     plateMeta.className = 'muted tiny-text';
-    const scaleText = Number.isFinite(analysis.mmPerPixel)
-      ? ` • ${formatDecimal(analysis.mmPerPixel, 4)} mm/px`
+    const scaleText = Number.isFinite(displayAnalysis.mmPerPixel)
+      ? ` • ${formatDecimal(displayAnalysis.mmPerPixel, 4)} mm/px`
       : '';
-    plateMeta.textContent = `Plate diameter ${formatNumber(Math.round(analysis.plateDiameterPx))} px${scaleText}`;
+    plateMeta.textContent = `Plate diameter ${formatNumber(
+      Math.round(displayAnalysis.plateDiameterPx)
+    )} px${scaleText}`;
     summary.appendChild(plateMeta);
   }
 
   nutritionPhotoAnalysis.appendChild(summary);
 
-  if (analysis.items.length) {
+  if (mealDraft) {
+    const hasPendingItemLookup = state.nutritionMealDraftLookupPendingIds.size > 0;
+    const actions = document.createElement('div');
+    actions.className = 'nutrition-photo-analysis-actions';
+
+    const addButton = document.createElement('button');
+    addButton.type = 'button';
+    addButton.className = 'outline-btn secondary';
+    addButton.dataset.action = 'add-meal-item';
+    addButton.textContent = 'Add missing item';
+    addButton.disabled = !canModifyOwnNutrition();
+    actions.appendChild(addButton);
+
+    const reanalyzeButton = document.createElement('button');
+    reanalyzeButton.type = 'button';
+    reanalyzeButton.className = 'outline-btn secondary';
+    reanalyzeButton.dataset.action = 'reanalyze-meal-photo';
+    reanalyzeButton.textContent = state.nutritionPhotoAnalyzing ? 'Analyzing photo...' : 'Re-analyze photo';
+    reanalyzeButton.disabled = !canModifyOwnNutrition() || state.nutritionPhotoAnalyzing;
+    actions.appendChild(reanalyzeButton);
+
+    const resetButton = document.createElement('button');
+    resetButton.type = 'button';
+    resetButton.className = 'outline-btn secondary';
+    resetButton.dataset.action = 'reset-meal-draft';
+    resetButton.textContent = 'Reset detected items';
+    resetButton.disabled =
+      !canModifyOwnNutrition() || !mealDraft.originalItems.length || state.nutritionPhotoAnalyzing;
+    actions.appendChild(resetButton);
+
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.className = 'outline-btn';
+    saveButton.dataset.action = 'save-meal-draft';
+    saveButton.textContent = hasPendingItemLookup
+      ? 'Waiting on item lookup...'
+      : state.nutritionPhotoAnalyzing
+        ? 'Analyzing...'
+        : 'Log edited meal';
+    saveButton.disabled =
+      !canModifyOwnNutrition() || state.nutritionPhotoAnalyzing || hasPendingItemLookup;
+    actions.appendChild(saveButton);
+
+    nutritionPhotoAnalysis.appendChild(actions);
+
+    const hint = document.createElement('p');
+    hint.className = 'muted tiny-text nutrition-photo-analysis-hint';
+    hint.textContent =
+      'Tip: leave macros blank on a manual item if you want the food lookup to try filling them in when you save.';
+    nutritionPhotoAnalysis.appendChild(hint);
+
+    const list = document.createElement('ul');
+    list.className = 'nutrition-photo-analysis-list';
+    const createNumberField = (labelText, item, index, field, options = {}) => {
+      const label = document.createElement('label');
+      label.className = 'nutrition-meal-editor-field';
+      label.textContent = labelText;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = options.min ?? '0';
+      input.step = options.step ?? '0.1';
+      input.placeholder = options.placeholder ?? '0';
+      input.value = Number.isFinite(item[field]) ? String(item[field]) : '';
+      input.dataset.draftIndex = String(index);
+      input.dataset.draftField = field;
+      input.disabled = !canModifyOwnNutrition();
+      label.appendChild(input);
+      return label;
+    };
+
+    mealDraft.items.forEach((item, index) => {
+      const isLookupPending = isNutritionMealDraftLookupPending(item.id);
+      const row = document.createElement('li');
+      row.className = 'nutrition-meal-editor-row';
+
+      const head = document.createElement('div');
+      head.className = 'nutrition-meal-editor-head';
+
+      const nameLabel = document.createElement('label');
+      nameLabel.className = 'nutrition-meal-editor-name';
+      nameLabel.textContent = 'Item name';
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.placeholder = item.source === 'manual' ? 'Add missing food or drink' : 'Detected item';
+      nameInput.value = item.name || '';
+      nameInput.dataset.draftIndex = String(index);
+      nameInput.dataset.draftField = 'name';
+      nameInput.disabled = !canModifyOwnNutrition();
+      nameLabel.appendChild(nameInput);
+      head.appendChild(nameLabel);
+
+      const controls = document.createElement('div');
+      controls.className = 'nutrition-meal-editor-controls';
+
+      const tag = document.createElement('span');
+      tag.className = 'nutrition-meal-editor-tag';
+      tag.textContent = item.source === 'manual' ? 'Manual' : 'Detected';
+      controls.appendChild(tag);
+
+      if (Number.isFinite(item.confidence)) {
+        const confidenceTag = document.createElement('span');
+        confidenceTag.className = 'nutrition-meal-editor-tag';
+        confidenceTag.textContent = `${Math.round(item.confidence * 100)}% confidence`;
+        controls.appendChild(confidenceTag);
+      }
+
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'link-btn nutrition-meal-editor-remove';
+      removeButton.dataset.action = 'remove-meal-item';
+      removeButton.dataset.draftIndex = String(index);
+      removeButton.textContent = 'Remove';
+      removeButton.disabled = !canModifyOwnNutrition();
+      controls.appendChild(removeButton);
+
+      const duplicateButton = document.createElement('button');
+      duplicateButton.type = 'button';
+      duplicateButton.className = 'link-btn nutrition-meal-editor-remove';
+      duplicateButton.dataset.action = 'duplicate-meal-item';
+      duplicateButton.dataset.draftIndex = String(index);
+      duplicateButton.textContent = 'Duplicate';
+      duplicateButton.disabled = !canModifyOwnNutrition();
+      controls.appendChild(duplicateButton);
+
+      const lookupButton = document.createElement('button');
+      lookupButton.type = 'button';
+      lookupButton.className = 'link-btn nutrition-meal-editor-remove';
+      lookupButton.dataset.action = 'lookup-meal-item';
+      lookupButton.dataset.draftIndex = String(index);
+      lookupButton.textContent = isLookupPending ? 'Filling...' : 'Fill macros';
+      lookupButton.disabled = !canModifyOwnNutrition() || isLookupPending || !item.name.trim();
+      controls.appendChild(lookupButton);
+
+      head.appendChild(controls);
+      row.appendChild(head);
+
+      const metaParts = [];
+      if (Number.isFinite(item.portionPercent)) {
+        metaParts.push(`${formatDecimal(item.portionPercent, 1)}% of plate`);
+      }
+      if (item.type) {
+        metaParts.push(item.type);
+      }
+      if (metaParts.length) {
+        const meta = document.createElement('span');
+        meta.className = 'muted tiny-text';
+        meta.textContent = metaParts.join(' • ');
+        row.appendChild(meta);
+      }
+
+      const rowSummaryParts = [];
+      if (Number.isFinite(item.calories)) {
+        rowSummaryParts.push(`${formatDecimal(item.calories, 1)} kcal`);
+      }
+      if (Number.isFinite(item.weightAmount) && item.weightUnit) {
+        rowSummaryParts.push(`${formatDecimal(item.weightAmount, 1)} ${item.weightUnit}`);
+      }
+      if (Number.isFinite(item.protein) || Number.isFinite(item.carbs) || Number.isFinite(item.fats)) {
+        rowSummaryParts.push(
+          `${formatDecimal(Number.isFinite(item.protein) ? item.protein : 0, 1)}p / ${formatDecimal(
+            Number.isFinite(item.carbs) ? item.carbs : 0,
+            1
+          )}c / ${formatDecimal(Number.isFinite(item.fats) ? item.fats : 0, 1)}f`
+        );
+      }
+      if (rowSummaryParts.length) {
+        const rowSummary = document.createElement('span');
+        rowSummary.className = 'muted tiny-text nutrition-meal-editor-summary';
+        rowSummary.textContent = rowSummaryParts.join(' • ');
+        row.appendChild(rowSummary);
+      }
+
+      const grid = document.createElement('div');
+      grid.className = 'nutrition-meal-editor-grid';
+
+      const typeLabel = document.createElement('label');
+      typeLabel.className = 'nutrition-meal-editor-field';
+      typeLabel.textContent = 'Type';
+      const typeSelect = document.createElement('select');
+      typeSelect.dataset.draftIndex = String(index);
+      typeSelect.dataset.draftField = 'type';
+      typeSelect.disabled = !canModifyOwnNutrition();
+      ['Food', 'Liquid'].forEach((typeValue) => {
+        const option = document.createElement('option');
+        option.value = typeValue;
+        option.textContent = typeValue;
+        option.selected = item.type === typeValue;
+        typeSelect.appendChild(option);
+      });
+      typeLabel.appendChild(typeSelect);
+      grid.appendChild(typeLabel);
+
+      grid.appendChild(
+        createNumberField('Amount', item, index, 'weightAmount', {
+          placeholder: item.type === 'Liquid' ? 'ml' : 'g',
+        })
+      );
+
+      const unitLabel = document.createElement('label');
+      unitLabel.className = 'nutrition-meal-editor-field';
+      unitLabel.textContent = 'Unit';
+      const unitSelect = document.createElement('select');
+      unitSelect.dataset.draftIndex = String(index);
+      unitSelect.dataset.draftField = 'weightUnit';
+      unitSelect.disabled = !canModifyOwnNutrition();
+      [UNIT_FOOD, UNIT_LIQUID, UNIT_PORTION].forEach((unitValue) => {
+        const option = document.createElement('option');
+        option.value = unitValue;
+        option.textContent = unitValue;
+        option.selected = item.weightUnit === unitValue;
+        unitSelect.appendChild(option);
+      });
+      unitLabel.appendChild(unitSelect);
+      grid.appendChild(unitLabel);
+
+      grid.appendChild(createNumberField('Calories', item, index, 'calories', { placeholder: 'kcal' }));
+      grid.appendChild(createNumberField('Protein (g)', item, index, 'protein'));
+      grid.appendChild(createNumberField('Carbs (g)', item, index, 'carbs'));
+      grid.appendChild(createNumberField('Fats (g)', item, index, 'fats'));
+      grid.appendChild(createNumberField('Fiber (g)', item, index, 'fiber'));
+
+      row.appendChild(grid);
+      list.appendChild(row);
+    });
+
+    if (!mealDraft.items.length) {
+      const empty = document.createElement('li');
+      empty.className = 'nutrition-meal-editor-row';
+      const text = document.createElement('span');
+      text.className = 'muted small-text';
+      text.textContent = 'No items detected yet. Add the meal items manually.';
+      empty.appendChild(text);
+      list.appendChild(empty);
+    }
+
+    nutritionPhotoAnalysis.appendChild(list);
+  } else if (analysis?.items?.length) {
     const list = document.createElement('ul');
     list.className = 'nutrition-photo-analysis-list';
     analysis.items.forEach((item) => {
@@ -1464,15 +2052,22 @@ function clearNutritionPhotoAnalysis() {
   renderNutritionPhotoAnalysis();
 }
 
-function clearNutritionPhotoSelection({ keepStatus = false, keepAnalysis = false } = {}) {
+function clearNutritionPhotoSelection({ keepStatus = false, keepAnalysis = false, keepDraft = false } = {}) {
   state.nutritionPhotoData = null;
   state.nutritionPhotoPreparing = false;
+  state.nutritionPhotoAnalyzing = false;
   if (nutritionPhotoInput) {
     nutritionPhotoInput.value = '';
   }
   renderNutritionPhotoPreview();
+  if (!keepDraft) {
+    state.nutritionMealDraftLookupPendingIds.clear();
+    state.nutritionMealDraft = null;
+  }
   if (!keepAnalysis) {
     clearNutritionPhotoAnalysis();
+  } else {
+    renderNutritionPhotoAnalysis();
   }
   if (!keepStatus) {
     setNutritionPhotoStatus('');
@@ -1480,8 +2075,324 @@ function clearNutritionPhotoSelection({ keepStatus = false, keepAnalysis = false
   toggleNutritionPhotoDropZone(false);
 }
 
+function addNutritionMealDraftItem(prefill = {}) {
+  const fallbackType = prefill.type === 'Liquid' ? 'Liquid' : nutritionTypeSelect?.value || 'Food';
+  const nextItem = normalizeNutritionMealDraftItem(
+    {
+      ...prefill,
+      type: fallbackType,
+      weightUnit: prefill.weightUnit || getUnitForType(fallbackType),
+      source: 'manual',
+    },
+    { fallbackType }
+  );
+
+  if (!state.nutritionMealDraft) {
+    state.nutritionMealDraft = {
+      items: [nextItem],
+      originalItems: [],
+      analysis: state.nutritionPhotoAnalysis,
+      requiresReview: true,
+    };
+  } else {
+    state.nutritionMealDraft.items = [...state.nutritionMealDraft.items, nextItem];
+  }
+
+  renderNutritionPhotoAnalysis();
+}
+
+function updateNutritionMealDraftItem(index, field, value) {
+  if (!state.nutritionMealDraft || !Array.isArray(state.nutritionMealDraft.items)) {
+    return;
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= state.nutritionMealDraft.items.length) {
+    return;
+  }
+
+  const current = state.nutritionMealDraft.items[index];
+  if (!current) {
+    return;
+  }
+
+  const next = { ...current };
+  if (field === 'name') {
+    next.name = String(value ?? '');
+  } else if (field === 'type') {
+    next.type = value === 'Liquid' ? 'Liquid' : 'Food';
+    if (next.weightUnit !== UNIT_PORTION) {
+      next.weightUnit = getUnitForType(next.type);
+    }
+  } else if (field === 'weightUnit') {
+    next.weightUnit = MEAL_DRAFT_UNITS.has(value) ? value : getUnitForType(next.type);
+  } else {
+    next[field] = normalizeMealDraftNumber(value, field === 'confidence' ? 4 : 1);
+  }
+
+  state.nutritionMealDraft.items = state.nutritionMealDraft.items.map((item, itemIndex) =>
+    itemIndex === index ? next : item
+  );
+  renderNutritionPhotoAnalysis();
+}
+
+function removeNutritionMealDraftItem(index) {
+  if (!state.nutritionMealDraft || !Array.isArray(state.nutritionMealDraft.items)) {
+    return;
+  }
+  state.nutritionMealDraft.items = state.nutritionMealDraft.items.filter(
+    (_item, itemIndex) => itemIndex !== index
+  );
+  renderNutritionPhotoAnalysis();
+}
+
+function resetNutritionMealDraft() {
+  if (!state.nutritionMealDraft) {
+    return;
+  }
+  state.nutritionMealDraft.items = cloneNutritionMealDraftItems(
+    state.nutritionMealDraft.originalItems || []
+  );
+  renderNutritionPhotoAnalysis();
+}
+
+function isSubmittableNutritionMealDraftItem(item) {
+  return Boolean(item?.name?.trim()) || Number.isFinite(normalizeMealDraftNumber(item?.calories, 1));
+}
+
+async function analyzeNutritionPhotoSelection() {
+  if (!state.token || !state.nutritionPhotoData || !canModifyOwnNutrition()) {
+    return null;
+  }
+  if (state.nutritionPhotoPreparing) {
+    setNutritionPhotoStatus('Preparing photo. Please wait a moment.', { isError: true });
+    return null;
+  }
+
+  const activePhotoData = state.nutritionPhotoData;
+  state.nutritionPhotoAnalyzing = true;
+  renderNutritionPhotoAnalysis();
+  setNutritionPhotoStatus('Analyzing meal photo...');
+  if (nutritionFeedback) {
+    nutritionFeedback.textContent = 'Analyzing meal photo...';
+  }
+
+  try {
+    const response = await apiFetch('/api/nutrition/photo/analyze', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${state.token}`,
+      },
+      body: JSON.stringify({
+        photoData: activePhotoData,
+        type: nutritionTypeSelect?.value || 'Food',
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload) {
+      throw new Error(payload?.message || 'Unable to analyze the meal photo.');
+    }
+    if (state.nutritionPhotoData !== activePhotoData) {
+      return payload;
+    }
+
+    const nextAnalysis = resolveNutritionMealAnalysis(payload);
+    setNutritionPhotoAnalysis(nextAnalysis);
+    setNutritionMealDraft(
+      createNutritionMealDraft(nextAnalysis, payload?.suggestedItems, {
+        fallbackType: nutritionTypeSelect?.value || 'Food',
+        requiresReview: payload?.requiresReview === true,
+      })
+    );
+    clearSuggestions();
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = payload.message || 'Meal photo analyzed.';
+    }
+    setNutritionPhotoStatus(
+      payload?.requiresReview === true
+        ? 'Review the detected meal items, update the macros, and add anything the model missed.'
+        : 'Detected meal items are ready. Adjust them before logging if needed.'
+    );
+    return payload;
+  } catch (error) {
+    if (state.nutritionPhotoData === activePhotoData) {
+      clearNutritionMealDraft();
+      clearNutritionPhotoAnalysis();
+      setNutritionPhotoStatus(error.message, { isError: true });
+      if (nutritionFeedback) {
+        nutritionFeedback.textContent = error.message;
+      }
+    }
+    return null;
+  } finally {
+    if (state.nutritionPhotoData === activePhotoData) {
+      state.nutritionPhotoAnalyzing = false;
+      renderNutritionPhotoAnalysis();
+    }
+  }
+}
+
+async function submitNutritionMealDraft() {
+  if (!state.token || !state.nutritionPhotoData || !state.nutritionMealDraft) {
+    return false;
+  }
+  if (!canModifyOwnNutrition()) {
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = 'Switch to your own profile to log intake.';
+    }
+    return false;
+  }
+  if (state.nutritionPhotoPreparing || state.nutritionPhotoAnalyzing) {
+    const waitMessage = 'Wait for the meal photo analysis to finish before saving.';
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = waitMessage;
+    }
+    setNutritionPhotoStatus(waitMessage, { isError: true });
+    return false;
+  }
+  if (state.nutritionMealDraftLookupPendingIds.size > 0) {
+    const waitMessage = 'Wait for the item macro lookup to finish before saving.';
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = waitMessage;
+    }
+    setNutritionPhotoStatus(waitMessage, { isError: true });
+    return false;
+  }
+
+  const submittedDraftItems = (state.nutritionMealDraft.items || []).filter((item) =>
+    isSubmittableNutritionMealDraftItem(item)
+  );
+  const requestItems = getNutritionMealDraftSubmissionItems(submittedDraftItems);
+  if (!requestItems.length) {
+    const message = 'Add at least one meal item or calorie value before saving the edited meal.';
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = message;
+    }
+    setNutritionPhotoStatus(message, { isError: true });
+    return false;
+  }
+
+  if (nutritionFeedback) {
+    nutritionFeedback.textContent = 'Logging edited meal...';
+  }
+  setNutritionPhotoStatus('Logging edited meal...');
+
+  try {
+    const response = await apiFetch('/api/nutrition', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${state.token}`,
+      },
+      body: JSON.stringify({
+        date: getActiveNutritionDate(),
+        photoData: state.nutritionPhotoData,
+        items: requestItems,
+      }),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok || !result) {
+      const fallback = `Unable to log that meal (HTTP ${response.status || 'unknown'}).`;
+      throw new Error(result?.message || fallback);
+    }
+
+    const skippedItems = Array.isArray(result?.skippedItems) ? result.skippedItems : [];
+    if (skippedItems.length) {
+      const skippedIndexSet = new Set(
+        skippedItems
+          .map((entry) => Number.parseInt(entry?.index, 10))
+          .filter((index) => Number.isInteger(index) && index >= 0)
+      );
+      const remainingItems = submittedDraftItems.filter((_item, index) => skippedIndexSet.has(index));
+      state.nutritionMealDraft.items = cloneNutritionMealDraftItems(remainingItems);
+      state.nutritionMealDraft.originalItems = cloneNutritionMealDraftItems(remainingItems);
+      renderNutritionPhotoAnalysis();
+
+      const reasons = skippedItems
+        .map((entry) => entry?.reason)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(' ');
+      const suffix = reasons ? ` ${reasons}` : '';
+      if (nutritionFeedback) {
+        nutritionFeedback.textContent = `${result.message} ${skippedItems.length} item${
+          skippedItems.length === 1 ? '' : 's'
+        } still need attention.${suffix}`;
+      }
+      setNutritionPhotoStatus('Some items were logged. Fix the remaining ones and save again.');
+    } else {
+      nutritionForm?.reset();
+      if (nutritionTypeSelect) {
+        nutritionTypeSelect.value = 'Food';
+      }
+      setAmountReference(null);
+      state.nutritionAmountBaseline = null;
+      state.nutritionMacroReference = null;
+      setSelectedUnit(UNIT_FOOD);
+      updateAmountFieldUnit();
+      updateNutritionPreview();
+      clearSuggestions();
+      clearNutritionPhotoSelection({ keepStatus: true });
+      if (nutritionFeedback) {
+        nutritionFeedback.textContent = `${result.message}${
+          result.autoLookup ? ' (nutrition estimated automatically)' : ''
+        }`;
+      }
+      setNutritionPhotoStatus('Meal logged.');
+    }
+
+    state.nutritionLogShouldScrollToTop = true;
+    await loadNutrition();
+    if (requestItems.some((item) => item.type === 'Liquid')) {
+      await loadMetrics(state.user?.id);
+    }
+    return true;
+  } catch (error) {
+    if (nutritionFeedback) {
+      nutritionFeedback.textContent = error.message;
+    }
+    setNutritionPhotoStatus(error.message, { isError: true });
+    return false;
+  }
+}
+
+function handleNutritionMealDraftFieldChange(event) {
+  const target = event.target;
+  const index = Number.parseInt(target?.dataset?.draftIndex, 10);
+  const field = target?.dataset?.draftField;
+  if (!Number.isInteger(index) || !field) {
+    return;
+  }
+  updateNutritionMealDraftItem(index, field, target.value);
+}
+
+function handleNutritionMealDraftAction(event) {
+  const button = event.target.closest('button[data-action]');
+  if (!button) {
+    return;
+  }
+
+  const index = Number.parseInt(button.dataset.draftIndex, 10);
+  const action = button.dataset.action;
+  if (action === 'add-meal-item') {
+    addNutritionMealDraftItem();
+  } else if (action === 'reanalyze-meal-photo') {
+    void analyzeNutritionPhotoSelection();
+  } else if (action === 'reset-meal-draft') {
+    resetNutritionMealDraft();
+  } else if (action === 'save-meal-draft') {
+    void submitNutritionMealDraft();
+  } else if (action === 'lookup-meal-item' && Number.isInteger(index)) {
+    void lookupNutritionMealDraftItem(index);
+  } else if (action === 'duplicate-meal-item' && Number.isInteger(index)) {
+    duplicateNutritionMealDraftItem(index);
+  } else if (action === 'remove-meal-item' && Number.isInteger(index)) {
+    removeNutritionMealDraftItem(index);
+  }
+}
+
 function processNutritionPhotoFile(file) {
   if (!file) return;
+  clearNutritionMealDraft();
   clearNutritionPhotoAnalysis();
   if (!canModifyOwnNutrition()) {
     setNutritionPhotoStatus('Switch back to your profile to import meal photos.', { isError: true });
@@ -1529,7 +2440,7 @@ function processNutritionPhotoFile(file) {
       }
       state.nutritionPhotoData = prepared || normalized;
       renderNutritionPhotoPreview();
-      setNutritionPhotoStatus('Meal photo ready. Submit to analyze and log food items.');
+      await analyzeNutritionPhotoSelection();
     })();
   };
   reader.onerror = () => {
@@ -2004,6 +2915,15 @@ function resetNutritionState() {
   setNutritionEntryFilter('all', { force: true, render: false });
   state.nutritionLogShouldScrollToTop = true;
   setAmountReference(null);
+  state.nutritionPhotoData = null;
+  state.nutritionPhotoPreparing = false;
+  state.nutritionPhotoAnalyzing = false;
+  state.nutritionPhotoAnalysis = null;
+  state.nutritionMealDraft = null;
+  state.nutritionMealDraftLookupPendingIds.clear();
+  renderNutritionPhotoPreview();
+  renderNutritionPhotoAnalysis();
+  setNutritionPhotoStatus('');
   state.macroTargetExpanded = false;
   setMacroTargetExpanded(false);
   renderNutritionDashboard(state.nutrition);
@@ -4053,6 +4973,7 @@ const UNIT_FOOD = 'g';
 const UNIT_LIQUID = 'ml';
 const UNIT_PORTION = 'portion';
 const VALID_UNITS = new Set([UNIT_FOOD, UNIT_LIQUID]);
+const MEAL_DRAFT_UNITS = new Set([UNIT_FOOD, UNIT_LIQUID, UNIT_PORTION]);
 const LIQUID_KEYWORDS = [
   'water',
   'cola',
@@ -5333,6 +6254,9 @@ macroInputs.forEach((input) => {
   });
 });
 renderSuggestionBar();
+nutritionPhotoAnalysis?.addEventListener('input', handleNutritionMealDraftFieldChange);
+nutritionPhotoAnalysis?.addEventListener('change', handleNutritionMealDraftFieldChange);
+nutritionPhotoAnalysis?.addEventListener('click', handleNutritionMealDraftAction);
 
 nutritionEntriesList?.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action="delete-entry"]');
@@ -5429,9 +6353,28 @@ nutritionForm?.addEventListener('submit', async (event) => {
     nutritionFeedback.textContent = 'Preparing photo. Please wait a moment and submit again.';
     return;
   }
+  if (state.nutritionPhotoAnalyzing) {
+    nutritionFeedback.textContent = 'Meal photo analysis is still running. Please wait a moment.';
+    return;
+  }
 
   if (!name && !barcode && !photoData) {
     nutritionFeedback.textContent = 'Provide a name, barcode, or meal photo.';
+    return;
+  }
+
+  if (photoData && !name && !barcode) {
+    if (!state.nutritionMealDraft) {
+      await analyzeNutritionPhotoSelection();
+      if (state.nutritionMealDraft) {
+        if (nutritionFeedback) {
+          nutritionFeedback.textContent =
+            'Review the detected meal items, then log the edited meal.';
+        }
+      }
+      return;
+    }
+    await submitNutritionMealDraft();
     return;
   }
 
@@ -5465,69 +6408,17 @@ nutritionForm?.addEventListener('submit', async (event) => {
   if (fatValue > 0) payload.fats = fatValue;
   if (fiberValue > 0) payload.fiber = fiberValue;
 
-  nutritionFeedback.textContent =
-    photoData && !name && !barcode ? 'Analyzing meal photo...' : 'Logging item...';
+  nutritionFeedback.textContent = 'Logging item...';
   try {
-    const postNutrition = async (requestPayload) => {
-      const response = await apiFetch('/api/nutrition', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${state.token}`,
-        },
-        body: JSON.stringify(requestPayload),
-      });
-      const result = await response.json().catch(() => null);
-      return { response, result };
-    };
-
-    let { response, result } = await postNutrition(payload);
-    if (
-      (!response.ok || !result) &&
-      response.status === 422 &&
-      result?.code === 'PHOTO_ANALYSIS_UNCERTAIN' &&
-      photoData
-    ) {
-      const detectedFoods = normalizePhotoDetectedFoods(result?.photoAnalysis);
-      setNutritionPhotoAnalysis(resolveNutritionMealAnalysis(result));
-      applyPhotoDetectedSuggestions(detectedFoods);
-      const autoItems = detectedFoods
-        .filter((item) => item.confidence === null || item.confidence >= 0.12)
-        .slice(0, 4);
-      if (autoItems.length >= 2) {
-        nutritionFeedback.textContent = 'Multiple foods detected. Logging detected items...';
-        const multiPayload = {
-          type,
-          date: activeDate,
-          photoData,
-          items: autoItems.map((item) => ({
-            name: item.name,
-            type,
-          })),
-        };
-        const retry = await postNutrition(multiPayload);
-        if (retry.response.ok && retry.result) {
-          response = retry.response;
-          result = retry.result;
-        } else {
-          nutritionFeedback.textContent =
-            result?.message ||
-            retry.result?.message ||
-            'Meal photo result is uncertain. Pick a suggestion or edit the name.';
-          setNutritionPhotoStatus(
-            'Photo is uncertain. Suggestions are shown; select one or edit and submit again.'
-          );
-          return;
-        }
-      } else {
-        nutritionFeedback.textContent =
-          result?.message || 'Meal photo result is uncertain. Pick a suggestion or edit the name.';
-        setNutritionPhotoStatus(
-          'Photo is uncertain. Suggestions are shown; select one or edit and submit again.'
-        );
-        return;
-      }
-    }
+    const response = await apiFetch('/api/nutrition', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${state.token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json().catch(() => null);
 
     if (!response.ok || !result) {
       const fallback = `Unable to log that item (HTTP ${response.status || 'unknown'}).`;
