@@ -63,6 +63,7 @@ const PHONE_UPLOAD_INTERVAL_MS = 15_000;
 const PHONE_UPLOAD_DISTANCE_DELTA_KM = 0.05;
 const PHONE_MIN_STEP_METERS = 1;
 const PHONE_MAX_STEP_METERS = 300;
+const PHONE_MAX_SPEED_MS = 40; // ~144 km/h – rejects GPS teleportation jumps
 const WATCH_AUTO_START_FRESH_WINDOW_MS = 15_000;
 const EXERCISE_STREAM_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
 const ROUTE_POINT_LIMIT = 160;
@@ -201,10 +202,13 @@ export function ExerciseScreen() {
       let acceptPoint = !previous;
       if (previous) {
         const deltaMeters = haversineDistanceMeters(previous, point);
+        const timeDeltaSeconds = Math.max(0.1, (point.timestamp - previous.timestamp) / 1000);
+        const speedMs = deltaMeters / timeDeltaSeconds;
         if (
           Number.isFinite(deltaMeters) &&
           deltaMeters >= PHONE_MIN_STEP_METERS &&
-          deltaMeters <= PHONE_MAX_STEP_METERS
+          deltaMeters <= PHONE_MAX_STEP_METERS &&
+          speedMs <= PHONE_MAX_SPEED_MS
         ) {
           phoneDistanceMetersRef.current += deltaMeters;
           acceptPoint = true;
@@ -869,27 +873,35 @@ export function ExerciseScreen() {
         {isFetching && !data ? (
           <AppText style={styles.mutedText}>Syncing activity…</AppText>
         ) : lastSessionForSport ? (
-          <>
-            <View style={styles.sixGrid}>
-              <MetricSubCard label="DISTANCE" value={formatDistance(lastSessionForSport.distance)} />
-              <MetricSubCard label="PACE" value={formatPace(lastSessionForSport.averagePace)} />
-              <MetricSubCard label="AVG HR" value={formatHeartRate(lastSessionForSport.averageHr)} sublabel="bpm" />
-              <MetricSubCard label="ELEVATION" value="--" sublabel="m" />
-              <MetricSubCard label="CALORIES" value="--" sublabel="kcal" />
-              <MetricSubCard
-                label="DURATION"
-                value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
-              />
-            </View>
-            <RouteMapCard
-              points={routePoints}
-              active={sessionState === 'recording'}
-              distanceKm={displayDistanceKm}
+          <View style={styles.sixGrid}>
+            <MetricSubCard label="DISTANCE" value={formatDistance(lastSessionForSport.distance)} />
+            <MetricSubCard label="PACE" value={formatPace(lastSessionForSport.averagePace)} />
+            <MetricSubCard label="AVG HR" value={formatHeartRate(lastSessionForSport.averageHr)} sublabel="bpm" />
+            <MetricSubCard label="ELEVATION" value="--" sublabel="m" />
+            <MetricSubCard label="CALORIES" value="--" sublabel="kcal" />
+            <MetricSubCard
+              label="DURATION"
+              value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
             />
-          </>
-        ) : (
+          </View>
+        ) : !isFetching ? (
           <AppText style={styles.mutedText}>No {sportConfig.label.toLowerCase()} recorded yet.</AppText>
-        )}
+        ) : null}
+
+        <View style={styles.cardTitleRow}>
+          <AppText style={styles.cardTitle}>{routeTitle}</AppText>
+        </View>
+        <AppText style={styles.mutedText}>{routeSubtitle}</AppText>
+        <RouteMapCard
+          points={routePoints}
+          active={sessionState === 'recording'}
+          distanceKm={displayDistanceKm}
+        />
+        <View style={styles.twoColGrid}>
+          {routeSummary.map((item) => (
+            <MetricSubCard key={item.label} label={item.label.toUpperCase()} value={item.value} />
+          ))}
+        </View>
 
         {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
       </View>

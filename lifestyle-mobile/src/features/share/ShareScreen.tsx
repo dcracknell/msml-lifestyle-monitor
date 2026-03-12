@@ -8,7 +8,6 @@ import {
   AppText,
   Card,
   ErrorView,
-  LoadingView,
   SectionHeader,
 } from '../../components';
 import { colors, spacing } from '../../theme';
@@ -25,7 +24,10 @@ export function ShareSection() {
   const handleShare = async () => {
     setFeedback(null);
     try {
-      const response = await shareAccessRequest({ coachId: selectedCoach || undefined, coachEmail: email || undefined });
+      const response = await shareAccessRequest({
+        coachId: selectedCoach || undefined,
+        coachEmail: email || undefined,
+      });
       setFeedback(response.message);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : 'Unable to share access.');
@@ -33,73 +35,123 @@ export function ShareSection() {
   };
 
   return (
-    <View style={styles.container}>
-      <Card>
-        <SectionHeader title="Share with a coach" subtitle="Grant dashboard access" />
-        {isLoading ? (
-          <ActivityIndicator />
-        ) : isError ? (
-          <ErrorView message="Unable to load coaches" onRetry={refetch} />
-        ) : (
-          <>
-            <AppText variant="label">Select coach</AppText>
-            <View style={styles.coachList}>
+    <Card>
+      <SectionHeader title="Share with a coach" subtitle="Grant dashboard access" />
+      {isLoading ? (
+        <ActivityIndicator color={colors.accent} />
+      ) : isError ? (
+        <View style={styles.emptyState}>
+          <AppText style={styles.emptyIcon}>⚠</AppText>
+          <AppText variant="muted" style={styles.emptyText}>
+            Unable to load coaches
+          </AppText>
+          <AppButton title="Retry" variant="ghost" onPress={() => refetch()} style={styles.retryButton} />
+        </View>
+      ) : (
+        <>
+          <AppText variant="label" style={styles.selectLabel}>
+            Select coach
+          </AppText>
+          {data!.coaches.length === 0 ? (
+            <View style={styles.emptyState}>
+              <AppText style={styles.emptyIcon}>◻</AppText>
+              <AppText variant="muted" style={styles.emptyText}>
+                No coaches available
+              </AppText>
+            </View>
+          ) : (
+            <View style={styles.coachGrid}>
               {data!.coaches.map((coach) => {
                 const selected = selectedCoach === coach.id;
                 return (
                   <Pressable
                     key={coach.id}
-                    style={[styles.coachChip, selected && styles.coachChipSelected]}
-                    onPress={() => setSelectedCoach(coach.id)}
+                    style={[styles.coachCard, selected && styles.coachCardSelected]}
+                    onPress={() => setSelectedCoach(selected ? null : coach.id)}
                   >
-                    <AppText variant="body" style={selected ? styles.coachChipTextSelected : undefined}>
-                      {coach.name} ({coach.role})
+                    <AppText
+                      variant="body"
+                      weight="semibold"
+                      style={selected ? styles.coachNameSelected : styles.coachName}
+                    >
+                      {coach.name}
+                    </AppText>
+                    <AppText variant="muted" style={styles.coachRole}>
+                      {coach.role}
                     </AppText>
                   </Pressable>
                 );
               })}
             </View>
-            <AppInput
-              label="Coach email (optional)"
-              placeholder="coach@example.com"
-              autoCapitalize="none"
-              value={email}
-              onChangeText={setEmail}
-            />
-            {feedback ? (
-              <AppText variant="muted" style={styles.feedback}>
-                {feedback}
-              </AppText>
-            ) : null}
-            <AppButton title="Share access" onPress={handleShare} />
-          </>
-        )}
-      </Card>
-    </View>
+          )}
+          <AppInput
+            label="Coach email (optional)"
+            placeholder="coach@example.com"
+            autoCapitalize="none"
+            value={email}
+            onChangeText={setEmail}
+            style={{ borderColor: '#1e3a5f' }}
+          />
+          {feedback ? (
+            <AppText variant="muted" style={styles.feedback}>
+              {feedback}
+            </AppText>
+          ) : null}
+          <AppButton title="Share access" onPress={handleShare} />
+        </>
+      )}
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: spacing.lg,
-  },
-  coachList: {
-    flexDirection: 'column',
-    gap: spacing.xs,
+  selectLabel: {
     marginBottom: spacing.sm,
   },
-  coachChip: {
-    padding: spacing.sm,
+  coachGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  coachCard: {
+    flex: 1,
+    minWidth: '45%',
+    padding: spacing.md,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
+    backgroundColor: colors.panel,
+    gap: spacing.xxs,
   },
-  coachChipSelected: {
+  coachCardSelected: {
     borderColor: colors.accent,
-    backgroundColor: 'rgba(77,245,255,0.12)',
+    backgroundColor: 'rgba(0,229,204,0.08)',
   },
-  coachChipTextSelected: {
+  coachName: {
+    color: colors.text,
+  },
+  coachNameSelected: {
     color: colors.accent,
+  },
+  coachRole: {
+    fontSize: 12,
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+    gap: spacing.xs,
+  },
+  emptyIcon: {
+    fontSize: 28,
+    color: colors.muted,
+    marginBottom: spacing.xs,
+  },
+  emptyText: {
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: spacing.xs,
   },
   feedback: {
     marginVertical: spacing.sm,
