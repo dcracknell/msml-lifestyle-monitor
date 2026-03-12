@@ -2413,21 +2413,52 @@ button:hover {
   gap: 0.75rem;
 }
 
-.sleep-stage-list li {
+.sleep-stage-item {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  flex-direction: column;
+  gap: 0.4rem;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.sleep-stage-list li:last-child {
+.sleep-stage-item:last-child {
   border-bottom: none;
+}
+
+.sleep-stage-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sleep-stage-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.sleep-stage-pct {
+  margin-left: 0.25rem;
 }
 
 .sleep-stage-duration {
   margin: 0;
+  margin-left: auto;
   font-weight: 600;
+}
+
+.sleep-stage-bar-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sleep-stage-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
 }
 
 .session-list {

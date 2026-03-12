@@ -10,6 +10,7 @@
     "android": "expo run:android",
     "android:dev": "expo start --dev-client --android",
     "ios": "expo run:ios",
+    "ios:device": "node scripts/run-ios-device.js",
     "ios:dev": "expo start --dev-client --ios",
     "ios:dev:clear": "expo start --dev-client --clear --ios",
     "web": "expo start --web",

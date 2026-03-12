@@ -245,6 +245,25 @@ const sessionForExportStatement = db.prepare(
     LIMIT 1`
 );
 
+const sessionForExportBySourceStatement = db.prepare(
+  `SELECT id,
+          user_id AS userId,
+          source,
+          source_id AS sourceId,
+          name,
+          sport_type AS sportType,
+          start_time AS startTime,
+          distance_m AS distance,
+          moving_time_s AS movingTime,
+          elapsed_time_s AS elapsedTime,
+          strava_activity_id AS stravaActivityId
+     FROM activity_sessions
+    WHERE source_id = ?
+      AND user_id = ?
+    ORDER BY datetime(start_time) DESC, id DESC
+    LIMIT 1`
+);
+
 const updateSessionStravaLinkStatement = db.prepare(
   `UPDATE activity_sessions
       SET strava_activity_id = ?
@@ -854,11 +873,16 @@ router.post('/strava/sync', authenticate, async (req, res) => {
 
 router.post('/strava/export', authenticate, async (req, res) => {
   const sessionId = Number.parseInt(req.body?.sessionId, 10);
-  if (!Number.isFinite(sessionId) || sessionId <= 0) {
-    return res.status(400).json({ message: 'A valid sessionId is required.' });
+  const sourceId =
+    typeof req.body?.sourceId === 'string' ? req.body.sourceId.trim().slice(0, 190) : '';
+  const hasSessionId = Number.isFinite(sessionId) && sessionId > 0;
+  if (!hasSessionId && !sourceId) {
+    return res.status(400).json({ message: 'A valid sessionId or sourceId is required.' });
   }
 
-  const session = sessionForExportStatement.get(sessionId, req.user.id);
+  const session = hasSessionId
+    ? sessionForExportStatement.get(sessionId, req.user.id)
+    : sessionForExportBySourceStatement.get(sourceId, req.user.id);
   if (!session) {
     return res.status(404).json({ message: 'Session not found.' });
   }

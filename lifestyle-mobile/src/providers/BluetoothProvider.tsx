@@ -118,7 +118,12 @@ interface BluetoothContextValue {
   confirmSystemDevice: () => Promise<void>;
   disconnectFromDevice: () => Promise<void>;
   sendCommand: (payload: string) => Promise<void>;
-  manualPublish: (value: number, metricOverride?: string) => Promise<void>;
+  manualPublish: (
+    value: number,
+    metricOverride?: string,
+    options?: { localDate?: string; skipWorkoutMirror?: boolean }
+  ) => Promise<void>;
+  setWorkoutMirrorSuppressed: (suppressed: boolean) => void;
 }
 
 const BluetoothContext = createContext<BluetoothContextValue | undefined>(undefined);
@@ -599,6 +604,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const [recentSamples, setRecentSamples] = useState<BluetoothSample[]>([]);
   const [lastUploadStatus, setLastUploadStatus] = useState<UploadStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const suppressWorkoutMirrorRef = useRef(false);
 
   useEffect(() => {
     let canceled = false;
@@ -693,6 +699,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const setWorkoutMirrorSuppressed = useCallback((suppressed: boolean) => {
+    suppressWorkoutMirrorRef.current = suppressed;
+  }, []);
+
+  const shouldSkipWorkoutMirror = useCallback((metric: string) => {
+    return suppressWorkoutMirrorRef.current && normalizeMetricName(metric, '').startsWith('exercise.');
+  }, []);
+
   const handleCharacteristicValue = useCallback(
     async (value: string | null) => {
       if (!value) return;
@@ -758,7 +772,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
             }
             return runOrQueue({
               endpoint: '/api/streams',
-              payload: { metric: batch.metric, samples: sanitizedSamples },
+              payload: {
+                metric: batch.metric,
+                skipWorkoutMirror: shouldSkipWorkoutMirror(batch.metric),
+                samples: sanitizedSamples,
+              },
               description: `Sensor sample (${batch.metric})`,
             });
           })
@@ -777,7 +795,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setError(uploadError instanceof Error ? uploadError.message : 'Unable to upload sample.');
       }
     },
-    [config.metric, config.autoUpload, config.profile, config.characteristicUUID, runOrQueue]
+    [
+      config.metric,
+      config.autoUpload,
+      config.profile,
+      config.characteristicUUID,
+      runOrQueue,
+      shouldSkipWorkoutMirror,
+    ]
   );
 
   const stopScan = useCallback(() => {
@@ -998,7 +1023,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   );
 
   const manualPublish = useCallback(
-    async (value: number, metricOverride?: string) => {
+    async (
+      value: number,
+      metricOverride?: string,
+      options?: { localDate?: string; skipWorkoutMirror?: boolean }
+    ) => {
       const metric = (metricOverride || config.metric || '').trim() || config.metric;
       const sampleValue = Number(value);
       if (!Number.isFinite(sampleValue)) {
@@ -1007,7 +1036,19 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       try {
         const result = await runOrQueue({
           endpoint: '/api/streams',
-          payload: { metric, samples: [{ ts: Date.now(), value: sampleValue }] },
+          payload: {
+            metric,
+            ...(options?.localDate ? { localDate: options.localDate } : {}),
+            skipWorkoutMirror:
+              options?.skipWorkoutMirror === true || shouldSkipWorkoutMirror(metric),
+            samples: [
+              {
+                ts: Date.now(),
+                value: sampleValue,
+                ...(options?.localDate ? { localDate: options.localDate } : {}),
+              },
+            ],
+          },
           description: `Manual sample (${metric})`,
         });
         setLastUploadStatus({
@@ -1019,7 +1060,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setError(uploadError instanceof Error ? uploadError.message : 'Unable to publish sample.');
       }
     },
-    [config.metric, runOrQueue]
+    [config.metric, runOrQueue, shouldSkipWorkoutMirror]
   );
 
   const value = useMemo(
@@ -1045,6 +1086,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       disconnectFromDevice,
       sendCommand,
       manualPublish,
+      setWorkoutMirrorSuppressed,
     }),
     [
       config,
@@ -1067,6 +1109,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       disconnectFromDevice,
       sendCommand,
       manualPublish,
+      setWorkoutMirrorSuppressed,
     ]
   );
 

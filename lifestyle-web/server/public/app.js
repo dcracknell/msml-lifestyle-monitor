@@ -1407,6 +1407,8 @@ function resetActivityState() {
   state.charts.activityMileage = null;
   state.charts.activityPace?.destroy();
   state.charts.activityPace = null;
+  state.charts.activityLoad?.destroy();
+  state.charts.activityLoad = null;
   if (activitySessionsList) activitySessionsList.innerHTML = '';
   if (activitySplitsList) activitySplitsList.innerHTML = '';
   if (activityBestEffortsList) activityBestEffortsList.innerHTML = '';
@@ -6576,9 +6578,9 @@ function renderSleepStageBreakdown(sleepStages) {
     return;
   }
   const stages = [
-    { key: 'deep', label: 'Deep' },
-    { key: 'rem', label: 'REM' },
-    { key: 'light', label: 'Light' },
+    { key: 'deep', label: 'Deep', color: '#43d9c9' },
+    { key: 'rem', label: 'REM', color: '#7eaefc' },
+    { key: 'light', label: 'Light', color: '#8e8bff' },
   ];
   const totalMinutes = stages.reduce((sum, stage) => {
     const value = Number(sleepStages[stage.key]);
@@ -6595,12 +6597,17 @@ function renderSleepStageBreakdown(sleepStages) {
     }
     const percent = Math.round((minutes / totalMinutes) * 100);
     const item = document.createElement('li');
+    item.className = 'sleep-stage-item';
     item.innerHTML = `
-      <div>
-        <p class="label">${stage.label}</p>
-        <p class="muted small-text">${percent}% of night</p>
+      <div class="sleep-stage-header">
+        <span class="sleep-stage-swatch" style="background:${stage.color}"></span>
+        <span class="label">${stage.label}</span>
+        <span class="sleep-stage-pct muted small-text">${percent}%</span>
+        <span class="sleep-stage-duration">${formatDurationFromMinutes(minutes)}</span>
       </div>
-      <p class="sleep-stage-duration">${formatDurationFromMinutes(minutes)}</p>
+      <div class="sleep-stage-bar-track">
+        <div class="sleep-stage-bar-fill" style="width:${percent}%;background:${stage.color}"></div>
+      </div>
     `;
     sleepStageBreakdown.appendChild(item);
   });
@@ -6786,6 +6793,166 @@ function handleSleepGoalInputChange(event) {
 function updateCharts(data) {
   renderActivityChart(data.timeline);
   renderMacroChart(data.macros);
+  renderOverviewReadinessChart(data.timeline);
+  renderOverviewSleepChart(data.timeline);
+  renderOverviewTrainingLoadChart(state.activity.sessions);
+}
+
+function renderOverviewReadinessChart(timeline = []) {
+  const canvasId = 'overviewReadinessChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const sorted = (Array.isArray(timeline) ? timeline : [])
+    .slice()
+    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime())
+    .filter((e) => Number.isFinite(Number(e.readiness)));
+  const recent = sorted.slice(-10);
+  if (!recent.length) {
+    state.charts.overviewReadiness?.destroy();
+    state.charts.overviewReadiness = null;
+    showChartMessage(canvasId, 'Sync wearable data to see readiness trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.overviewReadiness?.destroy();
+  state.charts.overviewReadiness = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: recent.map((e) => formatDate(e.date)),
+      datasets: [
+        {
+          label: 'Readiness',
+          data: recent.map((e) => Number(e.readiness)),
+          borderColor: '#43d9c9',
+          backgroundColor: 'rgba(67, 217, 201, 0.12)',
+          tension: 0.4,
+          fill: true,
+          pointRadius: 3,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 10 }),
+      },
+      scales: {
+        x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: {
+          min: 0,
+          max: 100,
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+function renderOverviewSleepChart(timeline = []) {
+  const canvasId = 'overviewSleepChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const sorted = (Array.isArray(timeline) ? timeline : [])
+    .slice()
+    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime())
+    .filter((e) => Number.isFinite(Number(e.sleepHours)));
+  const recent = sorted.slice(-14);
+  if (!recent.length) {
+    state.charts.overviewSleep?.destroy();
+    state.charts.overviewSleep = null;
+    showChartMessage(canvasId, 'Sync sleep data to see duration trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.overviewSleep?.destroy();
+  state.charts.overviewSleep = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: recent.map((e) => formatDate(e.date)),
+      datasets: [
+        {
+          label: 'Sleep (hrs)',
+          data: recent.map((e) => Number(e.sleepHours)),
+          borderColor: '#7eaefc',
+          backgroundColor: 'rgba(126, 174, 252, 0.10)',
+          tension: 0.4,
+          fill: true,
+          pointRadius: 3,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
+      scales: {
+        x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: {
+          min: 0,
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+function renderOverviewTrainingLoadChart(sessions = []) {
+  const canvasId = 'overviewTrainingLoadChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const withLoad = (Array.isArray(sessions) ? sessions : [])
+    .filter((s) => Number.isFinite(Number(s.trainingLoad)) && Number(s.trainingLoad) > 0)
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(a?.startTime || 0).getTime() - new Date(b?.startTime || 0).getTime()
+    )
+    .slice(-10);
+  if (!withLoad.length) {
+    state.charts.overviewTrainingLoad?.destroy();
+    state.charts.overviewTrainingLoad = null;
+    showChartMessage(canvasId, 'Complete sessions to see training load trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.overviewTrainingLoad?.destroy();
+  state.charts.overviewTrainingLoad = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: withLoad.map((s) => formatDate(s.startTime)),
+      datasets: [
+        {
+          label: 'Training Load',
+          data: withLoad.map((s) => Number(s.trainingLoad)),
+          borderColor: '#ff9a52',
+          backgroundColor: 'rgba(255, 154, 82, 0.10)',
+          tension: 0.4,
+          fill: true,
+          pointRadius: 3,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 10 }),
+      },
+      scales: {
+        x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: {
+          min: 0,
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
 }
 
 function renderActivityChart(timeline = []) {
@@ -7239,6 +7406,60 @@ function renderActivityBestEfforts(efforts = []) {
 function renderActivityCharts(charts = {}) {
   renderActivityMileageChart(charts.mileageTrend || []);
   renderActivityPaceChart(charts.heartRatePace || []);
+  renderActivityLoadChart(state.activity.sessions);
+}
+
+function renderActivityLoadChart(sessions = []) {
+  const canvasId = 'activityLoadChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const withLoad = (Array.isArray(sessions) ? sessions : [])
+    .filter((s) => Number.isFinite(Number(s.trainingLoad)) && Number(s.trainingLoad) > 0)
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(a?.startTime || 0).getTime() - new Date(b?.startTime || 0).getTime()
+    );
+  if (!withLoad.length) {
+    state.charts.activityLoad?.destroy();
+    state.charts.activityLoad = null;
+    showChartMessage(canvasId, 'Complete sessions to see training load trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.activityLoad?.destroy();
+  state.charts.activityLoad = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: withLoad.map((s) => formatDate(s.startTime)),
+      datasets: [
+        {
+          label: 'Training Load',
+          data: withLoad.map((s) => Number(s.trainingLoad)),
+          borderColor: '#ff9a52',
+          backgroundColor: 'rgba(255, 154, 82, 0.12)',
+          tension: 0.4,
+          fill: true,
+          pointRadius: 3,
+        },
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 20 }),
+      },
+      scales: {
+        x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: {
+          min: 0,
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
 }
 
 function renderActivityMileageChart(trend = []) {

@@ -1,4 +1,4 @@
-import { useState, Dispatch, SetStateAction, useEffect, useRef } from 'react';
+import { useState, Dispatch, SetStateAction, useEffect, useRef, ReactNode } from 'react';
 import {
   StyleSheet,
   View,
@@ -9,9 +9,12 @@ import {
   UIManager,
   Image,
   Modal,
+  ScrollView,
 } from 'react-native';
 import dayjs from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import {
   AppButton,
   AppInput,
@@ -19,11 +22,10 @@ import {
   Card,
   ErrorView,
   LoadingView,
-  SectionHeader,
   TrendChart,
   RefreshableScrollView,
 } from '../../components';
-import { colors, spacing } from '../../theme';
+import { colors, fonts, spacing } from '../../theme';
 import {
   nutritionRequest,
   saveMacroTargetsRequest,
@@ -62,6 +64,8 @@ type EntryFormState = {
   weightUnit: string;
   photoData: string | null;
 };
+
+type AddFoodMode = 'menu' | 'search' | 'photo' | 'manual';
 
 const NUMERIC_BARCODE_TYPE_HINTS = [
   'ean13',
@@ -112,9 +116,11 @@ export function NutritionScreen() {
     weightUnit: 'g',
     photoData: null,
   });
-  const [logExpanded, setLogExpanded] = useState(true);
+  const [addFoodModalVisible, setAddFoodModalVisible] = useState(false);
+  const [addFoodMode, setAddFoodMode] = useState<AddFoodMode>('menu');
   const [macroExpanded, setMacroExpanded] = useState(false);
   const [macroForm, setMacroForm] = useState({ calories: '', protein: '', carbs: '', fats: '' });
+  const [macroFeedback, setMacroFeedback] = useState<string | null>(null);
   const [photoStatus, setPhotoStatus] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<NutritionSuggestion[]>([]);
   const [suggestionStatus, setSuggestionStatus] = useState('Type at least 2 characters to see suggestions.');
@@ -160,6 +166,19 @@ export function NutritionScreen() {
   });
   const isToday = selectedDate === todayIso;
 
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    const calorieGoal = data.goals?.targetCalories ?? data.goals?.calories;
+    setMacroForm({
+      calories: calorieGoal === null || calorieGoal === undefined ? '' : String(calorieGoal),
+      protein: data.goals?.protein === null || data.goals?.protein === undefined ? '' : String(data.goals.protein),
+      carbs: data.goals?.carbs === null || data.goals?.carbs === undefined ? '' : String(data.goals.carbs),
+      fats: data.goals?.fats === null || data.goals?.fats === undefined ? '' : String(data.goals.fats),
+    });
+  }, [data]);
+
   if (isLoading || !data) {
     return <LoadingView />;
   }
@@ -175,6 +194,20 @@ export function NutritionScreen() {
 
   const handleEntryChange = <K extends keyof EntryFormState>(key: K, value: EntryFormState[K]) => {
     setEntryForm((prev) => ({ ...prev, [key]: value }));
+  };
+  const resetEntryForm = () => {
+    setEntryForm((prev) => ({
+      name: '',
+      type: prev.type,
+      barcode: '',
+      calories: '',
+      protein: '',
+      carbs: '',
+      fats: '',
+      weightAmount: '',
+      weightUnit: prev.weightUnit,
+      photoData: null,
+    }));
   };
   const clearSuggestions = (message?: string) => {
     if (suggestionTimerRef.current) {
@@ -382,12 +415,6 @@ export function NutritionScreen() {
     return parts.join(' • ') || 'Suggestion';
   };
 
-  const handleApplyTopSuggestion = () => {
-    if (suggestions.length) {
-      applySuggestion(suggestions[0]);
-    }
-  };
-
   const handleBarcodeDetected = async ({ data, type }: BarcodeScanningResult) => {
     if (scannerLockRef.current || scannerProcessing) {
       return;
@@ -468,6 +495,27 @@ export function NutritionScreen() {
     setSelectedDate(clamped);
   };
 
+  const handleOpenAddFoodModal = (mode: AddFoodMode = 'menu') => {
+    setEntryFeedback(null);
+    setPhotoStatus(null);
+    setScannerFeedback(null);
+    setAddFoodMode(mode);
+    setAddFoodModalVisible(true);
+  };
+
+  const handleCloseAddFoodModal = () => {
+    setAddFoodModalVisible(false);
+    setAddFoodMode('menu');
+    setScannerFeedback(null);
+    handleCloseScanner();
+  };
+
+  const handleBackToAddFoodMenu = () => {
+    setAddFoodMode('menu');
+    setScannerFeedback(null);
+    handleCloseScanner();
+  };
+
   const toggleSection = (setter: Dispatch<SetStateAction<boolean>>) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setter((prev) => !prev);
@@ -510,20 +558,12 @@ export function NutritionScreen() {
       } else {
         setEntryFeedback('Offline detected - entry queued and will sync automatically.');
       }
-      setEntryForm({
-        name: '',
-        type: entryForm.type,
-        barcode: '',
-        calories: '',
-        protein: '',
-        carbs: '',
-        fats: '',
-        weightAmount: '',
-        weightUnit: entryForm.weightUnit,
-        photoData: null,
-      });
+      resetEntryForm();
       setPhotoStatus(null);
       clearSuggestions('Type at least 2 characters to see suggestions.');
+      setAddFoodModalVisible(false);
+      setAddFoodMode('menu');
+      handleCloseScanner();
     } catch (error) {
       setEntryFeedback(
         error instanceof Error ? error.message : 'Unable to log entry. Try again in a moment.'
@@ -532,27 +572,29 @@ export function NutritionScreen() {
   };
 
   const handleSaveMacros = async () => {
-    await saveMacroTargetsRequest({
-      athleteId: requestSubject,
-      date: selectedDate,
-      calories: Number(macroForm.calories),
-      protein: Number(macroForm.protein),
-      carbs: Number(macroForm.carbs),
-      fats: Number(macroForm.fats),
-    });
-    refetch();
+    setMacroFeedback('Saving targets...');
+    try {
+      const result = await saveMacroTargetsRequest({
+        athleteId: requestSubject,
+        date: selectedDate,
+        calories: asNumber(macroForm.calories) ?? null,
+        protein: asNumber(macroForm.protein) ?? null,
+        carbs: asNumber(macroForm.carbs) ?? null,
+        fats: asNumber(macroForm.fats) ?? null,
+      });
+      setMacroFeedback(result.message || 'Targets saved.');
+      refetch();
+    } catch (error) {
+      setMacroFeedback(
+        error instanceof Error ? error.message : 'Unable to save macro targets right now.'
+      );
+    }
   };
 
   const handleDelete = async (entryId: number) => {
     await deleteNutritionEntryRequest(entryId);
     refetch();
   };
-
-  const trend = data.monthTrend.slice(-14).map((entry) => ({
-    label: formatDate(entry.date, 'MMM D'),
-    value: entry.calories,
-  }));
-  const previewUri = entryForm.photoData ? `data:image/jpeg;base64,${entryForm.photoData}` : null;
 
   const handleCapturePhoto = async () => {
     setPhotoStatus(null);
@@ -632,11 +674,17 @@ export function NutritionScreen() {
         setEntryFeedback(upload.result?.message || 'Photo imported into the food register.');
         setPhotoStatus('Imported photo logged.');
         refetch();
+        resetEntryForm();
+        setAddFoodModalVisible(false);
+        setAddFoodMode('menu');
         return;
       }
 
       setEntryFeedback('Offline detected - photo import queued and will sync automatically.');
       setPhotoStatus('Imported photo queued for analysis.');
+      resetEntryForm();
+      setAddFoodModalVisible(false);
+      setAddFoodMode('menu');
     } catch (error) {
       setEntryFeedback(
         error instanceof Error ? error.message : 'Unable to import meal photo right now.'
@@ -660,118 +708,306 @@ export function NutritionScreen() {
     setHistoryPhoto(null);
   };
 
-  return (
+  const calorieGoal = data.goals?.targetCalories ?? data.goals?.calories ?? null;
+  const dailyTotals = data.dailyTotals || {
+    calories: 0,
+    protein: 0,
+    carbs: 0,
+    fats: 0,
+    count: 0,
+  };
+  const summaryEyebrow = isToday ? 'Today' : formatDate(selectedDate, 'ddd');
+  const dayLabel = isToday ? 'Today' : formatDate(selectedDate, 'MMMM D');
+  const trendWindow = data.monthTrend.slice(-14);
+  const trend = trendWindow.map((entry) => ({
+    label: formatDate(entry.date, 'MMM D'),
+    value: entry.calories,
+  }));
+  const hasTargetLine = trendWindow.some(
+    (entry) => typeof (entry.targetCalories ?? calorieGoal) === 'number'
+  );
+  const targetTrend = hasTargetLine
+    ? trendWindow.map((entry) => ({
+        label: formatDate(entry.date, 'MMM D'),
+        value: entry.targetCalories ?? calorieGoal ?? 0,
+      }))
+    : undefined;
+  const previewUri = entryForm.photoData ? `data:image/jpeg;base64,${entryForm.photoData}` : null;
+  const progressRows = [
+    {
+      key: 'calories',
+      icon: 'flame-outline' as const,
+      label: 'Calories',
+      value: dailyTotals.calories,
+      target: calorieGoal,
+      unit: 'kcal',
+      color: colors.accent,
+    },
+    {
+      key: 'protein',
+      icon: 'barbell-outline' as const,
+      label: 'Protein',
+      value: dailyTotals.protein,
+      target: data.goals?.protein ?? null,
+      unit: 'g',
+      color: colors.success,
+    },
+    {
+      key: 'carbs',
+      icon: 'leaf-outline' as const,
+      label: 'Carbs',
+      value: dailyTotals.carbs,
+      target: data.goals?.carbs ?? null,
+      unit: 'g',
+      color: '#78b8ff',
+    },
+    {
+      key: 'fats',
+      icon: 'water-outline' as const,
+      label: 'Fats',
+      value: dailyTotals.fats,
+      target: data.goals?.fats ?? null,
+      unit: 'g',
+      color: colors.warning,
+    },
+  ];
+
+  const renderTypeSelector = () => (
+    <View style={styles.typeRow}>
+      {['Food', 'Liquid'].map((type) => {
+        const selected = entryForm.type === type;
+        return (
+          <Pressable
+            key={type}
+            style={[styles.typeChip, selected ? styles.typeChipSelected : null]}
+            onPress={() => handleEntryChange('type', type as 'Food' | 'Liquid')}
+          >
+            <AppText
+              variant="body"
+              weight={selected ? 'semibold' : 'regular'}
+              style={selected ? styles.typeChipTextSelected : styles.typeChipText}
+            >
+              {type}
+            </AppText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+
+  const renderSuggestionPanel = () => (
+    <View style={styles.suggestionContainer}>
+      <View style={styles.inlineRow}>
+        <AppText variant="label" style={styles.modalSectionLabel}>
+          Suggestions
+        </AppText>
+        {suggestionLoading ? (
+          <AppText variant="muted" style={styles.suggestionStatus}>
+            Searching...
+          </AppText>
+        ) : null}
+      </View>
+      {suggestions.length ? (
+        suggestions.map((suggestion, index) => {
+          const key = suggestion.id || `${suggestion.name}-${index}`;
+          return (
+            <TouchableOpacity
+              key={key}
+              style={styles.suggestionRow}
+              onPress={() => applySuggestion(suggestion)}
+              activeOpacity={0.85}
+            >
+              <View style={styles.suggestionInfo}>
+                <AppText variant="body" weight="medium">
+                  {suggestion.name}
+                </AppText>
+                <AppText variant="muted" style={styles.suggestionMeta}>
+                  {formatSuggestionMeta(suggestion)}
+                </AppText>
+              </View>
+              <View style={styles.inlineRow}>
+                <AppText variant="label" style={styles.suggestionUseText}>
+                  Use
+                </AppText>
+                <Ionicons name="chevron-forward" size={16} color={colors.muted} />
+              </View>
+            </TouchableOpacity>
+          );
+        })
+      ) : (
+        <AppText variant="muted" style={styles.suggestionEmpty}>
+          {suggestionStatus}
+        </AppText>
+      )}
+    </View>
+  );
+
+  const renderScannerPanel = () =>
+    scannerActive ? (
+      <View style={styles.scannerPanel}>
+        <View style={styles.scannerWrapper}>
+          <CameraView
+            style={styles.scannerCamera}
+            facing="back"
+            barcodeScannerSettings={{ barcodeTypes: SUPPORTED_BARCODE_TYPES }}
+            onBarcodeScanned={scannerProcessing ? undefined : handleBarcodeDetected}
+            onMountError={(error) => {
+              setScannerFeedback(error?.message || 'Unable to start the camera scanner on this device.');
+              setScannerProcessing(false);
+              scannerLockRef.current = false;
+            }}
+          />
+          {scannerProcessing ? (
+            <View style={styles.scannerOverlay}>
+              <AppText variant="body">Fetching nutrition info...</AppText>
+            </View>
+          ) : null}
+        </View>
+        <AppText variant="muted" style={styles.scannerHelper}>
+          Align a food barcode within the frame and hold still.
+        </AppText>
+      </View>
+    ) : null;
+
+  const renderMacroInputFields = () => (
     <>
-      <RefreshableScrollView
-        contentContainerStyle={styles.container}
-        refreshing={isRefetching}
-        onRefresh={refetch}
+      <AppInput
+        label="Calories"
+        keyboardType="numeric"
+        value={entryForm.calories}
+        onChangeText={(value) => handleEntryChange('calories', value)}
+      />
+      <AppInput
+        label="Protein"
+        keyboardType="numeric"
+        value={entryForm.protein}
+        onChangeText={(value) => handleEntryChange('protein', value)}
+      />
+      <AppInput
+        label="Carbs"
+        keyboardType="numeric"
+        value={entryForm.carbs}
+        onChangeText={(value) => handleEntryChange('carbs', value)}
+      />
+      <AppInput
+        label="Fats"
+        keyboardType="numeric"
+        value={entryForm.fats}
+        onChangeText={(value) => handleEntryChange('fats', value)}
+      />
+      <AppInput
+        label="Weight amount"
+        keyboardType="numeric"
+        value={entryForm.weightAmount}
+        onChangeText={(value) => handleEntryChange('weightAmount', value)}
+      />
+      <AppInput
+        label="Unit"
+        placeholder="g / ml"
+        value={entryForm.weightUnit}
+        onChangeText={(value) => handleEntryChange('weightUnit', value)}
+      />
+    </>
+  );
+
+  const renderEntryFeedback = () => (
+    <>
+      {photoStatus ? (
+        <AppText variant="muted" style={styles.modalHelperText}>
+          {photoStatus}
+        </AppText>
+      ) : null}
+      {scannerFeedback ? (
+        <AppText variant="muted" style={styles.modalHelperText}>
+          {scannerFeedback}
+        </AppText>
+      ) : null}
+      {entryFeedback ? (
+        <AppText variant="muted" style={styles.modalHelperText}>
+          {entryFeedback}
+        </AppText>
+      ) : null}
+    </>
+  );
+
+  const renderAddFoodBody = () => {
+    if (addFoodMode === 'menu') {
+      return (
+        <View style={styles.modalBody}>
+          <TouchableOpacity
+            style={styles.actionTile}
+            onPress={() => handleOpenAddFoodModal('search')}
+            activeOpacity={0.88}
+          >
+            <View style={styles.actionIcon}>
+              <Ionicons name="search-outline" size={20} color={colors.accent} />
+            </View>
+            <View style={styles.actionText}>
+              <AppText variant="body" weight="semibold">
+                Search food
+              </AppText>
+              <AppText variant="muted">
+                Find an item, use suggestions, or scan a barcode to pre-fill macros.
+              </AppText>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionTile}
+            onPress={() => handleOpenAddFoodModal('photo')}
+            activeOpacity={0.88}
+          >
+            <View style={styles.actionIcon}>
+              <Ionicons name="camera-outline" size={20} color={colors.warning} />
+            </View>
+            <View style={styles.actionText}>
+              <AppText variant="body" weight="semibold">
+                Snap meal photo
+              </AppText>
+              <AppText variant="muted">
+                Attach a meal photo or import one for automatic nutrition analysis.
+              </AppText>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionTile}
+            onPress={() => handleOpenAddFoodModal('manual')}
+            activeOpacity={0.88}
+          >
+            <View style={styles.actionIcon}>
+              <Ionicons name="create-outline" size={20} color={colors.success} />
+            </View>
+            <View style={styles.actionText}>
+              <AppText variant="body" weight="semibold">
+                Manual entry
+              </AppText>
+              <AppText variant="muted">
+                Enter calories and macros directly for a precise custom food log.
+              </AppText>
+            </View>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <ScrollView
+        contentContainerStyle={styles.modalBody}
+        keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-      <SectionHeader title="Daily nutrition" subtitle={formatDate(selectedDate)} />
-      <View style={styles.dateRow}>
-        <AppButton title="Prev" variant="ghost" onPress={() => adjustDate(-1)} />
-        <TouchableOpacity
-          style={styles.dateDisplay}
-          onPress={handleOpenDatePicker}
-          accessibilityRole="button"
-          accessibilityLabel="Select a date"
-        >
-          <AppText variant="heading">{formatDate(selectedDate)}</AppText>
-          <AppText variant="muted" style={styles.dateHint}>
-            Tap to choose a day
-          </AppText>
-        </TouchableOpacity>
-        <AppButton title="Next" variant="ghost" onPress={() => adjustDate(1)} disabled={isToday} />
-      </View>
-      <AppButton
-        title="Jump to today"
-        variant="ghost"
-        onPress={handleJumpToToday}
-        disabled={isToday}
-        style={styles.todayButton}
-      />
-      <Card>
-        <SectionHeader
-          title="Log entry"
-          subtitle="Fast capture"
-          action={
-            <TouchableOpacity
-              style={styles.collapseButton}
-              onPress={() => toggleSection(setLogExpanded)}
-            >
-              <AppText variant="muted">{logExpanded ? 'Hide' : 'Show'}</AppText>
-            </TouchableOpacity>
-          }
-        />
-        {logExpanded ? (
+        {renderTypeSelector()}
+        {addFoodMode === 'search' ? (
           <>
-            <View style={styles.typeRow}>
-              {['Food', 'Liquid'].map((type) => {
-                const selected = entryForm.type === type;
-                return (
-                  <Pressable
-                    key={type}
-                    style={[styles.typeChip, selected && styles.typeChipSelected]}
-                    onPress={() => handleEntryChange('type', type as 'Food' | 'Liquid')}
-                  >
-                    <AppText variant="body" style={selected ? styles.typeChipTextSelected : undefined}>
-                      {type}
-                    </AppText>
-                  </Pressable>
-                );
-              })}
-            </View>
             <AppInput
-              label="Name"
+              label="Search food"
               placeholder="Greek yogurt"
               value={entryForm.name}
               onChangeText={handleNameChange}
               selectTextOnFocus
             />
-            <View style={styles.suggestionContainer}>
-              <View style={styles.suggestionHeader}>
-                <AppText variant="body">Suggestions</AppText>
-                {suggestionLoading ? <AppText variant="muted">Searching...</AppText> : null}
-              </View>
-              {suggestions.length ? (
-                <>
-                  <AppText variant="muted">Tap a suggestion or use the quick button to auto-fill.</AppText>
-                  <AppButton
-                    title="Use top suggestion"
-                    variant="ghost"
-                    style={styles.suggestionButton}
-                    onPress={handleApplyTopSuggestion}
-                  />
-                  {suggestions.map((suggestion, index) => {
-                    const key = suggestion.id || `${suggestion.name}-${index}`;
-                    return (
-                      <View key={key} style={styles.suggestionRow}>
-                        <TouchableOpacity
-                          style={styles.suggestionInfo}
-                          onPress={() => applySuggestion(suggestion)}
-                        >
-                          <AppText variant="body">{suggestion.name}</AppText>
-                          <AppText variant="muted" style={styles.suggestionMeta}>
-                            {formatSuggestionMeta(suggestion)}
-                          </AppText>
-                        </TouchableOpacity>
-                        <AppButton
-                          title="Use"
-                          variant="ghost"
-                          style={styles.suggestionButton}
-                          onPress={() => applySuggestion(suggestion)}
-                        />
-                      </View>
-                    );
-                  })}
-                </>
-              ) : (
-                <AppText variant="muted">{suggestionStatus}</AppText>
-              )}
-            </View>
+            {renderSuggestionPanel()}
             <AppInput
-              label="Barcode (optional)"
+              label="Barcode"
               placeholder="01234567890"
               keyboardType="number-pad"
               value={entryForm.barcode}
@@ -782,135 +1018,251 @@ export function NutritionScreen() {
               variant="ghost"
               onPress={scannerActive ? handleCloseScanner : handleOpenScanner}
             />
-            {scannerActive ? (
-              <View style={styles.scannerPanel}>
-                <View style={styles.scannerWrapper}>
-                  <CameraView
-                    style={styles.scannerCamera}
-                    facing="back"
-                    barcodeScannerSettings={{ barcodeTypes: SUPPORTED_BARCODE_TYPES }}
-                    onBarcodeScanned={scannerProcessing ? undefined : handleBarcodeDetected}
-                    onMountError={(error) => {
-                      setScannerFeedback(
-                        error?.message || 'Unable to start the camera scanner on this device.'
-                      );
-                      setScannerProcessing(false);
-                      scannerLockRef.current = false;
-                    }}
-                  />
-                  {scannerProcessing ? (
-                    <View style={styles.scannerOverlay}>
-                      <AppText variant="body">Fetching nutrition info...</AppText>
-                    </View>
-                  ) : null}
-                </View>
-                <AppText variant="muted" style={styles.scannerHelper}>
-                  Align a food barcode within the frame and hold still. If scan fails, type the code
-                  manually.
-                </AppText>
+            {renderScannerPanel()}
+            {renderMacroInputFields()}
+            <AppButton title="Log food" onPress={handleAddEntry} />
+            {renderEntryFeedback()}
+          </>
+        ) : null}
+        {addFoodMode === 'photo' ? (
+          <>
+            <View style={styles.photoActionRow}>
+              <AppButton
+                title={entryForm.photoData ? 'Retake meal photo' : 'Snap meal photo'}
+                variant="ghost"
+                style={styles.photoActionButton}
+                onPress={handleCapturePhoto}
+              />
+              <AppButton
+                title="Import from library"
+                variant="ghost"
+                style={styles.photoActionButton}
+                onPress={handleImportPhoto}
+              />
+            </View>
+            <AppText variant="muted" style={styles.modalCopy}>
+              Snap attaches a photo to the draft entry. Import sends the photo to the backend for
+              automatic analysis and logs it immediately.
+            </AppText>
+            {previewUri ? (
+              <View style={styles.photoPreviewCard}>
+                <Image source={{ uri: previewUri }} style={styles.photoPreviewLarge} />
+                <TouchableOpacity
+                  style={styles.inlineIconButton}
+                  onPress={handleRemovePhoto}
+                  accessibilityLabel="Remove attached photo"
+                >
+                  <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                  <AppText variant="label" style={styles.inlineIconButtonText}>
+                    Remove
+                  </AppText>
+                </TouchableOpacity>
               </View>
             ) : null}
-            {scannerFeedback ? (
-              <AppText variant="muted" style={styles.helperText}>
-                {scannerFeedback}
+            <AppInput
+              label="Name"
+              placeholder="Chicken rice bowl"
+              value={entryForm.name}
+              onChangeText={(value) => handleEntryChange('name', value)}
+            />
+            {renderMacroInputFields()}
+            <AppButton title="Log meal photo entry" onPress={handleAddEntry} />
+            {renderEntryFeedback()}
+          </>
+        ) : null}
+        {addFoodMode === 'manual' ? (
+          <>
+            <AppInput
+              label="Name"
+              placeholder="Baked potato"
+              value={entryForm.name}
+              onChangeText={(value) => handleEntryChange('name', value)}
+            />
+            {renderMacroInputFields()}
+            <View style={styles.photoActionRow}>
+              <AppButton
+                title="Add photo"
+                variant="ghost"
+                style={styles.photoActionButton}
+                onPress={() => setAddFoodMode('photo')}
+              />
+              <AppButton
+                title="Search database"
+                variant="ghost"
+                style={styles.photoActionButton}
+                onPress={() => setAddFoodMode('search')}
+              />
+            </View>
+            <AppButton title="Log food" onPress={handleAddEntry} />
+            {renderEntryFeedback()}
+          </>
+        ) : null}
+      </ScrollView>
+    );
+  };
+
+  return (
+    <>
+      <RefreshableScrollView
+        contentContainerStyle={styles.container}
+        refreshing={isRefetching}
+        onRefresh={refetch}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.pageHeader}>
+          <View style={styles.pageHeaderText}>
+            <AppText variant="eyebrow">{summaryEyebrow}</AppText>
+            <AppText variant="heading" style={styles.pageTitle}>
+              Nutrition
+            </AppText>
+            <AppText variant="muted" style={styles.pageSubtitle}>
+              Clean view of daily intake, macro balance, and meal history.
+            </AppText>
+          </View>
+          <TouchableOpacity
+            style={[styles.todayPill, isToday ? styles.todayPillActive : null]}
+            onPress={handleJumpToToday}
+            disabled={isToday}
+          >
+            <AppText variant="label" style={isToday ? styles.todayPillTextActive : styles.todayPillText}>
+              {dayLabel}
+            </AppText>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.dateRow}>
+          <TouchableOpacity
+            style={styles.dateNavButton}
+            onPress={() => adjustDate(-1)}
+            accessibilityLabel="View previous day"
+          >
+            <Ionicons name="chevron-back" size={18} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.dateDisplay}
+            onPress={handleOpenDatePicker}
+            accessibilityRole="button"
+            accessibilityLabel="Select a date"
+          >
+            <AppText variant="body" weight="semibold" style={styles.dateDisplayLabel}>
+              {formatDate(selectedDate)}
+            </AppText>
+            <AppText variant="muted" style={styles.dateHint}>
+              {isToday ? 'Today’s live summary' : 'Tap to choose another day'}
+            </AppText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.dateNavButton, isToday ? styles.dateNavButtonDisabled : null]}
+            onPress={() => adjustDate(1)}
+            disabled={isToday}
+            accessibilityLabel="View next day"
+          >
+            <Ionicons name="chevron-forward" size={18} color={isToday ? colors.muted : colors.text} />
+          </TouchableOpacity>
+        </View>
+
+        <Card padded={false} style={styles.heroCard}>
+          <LinearGradient
+            colors={SUMMARY_GRADIENT}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroGradient}
+          >
+            <View style={styles.heroTopRow}>
+              <View>
+                <AppText variant="eyebrow">Daily Summary</AppText>
+                <AppText variant="muted">
+                  {dailyTotals.count ? `${dailyTotals.count} foods logged` : 'No foods logged yet'}
+                </AppText>
+              </View>
+              <View style={styles.summaryBadge}>
+                <Ionicons name="sparkles-outline" size={14} color={colors.accent} />
+                <AppText variant="label" style={styles.summaryBadgeText}>
+                  {dayLabel}
+                </AppText>
+              </View>
+            </View>
+
+            <View style={styles.calorieHeroRow}>
+              <View style={styles.calorieIconWrap}>
+                <Ionicons name="flame" size={28} color={colors.accent} />
+              </View>
+              <View style={styles.calorieValueWrap}>
+                <AppText style={styles.calorieValue}>{formatNumber(dailyTotals.calories)}</AppText>
+                <AppText variant="body" style={styles.calorieUnit}>
+                  kcal
+                </AppText>
+              </View>
+            </View>
+
+            <View style={styles.summaryMacroRow}>
+              <SummaryMacroPill
+                icon="barbell-outline"
+                label="Protein"
+                value={formatMacroValue(dailyTotals.protein)}
+                color={colors.success}
+              />
+              <SummaryMacroPill
+                icon="leaf-outline"
+                label="Carbs"
+                value={formatMacroValue(dailyTotals.carbs)}
+                color="#78b8ff"
+              />
+              <SummaryMacroPill
+                icon="water-outline"
+                label="Fats"
+                value={formatMacroValue(dailyTotals.fats)}
+                color={colors.warning}
+              />
+            </View>
+          </LinearGradient>
+        </Card>
+
+        <Card style={styles.sectionCard}>
+          <NutritionSectionHeader
+            title="Macro Progress"
+            subtitle="Tracked against today’s targets"
+            action={
+              <TouchableOpacity
+                style={styles.inlineActionButton}
+                onPress={() => toggleSection(setMacroExpanded)}
+              >
+                <Ionicons
+                  name={macroExpanded ? 'chevron-up' : 'create-outline'}
+                  size={16}
+                  color={colors.muted}
+                />
+                <AppText variant="label" style={styles.inlineActionText}>
+                  {macroExpanded ? 'Hide' : 'Edit'}
+                </AppText>
+              </TouchableOpacity>
+            }
+          />
+          <View style={styles.progressList}>
+            {progressRows.map((row) => (
+              <MacroProgressRow
+                key={row.key}
+                icon={row.icon}
+                label={row.label}
+                value={row.value}
+                target={row.target}
+                unit={row.unit}
+                color={row.color}
+              />
+            ))}
+          </View>
+          {macroExpanded ? (
+            <View style={styles.targetEditor}>
+              <AppText variant="label" style={styles.targetEditorTitle}>
+                Daily targets
               </AppText>
-            ) : null}
-            <View style={styles.formRow}>
               <AppInput
                 label="Calories"
                 keyboardType="numeric"
-                value={entryForm.calories}
-                onChangeText={(value) => handleEntryChange('calories', value)}
+                value={macroForm.calories}
+                onChangeText={(value) => handleMacroChange('calories', value)}
               />
-              <AppInput
-                label="Protein"
-                keyboardType="numeric"
-                value={entryForm.protein}
-                onChangeText={(value) => handleEntryChange('protein', value)}
-              />
-            </View>
-            <View style={styles.formRow}>
-              <AppInput
-                label="Carbs"
-                keyboardType="numeric"
-                value={entryForm.carbs}
-                onChangeText={(value) => handleEntryChange('carbs', value)}
-              />
-              <AppInput
-                label="Fats"
-                keyboardType="numeric"
-                value={entryForm.fats}
-                onChangeText={(value) => handleEntryChange('fats', value)}
-              />
-            </View>
-            <View style={styles.formRow}>
-              <AppInput
-                label="Weight amount"
-                keyboardType="numeric"
-                value={entryForm.weightAmount}
-                onChangeText={(value) => handleEntryChange('weightAmount', value)}
-              />
-              <AppInput
-                label="Unit"
-                placeholder="g / ml"
-                value={entryForm.weightUnit}
-                onChangeText={(value) => handleEntryChange('weightUnit', value)}
-              />
-            </View>
-            <AppButton
-              title={entryForm.photoData ? 'Retake meal photo' : 'Snap meal photo'}
-              variant="ghost"
-              onPress={handleCapturePhoto}
-            />
-            <AppButton title="Import meal photo" variant="ghost" onPress={handleImportPhoto} />
-            {previewUri ? (
-              <View style={styles.photoPreviewRow}>
-                <Image source={{ uri: previewUri }} style={styles.photoPreview} />
-                <AppButton title="Remove photo" variant="ghost" onPress={handleRemovePhoto} />
-              </View>
-            ) : null}
-            {photoStatus ? (
-              <AppText variant="muted" style={styles.helperText}>
-                {photoStatus}
-              </AppText>
-            ) : null}
-            <AppButton title="Log entry" onPress={handleAddEntry} />
-            {entryFeedback ? (
-              <AppText variant="muted" style={styles.helperText}>
-                {entryFeedback}
-              </AppText>
-            ) : null}
-            <AppText variant="muted" style={styles.helperText}>
-              Entries sync to the `/api/nutrition` endpoint automatically; meal photos can be
-              attached manually or imported straight into the food register.
-            </AppText>
-          </>
-        ) : (
-          <AppText variant="muted">Tap “Show” whenever you want to log a meal or drink.</AppText>
-        )}
-      </Card>
-      <Card>
-        <SectionHeader
-          title="Macro targets"
-          subtitle="Coach adjustable"
-          action={
-            <TouchableOpacity
-              style={styles.collapseButton}
-              onPress={() => toggleSection(setMacroExpanded)}
-            >
-              <AppText variant="muted">{macroExpanded ? 'Hide' : 'Show'}</AppText>
-            </TouchableOpacity>
-          }
-        />
-        {macroExpanded ? (
-          <>
-            <AppInput
-              label="Calories"
-              keyboardType="numeric"
-              value={macroForm.calories}
-              onChangeText={(value) => handleMacroChange('calories', value)}
-            />
-            <View style={styles.formRow}>
               <AppInput
                 label="Protein"
                 keyboardType="numeric"
@@ -923,68 +1275,96 @@ export function NutritionScreen() {
                 value={macroForm.carbs}
                 onChangeText={(value) => handleMacroChange('carbs', value)}
               />
+              <AppInput
+                label="Fats"
+                keyboardType="numeric"
+                value={macroForm.fats}
+                onChangeText={(value) => handleMacroChange('fats', value)}
+              />
+              <AppButton title="Save targets" onPress={handleSaveMacros} variant="ghost" />
             </View>
-            <AppInput
-              label="Fats"
-              keyboardType="numeric"
-              value={macroForm.fats}
-              onChangeText={(value) => handleMacroChange('fats', value)}
-            />
-            <AppButton title="Save targets" onPress={handleSaveMacros} variant="ghost" />
-          </>
-        ) : (
-          <AppText variant="muted">Tap “Show” to adjust calories, protein, carbs, and fats.</AppText>
-        )}
-      </Card>
-      <Card>
-        <SectionHeader title="Entries" subtitle={`${data.entries.length} logged`} />
-        {data.entries.map((entry) => (
-          <View key={entry.id} style={styles.entryRow}>
-            <View style={styles.entryInfo}>
-              <AppText variant="body">{entry.name}</AppText>
-              <AppText variant="muted">{entry.type} · {entry.calories} kcal</AppText>
-              {entry.photoData ? (
-                <TouchableOpacity
-                  style={styles.entryPhotoWrapper}
-                  onPress={() => handleViewHistoryPhoto(entry)}
-                >
-                  <Image
-                    source={{ uri: `data:image/jpeg;base64,${entry.photoData}` }}
-                    style={styles.entryPhoto}
-                  />
-                  <View style={styles.photoInfo}>
-                    <AppText variant="muted" style={styles.photoFlag}>
-                      📷 Photo attached
-                    </AppText>
-                    <AppText variant="muted" style={styles.photoHint}>
-                      Tap to view
-                    </AppText>
-                  </View>
-                </TouchableOpacity>
-              ) : null}
+          ) : null}
+          {macroFeedback ? (
+            <AppText variant="muted" style={styles.sectionHelperText}>
+              {macroFeedback}
+            </AppText>
+          ) : null}
+        </Card>
+
+        <Card style={styles.sectionCard}>
+          <NutritionSectionHeader title="Calorie Intake" subtitle="Last 14 Days" />
+          <TrendChart
+            data={trend}
+            yLabel="kcal"
+            color={colors.accent}
+            areaOpacity={0.12}
+            showPoints={false}
+            targetData={targetTrend}
+          />
+          {hasTargetLine ? (
+            <View style={styles.chartLegendRow}>
+              <View style={styles.chartLegendItem}>
+                <View style={[styles.legendSwatch, { backgroundColor: colors.accent }]} />
+                <AppText variant="muted">Intake</AppText>
+              </View>
+              <View style={styles.chartLegendItem}>
+                <View style={styles.legendDashedWrap}>
+                  <View style={styles.legendDashedLine} />
+                </View>
+                <AppText variant="muted">
+                  {calorieGoal ? `Target ${formatNumber(calorieGoal)} kcal` : 'Target'}
+                </AppText>
+              </View>
             </View>
-            <AppButton title="Remove" variant="ghost" onPress={() => handleDelete(entry.id)} />
-          </View>
-        ))}
-      </Card>
-      <Card>
-        <SectionHeader title="Monthly calories" subtitle="14-day view" />
-        <TrendChart data={trend} yLabel="kcal" />
-      </Card>
-      <Card>
-        <SectionHeader title="Daily totals" subtitle="Macros" />
-        {data.dailyTotals ? (
-          <View>
-            <AppText variant="body">Calories {formatNumber(data.dailyTotals.calories)}</AppText>
-            <AppText variant="body">Protein {formatNumber(data.dailyTotals.protein, { suffix: ' g' })}</AppText>
-            <AppText variant="body">Carbs {formatNumber(data.dailyTotals.carbs, { suffix: ' g' })}</AppText>
-            <AppText variant="body">Fats {formatNumber(data.dailyTotals.fats, { suffix: ' g' })}</AppText>
-          </View>
-        ) : (
-          <AppText variant="muted">No entries yet.</AppText>
-        )}
-      </Card>
+          ) : null}
+        </Card>
+
+        <Card style={styles.sectionCard}>
+          <NutritionSectionHeader
+            title="Food Log"
+            subtitle={
+              data.entries.length ? `${data.entries.length} entries logged` : 'No meals logged yet'
+            }
+          />
+          {data.entries.length ? (
+            <View style={styles.foodLogList}>
+              {data.entries.map((entry) => (
+                <FoodLogRow
+                  key={entry.id}
+                  entry={entry}
+                  onDelete={handleDelete}
+                  onViewPhoto={handleViewHistoryPhoto}
+                />
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyStateIcon}>
+                <Ionicons name="restaurant-outline" size={22} color={colors.muted} />
+              </View>
+              <AppText variant="body" weight="semibold">
+                Nothing logged for this day
+              </AppText>
+              <AppText variant="muted" style={styles.emptyStateCopy}>
+                Add a meal, scan a barcode, or import a photo to start tracking nutrition.
+              </AppText>
+              <AppButton title="Add Food" onPress={() => handleOpenAddFoodModal()} />
+            </View>
+          )}
+        </Card>
       </RefreshableScrollView>
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => handleOpenAddFoodModal()}
+        accessibilityRole="button"
+        accessibilityLabel="Add food"
+        activeOpacity={0.9}
+      >
+        <Ionicons name="add" size={18} color={colors.background} />
+        <AppText variant="body" weight="semibold" style={styles.fabText}>
+          Add Food
+        </AppText>
+      </TouchableOpacity>
       {Platform.OS === 'ios' ? (
         <Modal
           visible={iosPickerVisible}
@@ -1011,6 +1391,46 @@ export function NutritionScreen() {
         </Modal>
       ) : null}
       <Modal
+        visible={addFoodModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseAddFoodModal}
+      >
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity style={styles.sheetDismissArea} onPress={handleCloseAddFoodModal} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              {addFoodMode === 'menu' ? (
+                <View style={styles.sheetHeaderSpacer} />
+              ) : (
+                <TouchableOpacity
+                  style={styles.sheetIconButton}
+                  onPress={handleBackToAddFoodMenu}
+                  accessibilityLabel="Back to add food options"
+                >
+                  <Ionicons name="chevron-back" size={18} color={colors.text} />
+                </TouchableOpacity>
+              )}
+              <View style={styles.sheetHeaderText}>
+                <AppText variant="heading">Add Food</AppText>
+                <AppText variant="muted">
+                  {ADD_FOOD_MODE_COPY[addFoodMode]}
+                </AppText>
+              </View>
+              <TouchableOpacity
+                style={styles.sheetIconButton}
+                onPress={handleCloseAddFoodModal}
+                accessibilityLabel="Close add food"
+              >
+                <Ionicons name="close" size={18} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            {renderAddFoodBody()}
+          </View>
+        </View>
+      </Modal>
+      <Modal
         visible={Boolean(historyPhoto)}
         transparent
         animationType="fade"
@@ -1030,6 +1450,18 @@ export function NutritionScreen() {
   );
 }
 
+const SUMMARY_GRADIENT: readonly [string, string] = [
+  'rgba(18, 58, 122, 0.95)',
+  'rgba(7, 17, 38, 0.98)',
+];
+
+const ADD_FOOD_MODE_COPY: Record<AddFoodMode, string> = {
+  menu: 'Choose the fastest way to log today’s intake.',
+  search: 'Search, scan, and auto-fill food details.',
+  photo: 'Capture a meal photo or import one for analysis.',
+  manual: 'Add a custom entry with exact nutrition values.',
+};
+
 const SUPPORTED_BARCODE_TYPES: BarcodeType[] = [
   'ean13',
   'ean8',
@@ -1045,150 +1477,449 @@ const SUPPORTED_BARCODE_TYPES: BarcodeType[] = [
   'qr',
 ];
 
+type NutritionSectionHeaderProps = {
+  title: string;
+  subtitle?: string;
+  action?: ReactNode;
+};
+
+function NutritionSectionHeader({ title, subtitle, action }: NutritionSectionHeaderProps) {
+  return (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionHeaderText}>
+        <AppText variant="heading" style={styles.sectionTitle}>
+          {title}
+        </AppText>
+        {subtitle ? (
+          <AppText variant="muted" style={styles.sectionSubtitle}>
+            {subtitle}
+          </AppText>
+        ) : null}
+      </View>
+      {action ? <View style={styles.sectionHeaderAction}>{action}</View> : null}
+    </View>
+  );
+}
+
+function SummaryMacroPill({
+  icon,
+  label,
+  value,
+  color,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View style={styles.summaryMacroPill}>
+      <View style={[styles.summaryMacroIcon, { backgroundColor: `${color}1c` }]}>
+        <Ionicons name={icon} size={16} color={color} />
+      </View>
+      <View style={styles.summaryMacroText}>
+        <AppText variant="label">{label}</AppText>
+        <AppText variant="body" weight="semibold">
+          {value}
+        </AppText>
+      </View>
+    </View>
+  );
+}
+
+function MacroProgressRow({
+  icon,
+  label,
+  value,
+  target,
+  unit,
+  color,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  label: string;
+  value: number;
+  target: number | null | undefined;
+  unit: string;
+  color: string;
+}) {
+  const percent = target && target > 0 ? Math.min(value / target, 1) : 0;
+  return (
+    <View style={styles.progressRow}>
+      <View style={styles.progressLabelRow}>
+        <View style={styles.progressLabelGroup}>
+          <View style={[styles.progressIcon, { backgroundColor: `${color}1c` }]}>
+            <Ionicons name={icon} size={16} color={color} />
+          </View>
+          <AppText variant="body" weight="medium">
+            {label}
+          </AppText>
+        </View>
+        <AppText variant="muted" style={styles.progressValueText}>
+          {formatProgressLabel(value, target, unit)}
+        </AppText>
+      </View>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${percent * 100}%`, backgroundColor: color }]} />
+      </View>
+    </View>
+  );
+}
+
+function FoodLogRow({
+  entry,
+  onDelete,
+  onViewPhoto,
+}: {
+  entry: NutritionEntry;
+  onDelete: (entryId: number) => void;
+  onViewPhoto: (entry: NutritionEntry) => void;
+}) {
+  const thumbnail = entry.photoData ? (
+    <TouchableOpacity
+      style={styles.entryThumbButton}
+      onPress={() => onViewPhoto(entry)}
+      accessibilityLabel={`View photo for ${entry.name}`}
+    >
+      <Image source={{ uri: `data:image/jpeg;base64,${entry.photoData}` }} style={styles.entryThumbImage} />
+    </TouchableOpacity>
+  ) : (
+    <View style={styles.entryThumbPlaceholder}>
+      <Ionicons
+        name={entry.type === 'Liquid' ? 'water-outline' : 'restaurant-outline'}
+        size={18}
+        color={colors.muted}
+      />
+    </View>
+  );
+
+  return (
+    <View style={styles.foodLogRow}>
+      {thumbnail}
+      <View style={styles.foodLogText}>
+        <View style={styles.foodLogTitleRow}>
+          <AppText variant="body" weight="medium" style={styles.entryName} numberOfLines={1}>
+            {entry.name}
+          </AppText>
+          <AppText variant="body" weight="semibold" style={styles.entryCalories}>
+            {formatNumber(entry.calories)} kcal
+          </AppText>
+        </View>
+        <AppText variant="muted" style={styles.entryMeta} numberOfLines={2}>
+          {buildEntryMeta(entry)}
+        </AppText>
+      </View>
+      <TouchableOpacity
+        style={styles.deleteIconButton}
+        onPress={() => onDelete(entry.id)}
+        accessibilityLabel={`Delete ${entry.name}`}
+      >
+        <Ionicons name="trash-outline" size={18} color={colors.danger} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function formatMacroValue(value: number) {
+  return `${formatNumber(value)} g`;
+}
+
+function formatProgressLabel(
+  value: number,
+  target: number | null | undefined,
+  unit: string
+) {
+  const suffix = unit === 'kcal' ? ' kcal' : ` ${unit}`;
+  const current = `${formatNumber(value)}${suffix}`;
+  if (target === null || target === undefined || target <= 0) {
+    return `${current} / no target`;
+  }
+  return `${current} / ${formatNumber(target)}${suffix}`;
+}
+
+function buildEntryMeta(entry: NutritionEntry) {
+  const parts: string[] = [];
+  if (entry.weightAmount && entry.weightUnit) {
+    parts.push(`${formatNumber(entry.weightAmount)} ${entry.weightUnit}`);
+  }
+  parts.push(`P ${formatNumber(entry.protein)}g`);
+  parts.push(`C ${formatNumber(entry.carbs)}g`);
+  parts.push(`F ${formatNumber(entry.fats)}g`);
+  if (entry.photoData) {
+    parts.push('Photo');
+  }
+  return parts.join(' • ');
+}
+
 const styles = StyleSheet.create({
   container: {
     padding: spacing.lg,
     gap: spacing.lg,
+    paddingBottom: spacing.xxl + 80,
+  },
+  pageHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  pageHeaderText: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  pageTitle: {
+    fontSize: 36,
+    lineHeight: 40,
+  },
+  pageSubtitle: {
+    lineHeight: 22,
+  },
+  todayPill: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  todayPillActive: {
+    backgroundColor: 'rgba(77,245,255,0.12)',
+    borderColor: 'rgba(77,245,255,0.28)',
+  },
+  todayPillText: {
+    color: colors.text,
+  },
+  todayPillTextActive: {
+    color: colors.accent,
   },
   dateRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: spacing.sm,
-    marginBottom: spacing.md,
+  },
+  dateNavButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.panel,
+  },
+  dateNavButtonDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   dateDisplay: {
     flex: 1,
-    alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  dateDisplayLabel: {
+    fontSize: 18,
   },
   dateHint: {
-    marginTop: spacing.xs * 0.5,
-    color: colors.muted,
+    marginTop: 4,
+    lineHeight: 18,
   },
-  todayButton: {
-    alignSelf: 'flex-end',
+  heroCard: {
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
+  heroGradient: {
+    padding: spacing.lg,
+    gap: spacing.lg,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  summaryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(1,9,21,0.28)',
+  },
+  summaryBadgeText: {
+    color: colors.text,
+  },
+  calorieHeroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  calorieIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(77,245,255,0.12)',
+  },
+  calorieValueWrap: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  calorieValue: {
+    color: colors.text,
+    fontFamily: fonts.display,
+    fontSize: 52,
+    lineHeight: 56,
+    letterSpacing: -1.5,
+  },
+  calorieUnit: {
+    color: colors.muted,
+    fontSize: 18,
+    paddingBottom: 6,
+  },
+  summaryMacroRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  summaryMacroPill: {
+    flex: 1,
+    minWidth: 96,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(1,9,21,0.22)',
+  },
+  summaryMacroIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  summaryMacroText: {
+    flex: 1,
+    gap: 2,
+  },
+  sectionCard: {
+    backgroundColor: 'rgba(6,18,38,0.94)',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
     marginBottom: spacing.md,
+  },
+  sectionHeaderText: {
+    flex: 1,
+    gap: 4,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    lineHeight: 24,
+  },
+  sectionSubtitle: {
+    lineHeight: 20,
+  },
+  sectionHeaderAction: {
+    alignSelf: 'center',
+  },
+  inlineActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  inlineActionText: {
+    color: colors.muted,
   },
   typeRow: {
     flexDirection: 'row',
     gap: spacing.sm,
-    marginBottom: spacing.sm,
   },
   typeChip: {
+    flex: 1,
+    alignItems: 'center',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: 12,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
   typeChipSelected: {
-    borderColor: colors.accent,
-    backgroundColor: 'rgba(77,245,255,0.12)',
+    borderColor: 'rgba(77,245,255,0.28)',
+    backgroundColor: 'rgba(77,245,255,0.14)',
+  },
+  typeChipText: {
+    color: colors.text,
   },
   typeChipTextSelected: {
     color: colors.accent,
   },
-  formRow: {
-    width: '100%',
-    flexDirection: 'column',
-    gap: spacing.sm,
-  },
-  entryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  helperText: {
-    marginTop: spacing.sm,
-  },
-  collapseButton: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderWidth: 1,
-    borderRadius: 12,
-    borderColor: colors.border,
-  },
-  photoPreviewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  photoPreview: {
-    width: 96,
-    height: 96,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  entryInfo: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  entryPhotoWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  entryPhoto: {
-    width: 56,
-    height: 56,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  photoInfo: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  photoFlag: {
-    color: colors.muted,
-  },
-  photoHint: {
-    color: colors.accent,
-  },
   suggestionContainer: {
-    marginTop: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 16,
+    borderRadius: 20,
     padding: spacing.sm,
     gap: spacing.sm,
+    backgroundColor: 'rgba(255,255,255,0.02)',
   },
-  suggestionHeader: {
+  inlineRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: spacing.xs,
+  },
+  modalSectionLabel: {
+    color: colors.muted,
+  },
+  suggestionStatus: {
+    marginLeft: 'auto',
   },
   suggestionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    borderTopWidth: 1,
+    paddingVertical: spacing.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
-    paddingTop: spacing.sm,
   },
   suggestionInfo: {
     flex: 1,
-    gap: spacing.xs,
+    gap: 4,
   },
   suggestionMeta: {
-    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
   },
-  suggestionButton: {
-    height: 40,
-    paddingHorizontal: spacing.sm,
+  suggestionUseText: {
+    color: colors.accent,
+  },
+  suggestionEmpty: {
+    lineHeight: 20,
   },
   scannerPanel: {
-    marginTop: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 16,
+    borderRadius: 20,
     padding: spacing.sm,
     gap: spacing.sm,
     backgroundColor: colors.glass,
@@ -1198,23 +1929,321 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.accent,
+    borderColor: 'rgba(77,245,255,0.28)',
   },
   scannerCamera: {
     flex: 1,
   },
   scannerOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(1,9,21,0.6)',
+    backgroundColor: 'rgba(1,9,21,0.62)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   scannerHelper: {
     textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  modalBody: {
+    gap: spacing.md,
+    paddingBottom: spacing.xl,
+  },
+  actionTile: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  actionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  actionText: {
+    flex: 1,
+    gap: 4,
+  },
+  photoActionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  photoActionButton: {
+    flex: 1,
+  },
+  modalCopy: {
+    lineHeight: 20,
+  },
+  photoPreviewCard: {
+    borderRadius: 20,
+    padding: spacing.sm,
+    gap: spacing.sm,
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  photoPreviewLarge: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  inlineIconButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,107,129,0.24)',
+    backgroundColor: 'rgba(255,107,129,0.08)',
+  },
+  inlineIconButtonText: {
+    color: colors.danger,
+  },
+  modalHelperText: {
+    lineHeight: 20,
+  },
+  progressList: {
+    gap: spacing.md,
+  },
+  progressRow: {
+    gap: spacing.xs,
+  },
+  progressLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  progressLabelGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flex: 1,
+  },
+  progressIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  progressValueText: {
+    fontSize: 13,
+    textAlign: 'right',
+  },
+  progressTrack: {
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+  },
+  targetEditor: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  targetEditorTitle: {
+    marginBottom: spacing.sm,
+  },
+  sectionHelperText: {
+    marginTop: spacing.sm,
+  },
+  chartLegendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    marginTop: spacing.sm,
+  },
+  chartLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  legendSwatch: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  legendDashedWrap: {
+    width: 18,
+    alignItems: 'center',
+  },
+  legendDashedLine: {
+    width: 18,
+    borderTopWidth: 2,
+    borderTopColor: colors.muted,
+    borderStyle: 'dashed',
+  },
+  foodLogList: {
+    gap: spacing.md,
+  },
+  foodLogRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  entryThumbButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  entryThumbImage: {
+    width: '100%',
+    height: '100%',
+  },
+  entryThumbPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  foodLogText: {
+    flex: 1,
+    gap: 4,
+  },
+  foodLogTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  entryName: {
+    flex: 1,
+  },
+  entryCalories: {
+    fontSize: 15,
+  },
+  entryMeta: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  deleteIconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,107,129,0.24)',
+    backgroundColor: 'rgba(255,107,129,0.08)',
+  },
+  emptyState: {
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xl,
+  },
+  emptyStateIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  emptyStateCopy: {
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: spacing.sm,
+  },
+  fab: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 14,
+    borderRadius: 999,
+    backgroundColor: colors.accent,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  fabText: {
+    color: colors.background,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheetDismissArea: {
+    flex: 1,
+  },
+  sheet: {
+    maxHeight: '88%',
+    backgroundColor: colors.panel,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 48,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginBottom: spacing.md,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  sheetHeaderSpacer: {
+    width: 40,
+  },
+  sheetHeaderText: {
+    flex: 1,
+    gap: 4,
+  },
+  sheetIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
   },
   viewerBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(0,0,0,0.78)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.lg,
@@ -1222,7 +2251,7 @@ const styles = StyleSheet.create({
   viewerCard: {
     width: '100%',
     backgroundColor: colors.panel,
-    borderRadius: 20,
+    borderRadius: 24,
     padding: spacing.lg,
     gap: spacing.md,
     borderWidth: 1,
@@ -1236,7 +2265,7 @@ const styles = StyleSheet.create({
   viewerImage: {
     width: '100%',
     aspectRatio: 1,
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.background,

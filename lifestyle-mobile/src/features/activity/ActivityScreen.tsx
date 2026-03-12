@@ -565,17 +565,29 @@ export function ActivityScreen() {
           <AppText variant="muted">No sessions available yet.</AppText>
         )}
       </Card>
-      {data.strava?.enabled ? (
+      {data.strava?.enabled || data.strava?.canManage ? (
         <Card>
-          <SectionHeader title="Strava" subtitle={data.strava.connected ? 'Connected' : 'Not linked'} />
+          <SectionHeader
+            title="Strava"
+            subtitle={
+              data.strava.connected ? 'Connected' : data.strava.requiresSetup ? 'Unavailable' : 'Not linked'
+            }
+          />
           <AppText variant="muted">
             {data.strava.connected
               ? `Last sync ${data.strava.lastSync ? formatDate(data.strava.lastSync, 'MMM D, HH:mm') : 'pending'}`
+              : data.strava.requiresSetup
+              ? 'Strava needs to be enabled on the server before you can connect it.'
               : 'Link to import Strava workouts and sessions with splits.'}
           </AppText>
           <View style={styles.stravaActions}>
             {data.strava.canManage && !data.strava.connected ? (
-              <AppButton title="Connect Strava" onPress={handleConnect} loading={isFetching} />
+              <AppButton
+                title={data.strava.requiresSetup ? 'Not available' : 'Connect Strava'}
+                onPress={handleConnect}
+                loading={isFetching}
+                disabled={data.strava.requiresSetup}
+              />
             ) : null}
             {data.strava.connected ? (
               <>
@@ -586,7 +598,7 @@ export function ActivityScreen() {
           </View>
           {data.strava.requiresSetup ? (
             <AppText variant="muted" style={styles.warning}>
-              Add your Strava API keys under Profile before connecting.
+              Strava is not configured on this server yet. Ask the app admin to enable it.
             </AppText>
           ) : null}
           {stravaFeedback ? (

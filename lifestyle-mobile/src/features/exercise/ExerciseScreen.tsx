@@ -3,7 +3,8 @@ import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Svg, { Circle, Line, Polyline, Rect } from 'react-native-svg';
 import {
   AppButton,
   AppText,
@@ -12,10 +13,14 @@ import {
   SectionHeader,
   TrendChart,
 } from '../../components';
-import { activityRequest, streamHistoryRequest } from '../../api/endpoints';
+import {
+  activityRequest,
+  streamHistoryRequest,
+} from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useBluetooth } from '../../providers/BluetoothProvider';
+import { useSyncQueue } from '../../providers/SyncProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDateTime, formatDistance, formatPace, titleCase } from '../../utils/format';
 
@@ -60,29 +65,23 @@ const PHONE_UPLOAD_DISTANCE_DELTA_KM = 0.05;
 const PHONE_MIN_STEP_METERS = 1;
 const PHONE_MAX_STEP_METERS = 300;
 const WATCH_AUTO_START_FRESH_WINDOW_MS = 15_000;
-const EXERCISE_BUILD_MARKER = 'run-fix-2026-02-18-b';
 const EXERCISE_STREAM_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
+const ROUTE_POINT_LIMIT = 160;
 
 export function ExerciseScreen() {
   const navigation = useNavigation();
   const { user } = useAuth();
   const { subjectId } = useSubject();
+  const { runOrQueue } = useSyncQueue();
+  const queryClient = useQueryClient();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
 
   const {
-    config,
-    bluetoothState,
-    status,
-    isPoweredOn,
-    isScanning,
     connectedDevice,
     recentSamples,
-    error: bluetoothError,
-    startScan,
-    stopScan,
-    disconnectFromDevice,
     sendCommand,
     manualPublish,
+    setWorkoutMirrorSuppressed,
   } = useBluetooth();
 
   const { data, isFetching } = useQuery({
@@ -117,17 +116,19 @@ export function ExerciseScreen() {
   const [sessionState, setSessionState] = useState<SessionState>('idle');
   const [elapsedMs, setElapsedMs] = useState(0);
   const [controlLoading, setControlLoading] = useState(false);
-  const [scanLoading, setScanLoading] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [phoneDistanceKm, setPhoneDistanceKm] = useState<number | null>(null);
   const [phonePaceSeconds, setPhonePaceSeconds] = useState<number | null>(null);
   const [isPhoneTracking, setIsPhoneTracking] = useState(false);
   const [phoneTrackingSource, setPhoneTrackingSource] = useState<PhoneTrackerSource | null>(null);
   const [phoneTrackingError, setPhoneTrackingError] = useState<string | null>(null);
+  const [routePoints, setRoutePoints] = useState<PhoneGeoPoint[]>([]);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const elapsedBeforePauseRef = useRef(0);
   const sessionStartRef = useRef<number | null>(null);
+  const workoutStartedAtRef = useRef<number | null>(null);
+  const workoutSourceIdRef = useRef<string | null>(null);
   const sessionStateRef = useRef<SessionState>('idle');
   const locationWatcherRef = useRef<null | { stop: () => void }>(null);
   const lastPhonePointRef = useRef<PhoneGeoPoint | null>(null);
@@ -144,6 +145,13 @@ export function ExerciseScreen() {
   const lastSessionForSport = useMemo(() => {
     return sessions.find((session) => session.sportType?.toLowerCase().includes(sportConfig.match));
   }, [sessions, sportConfig.match]);
+
+  useEffect(() => {
+    setWorkoutMirrorSuppressed(sessionState !== 'idle');
+    return () => {
+      setWorkoutMirrorSuppressed(false);
+    };
+  }, [sessionState, setWorkoutMirrorSuppressed]);
 
   const uploadPhoneMetrics = useCallback(
     async (distanceKm: number, paceSeconds: number | null, force = false) => {
@@ -165,11 +173,18 @@ export function ExerciseScreen() {
         ts: now,
         distanceKm,
       };
+      const localDate = toLocalDateKey(new Date(now));
 
       try {
-        await manualPublish(distanceKm, DEVICE_METRICS.distance);
+        await manualPublish(distanceKm, DEVICE_METRICS.distance, {
+          localDate,
+          skipWorkoutMirror: true,
+        });
         if (paceSeconds !== null && Number.isFinite(paceSeconds)) {
-          await manualPublish(paceSeconds, DEVICE_METRICS.pace);
+          await manualPublish(paceSeconds, DEVICE_METRICS.pace, {
+            localDate,
+            skipWorkoutMirror: true,
+          });
         }
       } catch (error) {
         setPhoneTrackingError(error instanceof Error ? error.message : 'Unable to upload phone run metrics.');
@@ -184,6 +199,7 @@ export function ExerciseScreen() {
         return;
       }
       const previous = lastPhonePointRef.current;
+      let acceptPoint = !previous;
       if (previous) {
         const deltaMeters = haversineDistanceMeters(previous, point);
         if (
@@ -192,9 +208,14 @@ export function ExerciseScreen() {
           deltaMeters <= PHONE_MAX_STEP_METERS
         ) {
           phoneDistanceMetersRef.current += deltaMeters;
+          acceptPoint = true;
         }
       }
+      if (!acceptPoint) {
+        return;
+      }
       lastPhonePointRef.current = point;
+      setRoutePoints((current) => appendRoutePoint(current, point));
 
       const distanceKm = phoneDistanceMetersRef.current / 1000;
       const activeDurationMs =
@@ -227,6 +248,7 @@ export function ExerciseScreen() {
     setPhoneDistanceKm(null);
     setPhonePaceSeconds(null);
     setPhoneTrackingError(null);
+    setRoutePoints([]);
     phoneDistanceRef.current = null;
     phonePaceRef.current = null;
   }, [stopPhoneTracking]);
@@ -390,12 +412,6 @@ export function ExerciseScreen() {
       : lastSessionForSport?.averagePace ?? null;
   const displayHeartRate =
     watchMetrics.heartRate !== null ? watchMetrics.heartRate : lastSessionForSport?.averageHr ?? null;
-  const dataSourceLabel = [
-    (watchMetrics.distance !== null || watchMetrics.pace !== null || watchMetrics.heartRate !== null) ? 'watch' : null,
-    (phoneDistanceKm !== null || isPhoneTracking) ? `phone ${phoneTrackingSource ? `(${phoneTrackingSource})` : ''}` : null,
-  ]
-    .filter(Boolean)
-    .join(' + ');
   const heartRateTrend = useMemo(
     () =>
       (exerciseHrStreamData?.points || [])
@@ -422,6 +438,53 @@ export function ExerciseScreen() {
         }),
     [exerciseDistanceStreamData?.points]
   );
+  const hasWatchSignal =
+    watchMetrics.distance !== null || watchMetrics.pace !== null || watchMetrics.heartRate !== null;
+  const hasPhoneSignal = phoneDistanceKm !== null || isPhoneTracking;
+  const liveSourceLabel = hasWatchSignal && hasPhoneSignal
+    ? 'Wearable + phone'
+    : hasWatchSignal
+    ? 'Wearable'
+    : hasPhoneSignal
+    ? 'Phone GPS'
+    : 'Last session';
+  const heroStatusCopy =
+    sessionState === 'recording'
+      ? `Tracking live from ${liveSourceLabel === 'Last session' ? 'phone GPS' : liveSourceLabel.toLowerCase()}.`
+      : sessionState === 'paused'
+      ? 'Workout paused. Resume when you are ready.'
+      : connectedDevice
+      ? 'Ready to record with phone GPS and wearable data.'
+      : 'Ready to record with phone GPS.';
+  const routeTitle = sessionState === 'idle' ? 'Route map' : 'Live route';
+  const routeSubtitle =
+    sessionState === 'recording'
+      ? routePoints.length >= 2
+        ? 'Your GPS path updates as you move.'
+        : 'Waiting for the first clean GPS points.'
+      : sessionState === 'paused'
+      ? 'Route capture is paused until you resume.'
+      : 'Start a session to draw a live route map.';
+  const trackerLabel =
+    phoneTrackingSource === 'expo-location'
+      ? 'Phone GPS'
+      : phoneTrackingSource === 'geolocation'
+      ? 'Fallback GPS'
+      : sessionState === 'recording'
+      ? 'Starting'
+      : 'Standby';
+  const routeSummary = [
+    { label: 'Status', value: sessionState === 'idle' ? 'Ready' : titleCase(sessionState) },
+    { label: 'Source', value: liveSourceLabel },
+    { label: 'Tracker', value: trackerLabel },
+    { label: 'GPS points', value: routePoints.length ? String(routePoints.length) : '--' },
+  ];
+  const trainingSnapshot = [
+    { label: 'This week', value: formatKilometers(data?.summary?.weeklyDistanceKm) },
+    { label: 'Duration', value: formatDurationMinutes(data?.summary?.weeklyDurationMin) },
+    { label: 'Load', value: formatWholeNumber(data?.summary?.trainingLoad) },
+    { label: 'Avg pace', value: formatPace(data?.summary?.avgPaceSeconds) },
+  ];
 
   useEffect(() => {
     sessionStateRef.current = sessionState;
@@ -439,6 +502,78 @@ export function ExerciseScreen() {
     phonePaceRef.current = phonePaceSeconds;
   }, [phoneDistanceKm, phonePaceSeconds]);
 
+  const invalidateActivityData = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['activity'] }),
+      queryClient.invalidateQueries({ queryKey: ['exercise'] }),
+      queryClient.invalidateQueries({ queryKey: ['roster'] }),
+    ]);
+  }, [queryClient]);
+
+  const saveFinishedWorkout = useCallback(
+    async ({
+      endedAt,
+      elapsedMilliseconds,
+      distanceKm,
+      paceSeconds,
+      heartRate,
+    }: {
+      endedAt: number;
+      elapsedMilliseconds: number;
+      distanceKm: number | null;
+      paceSeconds: number | null;
+      heartRate: number | null;
+    }) => {
+      const movingTimeSeconds = Math.max(1, Math.round(elapsedMilliseconds / 1000));
+      const startTs =
+        workoutStartedAtRef.current && workoutStartedAtRef.current > 0
+          ? workoutStartedAtRef.current
+          : Math.max(0, endedAt - elapsedMilliseconds);
+      const sourceId =
+        workoutSourceIdRef.current || buildWorkoutSourceId(sportConfig.id, startTs);
+      workoutSourceIdRef.current = sourceId;
+
+      const workoutPayload = {
+        sourceId,
+        name: `${sportConfig.label} workout`,
+        sportType: sportConfig.label,
+        startTime: new Date(startTs).toISOString(),
+        endTime: new Date(endedAt).toISOString(),
+        distanceMeters:
+          distanceKm !== null && Number.isFinite(distanceKm) && distanceKm > 0
+            ? Math.round(distanceKm * 1000)
+            : null,
+        movingTimeSeconds,
+        elapsedTimeSeconds: movingTimeSeconds,
+        averageHr:
+          heartRate !== null && Number.isFinite(heartRate) && heartRate > 0
+            ? Math.round(heartRate)
+            : null,
+        averagePace:
+          paceSeconds !== null && Number.isFinite(paceSeconds) && paceSeconds > 0
+            ? Math.round(paceSeconds)
+            : null,
+      };
+
+      const workoutResult = await runOrQueue({
+        id: `workout:${sourceId}`,
+        endpoint: '/api/streams/workouts',
+        payload: { workouts: [workoutPayload] },
+        description: `Finished ${sportConfig.label.toLowerCase()} workout`,
+      });
+
+      if (workoutResult.status === 'sent') {
+        await invalidateActivityData();
+      }
+
+      return {
+        sourceId,
+        workoutStatus: workoutResult.status,
+      };
+    },
+    [invalidateActivityData, runOrQueue, sportConfig.id, sportConfig.label]
+  );
+
   useEffect(() => {
     if (sessionState !== 'idle' || latestWatchSignalTs <= 0) {
       return;
@@ -447,14 +582,17 @@ export function ExerciseScreen() {
     if (ageMs < 0 || ageMs > WATCH_AUTO_START_FRESH_WINDOW_MS) {
       return;
     }
+    const startedAt = Date.now();
     elapsedBeforePauseRef.current = 0;
-    sessionStartRef.current = Date.now();
+    sessionStartRef.current = startedAt;
+    workoutStartedAtRef.current = startedAt;
+    workoutSourceIdRef.current = buildWorkoutSourceId(sportConfig.id, startedAt);
     setElapsedMs(0);
     setSessionState('recording');
     sessionStateRef.current = 'recording';
     setFeedback('Workout data detected from watch. Recording started automatically.');
     void startPhoneTracking();
-  }, [latestWatchSignalTs, sessionState, startPhoneTracking]);
+  }, [latestWatchSignalTs, sessionState, sportConfig.id, startPhoneTracking]);
 
   useEffect(() => {
     if (sessionState !== 'recording') {
@@ -481,6 +619,22 @@ export function ExerciseScreen() {
     let watchNote: string | null = null;
     let trackingNote: string | null = null;
     try {
+      const stopRequested = nextState === 'idle';
+      const endedAt = stopRequested ? Date.now() : 0;
+      const elapsedAtStop = stopRequested
+        ? elapsedBeforePauseRef.current +
+          (sessionStartRef.current ? Math.max(0, endedAt - sessionStartRef.current) : 0)
+        : 0;
+      const finalDistance =
+        stopRequested && liveDistanceKm > 0
+          ? liveDistanceKm
+          : stopRequested
+          ? phoneDistanceRef.current
+          : null;
+      const finalPace =
+        stopRequested && watchMetrics.pace !== null ? watchMetrics.pace : stopRequested ? phonePaceRef.current : null;
+      const finalHeartRate = stopRequested ? watchMetrics.heartRate : null;
+
       // Make controls respond immediately, then complete device operations in the background flow below.
       setSessionState(nextState);
       sessionStateRef.current = nextState;
@@ -505,8 +659,11 @@ export function ExerciseScreen() {
       }
 
       if (resetTimer) {
+        const startedAt = Date.now();
         elapsedBeforePauseRef.current = 0;
-        sessionStartRef.current = Date.now();
+        sessionStartRef.current = startedAt;
+        workoutStartedAtRef.current = startedAt;
+        workoutSourceIdRef.current = buildWorkoutSourceId(sportConfig.id, startedAt);
         setElapsedMs(0);
       } else if (nextState === 'recording') {
         sessionStartRef.current = Date.now();
@@ -514,7 +671,6 @@ export function ExerciseScreen() {
         elapsedBeforePauseRef.current += Date.now() - (sessionStartRef.current || Date.now());
         sessionStartRef.current = null;
       } else {
-        elapsedBeforePauseRef.current = 0;
         sessionStartRef.current = null;
         setElapsedMs(0);
       }
@@ -551,12 +707,28 @@ export function ExerciseScreen() {
       }
 
       if (nextState === 'idle') {
-        const finalDistance = phoneDistanceRef.current;
-        const finalPace = phonePaceRef.current;
         if (finalDistance !== null && Number.isFinite(finalDistance) && finalDistance > 0) {
           await uploadPhoneMetrics(finalDistance, finalPace, true);
         }
+        const savedWorkout = await saveFinishedWorkout({
+          endedAt: endedAt || Date.now(),
+          elapsedMilliseconds: Math.max(elapsedAtStop, 1000),
+          distanceKm:
+            finalDistance !== null && Number.isFinite(finalDistance) && finalDistance > 0
+              ? finalDistance
+              : null,
+          paceSeconds: finalPace,
+          heartRate: finalHeartRate,
+        });
+
+        elapsedBeforePauseRef.current = 0;
+        workoutStartedAtRef.current = null;
+        workoutSourceIdRef.current = null;
         resetPhoneTracking();
+
+        if (savedWorkout.workoutStatus === 'queued') {
+          trackingNote = 'Workout saved offline and will sync when online.';
+        }
       }
       const baseMessage = buildSuccessMessage(action, connectedDevice ? 'watch + phone' : 'phone');
       const message = [baseMessage, watchNote, trackingNote].filter(Boolean).join(' ');
@@ -576,6 +748,8 @@ export function ExerciseScreen() {
         clearInterval(timerRef.current);
       }
       stopPhoneTracking();
+      workoutStartedAtRef.current = null;
+      workoutSourceIdRef.current = null;
     };
   }, [stopPhoneTracking]);
 
@@ -593,41 +767,9 @@ export function ExerciseScreen() {
     void sendExerciseCommand('stop', 'idle');
   };
 
-  const handleToggleScan = async () => {
-    if (!isPoweredOn) {
-      setFeedback('Turn on Bluetooth to scan for your watch.');
-      return;
-    }
-    setScanLoading(true);
-    try {
-      if (isScanning) {
-        stopScan();
-      } else {
-        await startScan();
-      }
-    } finally {
-      setScanLoading(false);
-    }
-  };
-
-  const handleDisconnect = async () => {
-    await disconnectFromDevice();
-    setFeedback('Disconnected from watch.');
-  };
-
   const elapsedMinutes = Math.floor(elapsedMs / 60000);
   const timerLabel = formatElapsed(elapsedMs);
-  const adapterStateLabel = formatBluetoothState(bluetoothState);
-  const connectionCopy = connectedDevice
-    ? `Connected to ${connectedDevice.name || 'custom watch'}`
-    : config.profile === 'apple_watch_companion'
-    ? 'Apple Watch companion ready — open the companion app, then connect.'
-    : isPoweredOn
-    ? 'Bluetooth ready — tap scan to find your watch.'
-    : `Adapter: ${adapterStateLabel}`;
-
   const isSportSelectionDisabled = sessionState !== 'idle';
-  const statusLabel = status === 'connected' ? 'Connected' : titleCase(status);
 
   return (
     <ScrollView
@@ -642,8 +784,7 @@ export function ExerciseScreen() {
             <AppText variant="heading" style={styles.heroTitle}>
               {sportConfig.label}
             </AppText>
-            <AppText variant="body">{connectionCopy}</AppText>
-            <AppText variant="muted">Build {EXERCISE_BUILD_MARKER}</AppText>
+            <AppText variant="body">{heroStatusCopy}</AppText>
           </View>
           <View style={styles.sportRow}>
             {SPORT_OPTIONS.map((option) => (
@@ -718,28 +859,44 @@ export function ExerciseScreen() {
       </Card>
 
       <Card>
-        <SectionHeader title="Live stats" subtitle="Updates from your watch or last session" />
-        <View style={styles.liveRow}>
-          <LiveMetric label="Distance" value={formatKilometers(displayDistanceKm)} helper="km" />
-          <LiveMetric label="Pace" value={formatPace(displayPaceSeconds)} helper="/km" />
-          <LiveMetric label="Heart rate" value={formatHeartRate(displayHeartRate)} helper="bpm" />
+        <SectionHeader title={routeTitle} subtitle={routeSubtitle} />
+        <View style={styles.routeCard}>
+          <RoutePreview points={routePoints} active={sessionState === 'recording'} />
+          <View style={styles.summaryGrid}>
+            {routeSummary.map((item) => (
+              <SummaryTile key={item.label} label={item.label} value={item.value} compact />
+            ))}
+          </View>
+          <AppText variant="muted" style={styles.liveHint}>
+            Route drawing uses phone GPS during a live workout. When there is no active route, this screen falls back to
+            your latest session metrics.
+          </AppText>
         </View>
-        <AppText variant="muted" style={styles.liveHint}>
-          Live source: {dataSourceLabel || 'last session'}. Metrics publish as {DEVICE_METRICS.distance},{' '}
-          {DEVICE_METRICS.pace}, and {DEVICE_METRICS.heartRate}.
-        </AppText>
         {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
       </Card>
 
       <Card>
-        <SectionHeader title="Exercise trends" subtitle="Direct stream sync" />
-        {heartRateTrend.length ? <TrendChart data={heartRateTrend} yLabel="bpm" /> : <AppText variant="muted">Heart-rate samples will appear after sync.</AppText>}
+        <SectionHeader title="Training snapshot" subtitle="This week" />
+        <View style={styles.summaryGrid}>
+          {trainingSnapshot.map((item) => (
+            <SummaryTile key={item.label} label={item.label} value={item.value} />
+          ))}
+        </View>
+      </Card>
+
+      <Card>
+        <SectionHeader title="Exercise trends" subtitle="Heart rate and distance over the last 21 days" />
+        {heartRateTrend.length ? (
+          <TrendChart data={heartRateTrend} yLabel="bpm" />
+        ) : (
+          <AppText variant="muted">Heart-rate history will appear after you record or sync sessions.</AppText>
+        )}
         {distanceTrend.length ? (
           <View style={styles.trendSpacing}>
             <TrendChart data={distanceTrend} yLabel="km" />
           </View>
         ) : (
-          <AppText variant="muted">Distance samples will appear after sync.</AppText>
+          <AppText variant="muted">Distance history will appear after you record or sync sessions.</AppText>
         )}
       </Card>
 
@@ -761,58 +918,20 @@ export function ExerciseScreen() {
         ) : lastSessionForSport ? (
           <View style={styles.lastSession}>
             <AppText variant="heading">{lastSessionForSport.name}</AppText>
+            <AppText variant="muted">Source: {lastSessionForSport.source || 'session history'}</AppText>
             <View style={styles.lastSessionStats}>
               <InlineMetric label="Distance" value={formatDistance(lastSessionForSport.distance)} />
               <InlineMetric label="Pace" value={formatPace(lastSessionForSport.averagePace)} />
               <InlineMetric label="Avg HR" value={formatHeartRate(lastSessionForSport.averageHr)} />
+              <InlineMetric
+                label="Duration"
+                value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
+              />
             </View>
           </View>
         ) : (
           <AppText variant="muted">No {sportConfig.label.toLowerCase()} recorded yet.</AppText>
         )}
-      </Card>
-
-      <Card>
-        <SectionHeader title="Watch link" subtitle="Bluetooth bridge" />
-        <View style={styles.statusPills}>
-          <StatusChip label={`Adapter: ${adapterStateLabel}`} active />
-          <StatusChip label={statusLabel} />
-        </View>
-        {connectedDevice ? (
-          <View style={styles.deviceInfo}>
-            <AppText variant="heading">{connectedDevice.name || 'Custom watch'}</AppText>
-            <AppText variant="muted">Signal: {connectedDevice.rssi ?? '--'} dBm</AppText>
-          </View>
-        ) : (
-          <AppText variant="muted" style={styles.liveHint}>
-            Scan for your prototype watch or open the Devices tab for advanced controls.
-          </AppText>
-        )}
-        {config.profile === 'apple_watch_companion' ? (
-          <AppText variant="muted" style={styles.liveHint}>
-            Apple Watch usually cannot stream directly as a BLE sensor to iPhone apps. Use a Watch companion app that
-            relays JSON payloads.
-          </AppText>
-        ) : null}
-        <View style={styles.actionsRow}>
-          <AppButton
-            title={isScanning ? 'Stop scan' : 'Scan for watch'}
-            variant="secondary"
-            onPress={handleToggleScan}
-            loading={scanLoading}
-            style={styles.controlButton}
-          />
-          <AppButton
-            title="Devices panel"
-            variant="ghost"
-            onPress={() => navigation.navigate('Devices' as never)}
-            style={styles.controlButton}
-          />
-        </View>
-        {connectedDevice ? (
-          <AppButton title="Disconnect watch" variant="ghost" onPress={handleDisconnect} style={styles.disconnectButton} />
-        ) : null}
-        {bluetoothError ? <AppText style={styles.errorText}>{bluetoothError}</AppText> : null}
       </Card>
     </ScrollView>
   );
@@ -841,6 +960,61 @@ function formatHeartRate(value?: number | null) {
     return '--';
   }
   return `${Math.round(value)} bpm`;
+}
+
+function formatDurationMinutes(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '--';
+  }
+  const roundedMinutes = Math.max(0, Math.round(value));
+  const hours = Math.floor(roundedMinutes / 60);
+  const minutes = roundedMinutes % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+  }
+  return `${roundedMinutes} min`;
+}
+
+function formatDurationSeconds(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '--';
+  }
+  return formatElapsed(Math.round(value * 1000));
+}
+
+function formatWholeNumber(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return '--';
+  }
+  return `${Math.round(value)}`;
+}
+
+function toLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildWorkoutSourceId(sportId: SportId, startedAt: number) {
+  return `exercise:${sportId}:${startedAt}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function appendRoutePoint(points: PhoneGeoPoint[], point: PhoneGeoPoint) {
+  const lastPoint = points[points.length - 1];
+  if (
+    lastPoint &&
+    lastPoint.latitude === point.latitude &&
+    lastPoint.longitude === point.longitude &&
+    lastPoint.timestamp === point.timestamp
+  ) {
+    return points;
+  }
+  const nextPoints = [...points, point];
+  if (nextPoints.length <= ROUTE_POINT_LIMIT) {
+    return nextPoints;
+  }
+  return nextPoints.slice(nextPoints.length - ROUTE_POINT_LIMIT);
 }
 
 function normalizeMetric(metric: string) {
@@ -971,16 +1145,133 @@ function haversineDistanceMeters(start: PhoneGeoPoint, end: PhoneGeoPoint) {
   return earthRadiusMeters * c;
 }
 
-function LiveMetric({ label, value, helper }: { label: string; value: string; helper?: string }) {
+function RoutePreview({ points, active }: { points: PhoneGeoPoint[]; active: boolean }) {
+  const preview = buildRoutePreview(points);
+
   return (
-    <View style={styles.metricBlock}>
-      <AppText variant="label">{label}</AppText>
-      <AppText variant="heading">{value}</AppText>
-      {helper ? (
-        <AppText variant="muted" style={styles.metricHelper}>
-          {helper}
+    <View style={styles.routeCanvas}>
+      <Svg width="100%" height="100%" viewBox="0 0 100 100">
+        <Rect x={0} y={0} width={100} height={100} rx={18} fill="rgba(255,255,255,0.02)" />
+        {[20, 40, 60, 80].map((offset) => (
+          <Line
+            key={`horizontal-${offset}`}
+            x1={10}
+            y1={offset}
+            x2={90}
+            y2={offset}
+            stroke="rgba(255,255,255,0.06)"
+            strokeWidth={0.6}
+          />
+        ))}
+        {[20, 40, 60, 80].map((offset) => (
+          <Line
+            key={`vertical-${offset}`}
+            x1={offset}
+            y1={10}
+            x2={offset}
+            y2={90}
+            stroke="rgba(255,255,255,0.06)"
+            strokeWidth={0.6}
+          />
+        ))}
+        <Polyline
+          points="16,70 30,54 42,59 55,41 72,47 84,33"
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth={2}
+          strokeDasharray="4 6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {preview ? (
+          <>
+            <Polyline
+              points={preview.points}
+              fill="none"
+              stroke={active ? colors.accent : colors.accentStrong}
+              strokeWidth={3.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <Circle cx={preview.start.x} cy={preview.start.y} r={2.8} fill={colors.success} />
+            <Circle cx={preview.end.x} cy={preview.end.y} r={3.2} fill={colors.accent} />
+          </>
+        ) : null}
+      </Svg>
+      <View style={styles.routeOverlay}>
+        <AppText variant="label" style={styles.routeOverlayLabel}>
+          {preview ? 'Start to finish' : 'Preview'}
         </AppText>
-      ) : null}
+        <AppText variant="body" style={styles.routeOverlayText}>
+          {preview ? 'Live route locked to your GPS path.' : 'Start moving outdoors to draw your route.'}
+        </AppText>
+      </View>
+    </View>
+  );
+}
+
+function buildRoutePreview(points: PhoneGeoPoint[]) {
+  if (!points.length) {
+    return null;
+  }
+  const latitudes = points.map((point) => point.latitude);
+  const longitudes = points.map((point) => point.longitude);
+  const minLat = Math.min(...latitudes);
+  const maxLat = Math.max(...latitudes);
+  const minLng = Math.min(...longitudes);
+  const maxLng = Math.max(...longitudes);
+  const latRange = maxLat - minLat || 0.001;
+  const lngRange = maxLng - minLng || 0.001;
+  const width = 68;
+  const height = 68;
+  const offset = 16;
+
+  const mappedPoints = points.map((point) => {
+    const x = offset + ((point.longitude - minLng) / lngRange) * width;
+    const y = offset + height - ((point.latitude - minLat) / latRange) * height;
+    return {
+      x: clampMapValue(x),
+      y: clampMapValue(y),
+    };
+  });
+  const simplified = simplifyPreviewPoints(mappedPoints, 48);
+  const start = simplified[0];
+  const end = simplified[simplified.length - 1];
+
+  return {
+    points: simplified.map((point) => `${point.x},${point.y}`).join(' '),
+    start,
+    end,
+  };
+}
+
+function simplifyPreviewPoints(points: Array<{ x: number; y: number }>, limit: number) {
+  if (points.length <= limit) {
+    return points;
+  }
+  const step = (points.length - 1) / (limit - 1);
+  return Array.from({ length: limit }, (_, index) => points[Math.round(index * step)]);
+}
+
+function clampMapValue(value: number) {
+  return Math.max(10, Math.min(90, Math.round(value * 10) / 10));
+}
+
+function SummaryTile({
+  label,
+  value,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  compact?: boolean;
+}) {
+  return (
+    <View style={[styles.summaryTile, compact ? styles.summaryTileCompact : null]}>
+      <AppText variant="label">{label}</AppText>
+      <AppText variant="heading" style={[styles.summaryValue, compact ? styles.summaryValueCompact : null]}>
+        {value}
+      </AppText>
     </View>
   );
 }
@@ -992,21 +1283,6 @@ function InlineMetric({ label, value }: { label: string; value: string }) {
       <AppText variant="body">{value}</AppText>
     </View>
   );
-}
-
-function StatusChip({ label, active }: { label: string; active?: boolean }) {
-  return (
-    <View style={[styles.statusChip, active ? styles.statusChipActive : null]}>
-      <AppText variant="label">{label}</AppText>
-    </View>
-  );
-}
-
-function formatBluetoothState(state: string) {
-  if (!state) {
-    return 'Unknown';
-  }
-  return state.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
 const styles = StyleSheet.create({
@@ -1088,18 +1364,63 @@ const styles = StyleSheet.create({
   feedbackText: {
     marginTop: spacing.xs,
   },
-  liveRow: {
-    flexDirection: 'row',
+  routeCard: {
     gap: spacing.md,
   },
-  metricBlock: {
-    flex: 1,
+  routeCanvas: {
+    height: 240,
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(1, 9, 21, 0.8)',
   },
-  metricHelper: {
-    marginTop: spacing.xs / 2,
+  routeOverlay: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    bottom: spacing.md,
+    padding: spacing.sm,
+    borderRadius: 16,
+    backgroundColor: 'rgba(1, 9, 21, 0.72)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.xs,
+  },
+  routeOverlayLabel: {
+    color: colors.accent,
+  },
+  routeOverlayText: {
+    color: colors.text,
   },
   liveHint: {
     marginTop: spacing.sm,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  summaryTile: {
+    minWidth: 140,
+    flex: 1,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  summaryTileCompact: {
+    minWidth: 96,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  summaryValue: {
+    fontSize: 28,
+  },
+  summaryValueCompact: {
+    fontSize: 20,
   },
   trendSpacing: {
     marginTop: spacing.md,
@@ -1114,33 +1435,6 @@ const styles = StyleSheet.create({
   },
   inlineMetric: {
     flex: 1,
-  },
-  statusPills: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-    marginBottom: spacing.sm,
-  },
-  statusChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  statusChipActive: {
-    borderColor: colors.accent,
-  },
-  deviceInfo: {
-    marginBottom: spacing.sm,
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  disconnectButton: {
-    marginTop: spacing.sm,
   },
   errorText: {
     marginTop: spacing.sm,

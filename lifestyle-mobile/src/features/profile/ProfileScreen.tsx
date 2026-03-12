@@ -43,9 +43,6 @@ export function ProfileScreen() {
     weightCategory: user?.weight_category || '',
     password: '',
     currentPassword: '',
-    stravaClientId: user?.strava_client_id || '',
-    stravaClientSecret: user?.strava_client_secret || '',
-    stravaRedirectUri: user?.strava_redirect_uri || '',
     avatarUrl: user?.avatar_url || '',
     avatarPhoto: user?.avatar_photo || null,
   });
@@ -211,9 +208,6 @@ export function ProfileScreen() {
         weightCategory: form.weightCategory,
         password: form.password || undefined,
         currentPassword: form.currentPassword,
-        stravaClientId: form.stravaClientId,
-        stravaClientSecret: form.stravaClientSecret,
-        stravaRedirectUri: form.stravaRedirectUri,
         avatar: form.avatarUrl.trim() ? form.avatarUrl.trim() : null,
         avatarPhoto:
           form.avatarPhoto === null ? null : form.avatarPhoto ? form.avatarPhoto : undefined,
@@ -686,31 +680,9 @@ export function ProfileScreen() {
         />
       </Card>
       <Card>
-        <SectionHeader title="Strava API" subtitle="Personal client keys" />
-        <AppInput
-          label="Client ID"
-          autoCapitalize="none"
-          value={form.stravaClientId}
-          onChangeText={(value) => handleChange('stravaClientId', value)}
-        />
-        <AppInput
-          label="Client secret"
-          autoCapitalize="none"
-          value={form.stravaClientSecret}
-          onChangeText={(value) => handleChange('stravaClientSecret', value)}
-        />
-        <AppInput
-          label="Redirect URL"
-          autoCapitalize="none"
-          value={form.stravaRedirectUri}
-          onChangeText={(value) => handleChange('stravaRedirectUri', value)}
-        />
-      </Card>
-      <Card>
         <SectionHeader title="Confirm changes" subtitle="Enter your current password to save" />
         <AppText variant="muted" style={styles.helperText}>
-          For security, you must confirm any updates with your current password. This protects profile,
-          Strava, and photo changes.
+          For security, confirm account detail changes with your current password.
         </AppText>
         <AppInput
           label="Current password"

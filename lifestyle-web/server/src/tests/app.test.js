@@ -158,6 +158,34 @@ describe('Sensor stream ingestion', () => {
     expect(day.steps).toBe(syncSteps);
   });
 
+  it('can skip workout session mirroring for raw exercise stream uploads', async () => {
+    const { token } = await loginAsCoach();
+    const syncTs = Date.now();
+    const targetDate = formatLocalDate(new Date(syncTs + 7 * 24 * 60 * 60 * 1000));
+
+    const ingest = await request(app)
+      .post('/api/streams')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        metric: 'exercise.distance',
+        localDate: targetDate,
+        skipWorkoutMirror: true,
+        samples: [{ ts: syncTs, value: 6.2, localDate: targetDate }],
+      });
+
+    expect(ingest.status).toBe(202);
+    expect(ingest.body).toMatchObject({ metric: 'exercise.distance', accepted: 1 });
+
+    const activity = await request(app)
+      .get('/api/activity')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(activity.status).toBe(200);
+    expect(activity.body.sessions.some((session) => session.sourceId === `phone_sync:${targetDate}`)).toBe(
+      false
+    );
+  });
+
   it('does not let future-dated step rows override current summary', async () => {
     const { token } = await loginAsCoach();
     const today = new Date();
@@ -289,6 +317,42 @@ describe('Sensor stream ingestion', () => {
     expect(phoneSession.vo2maxEstimate).toBeCloseTo(52.4, 1);
     expect(phoneSession.trainingLoad).toBeCloseTo(96.2, 1);
     expect(phoneSession.perceivedEffort).toBe(7);
+  });
+});
+
+describe('Strava export route', () => {
+  it('accepts a sourceId lookup before attempting the Strava connection', async () => {
+    const { token } = await loginAsCoach();
+    const sourceId = `test-run:${Date.now()}`;
+    const startedAt = new Date().toISOString();
+
+    const workout = await request(app)
+      .post('/api/streams/workouts')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        workouts: [
+          {
+            sourceId,
+            name: 'Source export test',
+            sportType: 'Run',
+            startTime: startedAt,
+            endTime: startedAt,
+            distanceMeters: 5000,
+            movingTimeSeconds: 1500,
+            elapsedTimeSeconds: 1500,
+          },
+        ],
+      });
+
+    expect(workout.status).toBe(202);
+
+    const exportResponse = await request(app)
+      .post('/api/activity/strava/export')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ sourceId });
+
+    expect(exportResponse.status).toBe(400);
+    expect(exportResponse.body.message).toBe('Connect Strava before exporting sessions.');
   });
 });
 

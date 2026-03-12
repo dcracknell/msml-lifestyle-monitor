@@ -16,6 +16,7 @@ import {
   StravaExportResponse,
   StravaSyncResponse,
   VitalsResponse,
+  WorkoutPublishResponse,
   WeightResponse,
 } from './types';
 
@@ -148,13 +149,39 @@ export const disconnectStravaRequest = () => apiClient.post<MessageResponse>('/a
 
 export const syncStravaRequest = () => apiClient.post<StravaSyncResponse>('/api/activity/strava/sync');
 
-export const exportSessionToStravaRequest = (sessionId: number) =>
-  apiClient.post<StravaExportResponse>('/api/activity/strava/export', { sessionId });
+export const exportSessionToStravaRequest = (payload: number | { sessionId?: number; sourceId?: string }) =>
+  apiClient.post<StravaExportResponse>(
+    '/api/activity/strava/export',
+    typeof payload === 'number' ? { sessionId: payload } : payload
+  );
 
 export const publishStreamSamplesRequest = (payload: {
   metric: string;
   samples: { ts: number; value: number | null }[];
 }) => apiClient.post<StreamPublishResponse>('/api/streams', payload);
+
+export const publishWorkoutSessionsRequest = (payload: {
+  workouts: Array<{
+    sourceId: string;
+    name: string;
+    sportType: string;
+    startTime: string;
+    endTime?: string | null;
+    distanceMeters?: number | null;
+    movingTimeSeconds?: number | null;
+    elapsedTimeSeconds?: number | null;
+    averageHr?: number | null;
+    maxHr?: number | null;
+    averagePace?: number | null;
+    averageCadence?: number | null;
+    averagePower?: number | null;
+    elevationGain?: number | null;
+    vo2maxEstimate?: number | null;
+    trainingLoad?: number | null;
+    perceivedEffort?: number | null;
+    calories?: number | null;
+  }>;
+}) => apiClient.post<WorkoutPublishResponse>('/api/streams/workouts', payload);
 
 export const streamHistoryRequest = (params: {
   metric: string;

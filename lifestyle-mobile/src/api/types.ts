@@ -185,6 +185,12 @@ export interface StravaExportResponse {
   startTime?: string | null;
 }
 
+export interface WorkoutPublishResponse {
+  accepted: number;
+  created: number;
+  updated: number;
+}
+
 export interface VitalsEntry {
   date: string;
   restingHr: number | null;

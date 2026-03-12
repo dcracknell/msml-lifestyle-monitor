@@ -285,6 +285,18 @@ function parseWindow(input) {
   return null;
 }
 
+function parseBooleanFlag(input) {
+  if (input === true || input === false) {
+    return input;
+  }
+  if (typeof input === 'string') {
+    const normalized = input.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return false;
+}
+
 function clampMaxPoints(value) {
   const numeric = Number(value);
   if (Number.isFinite(numeric)) {
@@ -1006,10 +1018,12 @@ function upsertPhoneSessionRecord(userId, sourceId, row) {
     nextDistance > 0 &&
     paceForInference > 0
       ? Math.round((nextDistance / 1000) * paceForInference)
-      : Number.isFinite(existing?.movingTimeSeconds)
-      ? existing.movingTimeSeconds
       : null;
-  const nextMovingTime = Number.isFinite(row.movingTimeSeconds) ? row.movingTimeSeconds : inferredMovingTime;
+  const nextMovingTime = Number.isFinite(row.movingTimeSeconds)
+    ? row.movingTimeSeconds
+    : Number.isFinite(existing?.movingTimeSeconds)
+    ? existing.movingTimeSeconds
+    : inferredMovingTime;
 
   const inferredPace =
     Number.isFinite(nextDistance) && Number.isFinite(nextMovingTime) && nextDistance > 0 && nextMovingTime > 0
@@ -1139,6 +1153,7 @@ router.post('/', authenticate, (req, res) => {
     return res.status(400).json({ message: 'Metric name must be 2-64 characters (letters, numbers, . _ : -).' });
   }
   const samples = sanitizeSamples(req.body.samples, req.body.localDate);
+  const skipWorkoutMirror = parseBooleanFlag(req.body?.skipWorkoutMirror);
   if (!samples.length) {
     return res.status(400).json({ message: 'At least one valid sample is required.' });
   }
@@ -1153,7 +1168,9 @@ router.post('/', authenticate, (req, res) => {
       upsertSleepStageFields(req.user.id, row);
       upsertHealthMarkerFields(req.user.id, row);
       upsertWeightMetric(req.user.id, row);
-      upsertPhoneWorkoutSession(req.user.id, row);
+      if (!skipWorkoutMirror) {
+        upsertPhoneWorkoutSession(req.user.id, row);
+      }
     });
   });
   insertMany(samples, mirroredRows);
