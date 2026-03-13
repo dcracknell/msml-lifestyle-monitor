@@ -18,6 +18,22 @@ function parseIntegerEnv(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEG
   return parsed;
 }
 
+// ── MODE SWITCH ───────────────────────────────────────────────────────────────
+// HIGH ACCURACY (default): spawns a fresh Python process per request.
+//   Slower (~30-45 s) but self-contained — no extra process needed.
+//
+// EXPRESS MODE: set NUT_EXPRESS_MODE=true in your .env and start nut_server.py
+//   alongside Node.  Model stays loaded in memory; USDA lookups run in parallel.
+//   Typical latency: ~3-8 s after the first warm-up request.
+//
+//   Start the worker:
+//     /path/to/NUT_model/.venv/bin/python NUT_model/nut_server.py
+//
+//   To revert: remove NUT_EXPRESS_MODE (or set to false) and stop nut_server.py.
+// ──────────────────────────────────────────────────────────────────────────────
+const NUT_EXPRESS_MODE = process.env.NUT_EXPRESS_MODE === 'true';
+const NUT_EXPRESS_URL = (process.env.NUT_EXPRESS_URL || 'http://localhost:8001').replace(/\/$/, '');
+
 const DEFAULT_TIMEOUT_MS = parseIntegerEnv(process.env.NUT_MODEL_TIMEOUT_MS, 45000, {
   min: 1000,
   max: 300000,
@@ -471,6 +487,84 @@ async function verifyNutritionPhotoModelSetup(options = {}) {
   return setupCheckCache.inflight;
 }
 
+// ── Express mode: POST to the persistent nut_server.py worker ─────────────────
+async function analyzeNutritionPhotoExpress({
+  photoData,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  imageSize = DEFAULT_IMAGE_SIZE,
+  modelPath = DEFAULT_MODEL_PATH,
+  labelsPath = DEFAULT_LABELS_PATH,
+} = {}) {
+  const normalizedPhotoData = normalizeBase64Photo(photoData);
+  if (!normalizedPhotoData) {
+    throw new NutritionPhotoAnalysisError('Provide a valid meal photo.', {
+      status: 400,
+      code: 'PHOTO_REQUIRED',
+    });
+  }
+
+  const imageBuffer = Buffer.from(normalizedPhotoData, 'base64');
+  if (!imageBuffer.length) {
+    throw new NutritionPhotoAnalysisError('Provide a valid meal photo.', {
+      status: 400,
+      code: 'PHOTO_REQUIRED',
+    });
+  }
+
+  const tempFile = path.join(
+    os.tmpdir(),
+    `msml-nutrition-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
+  );
+  await fs.writeFile(tempFile, imageBuffer);
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response;
+    try {
+      response = await fetch(`${NUT_EXPRESS_URL}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imagePath: tempFile, imageSize, modelPath, labelsPath }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      let errBody = null;
+      try {
+        errBody = await response.json();
+      } catch {}
+      const msg = errBody?.error || `NUT worker responded with ${response.status}`;
+      throw new NutritionPhotoAnalysisError(msg, { status: 502, code: 'PHOTO_ANALYSIS_FAILED' });
+    }
+
+    const raw = await response.json();
+    // Re-use parsePredictionPayload so normalisation is identical to high-accuracy mode.
+    return parsePredictionPayload(JSON.stringify(raw));
+  } catch (error) {
+    if (error instanceof NutritionPhotoAnalysisError) {
+      throw error;
+    }
+    if (error?.name === 'AbortError') {
+      throw new NutritionPhotoAnalysisError('Meal photo analysis timed out.', {
+        status: 504,
+        code: 'PHOTO_ANALYSIS_TIMEOUT',
+      });
+    }
+    throw new NutritionPhotoAnalysisError(
+      `NUT worker unavailable at ${NUT_EXPRESS_URL} — is nut_server.py running?`,
+      { status: 503, code: 'NUT_WORKER_UNAVAILABLE' }
+    );
+  } finally {
+    await fs.unlink(tempFile).catch(() => {});
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 async function analyzeNutritionPhoto({
   photoData,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -480,6 +574,13 @@ async function analyzeNutritionPhoto({
   modelPath = DEFAULT_MODEL_PATH,
   labelsPath = DEFAULT_LABELS_PATH,
 } = {}) {
+  // ── MODE SWITCH ─────────────────────────────────────────────────────────────
+  // NUT_EXPRESS_MODE=true  → persistent worker (model in memory, USDA parallel)
+  // default / false        → subprocess per request (high accuracy, no sidecar)
+  if (NUT_EXPRESS_MODE) {
+    return analyzeNutritionPhotoExpress({ photoData, timeoutMs, imageSize, modelPath, labelsPath });
+  }
+  // ────────────────────────────────────────────────────────────────────────────
   const normalizedPhotoData = normalizeBase64Photo(photoData);
   if (!normalizedPhotoData) {
     throw new NutritionPhotoAnalysisError('Provide a valid meal photo.', {

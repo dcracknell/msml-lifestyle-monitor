@@ -118,6 +118,50 @@ export const lookupNutritionBatchRequest = (barcodes: string[]) =>
 export const searchNutritionRequest = (query: string) =>
   apiClient.get<NutritionSuggestionsResponse>(`/api/nutrition/search${buildQuery({ q: query })}`);
 
+export type NutritionPhotoSuggestedItem = {
+  name: string;
+  type: 'Food' | 'Liquid';
+  confidence?: number;
+  calories?: number;
+  protein?: number;
+  carbs?: number;
+  fats?: number;
+  fiber?: number;
+  weightAmount?: number;
+  weightUnit?: string;
+  portionPercent?: number;
+};
+
+export type NutritionPhotoAnalyzeResponse = {
+  message: string;
+  requiresReview: boolean;
+  photoAnalysis: unknown;
+  mealAnalysis: unknown;
+  suggestedItems: NutritionPhotoSuggestedItem[];
+};
+
+export const analyzeNutritionPhotoRequest = async (payload: {
+  photoData: string;
+  type?: 'Food' | 'Liquid';
+}) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 55000);
+  try {
+    return await apiClient.post<NutritionPhotoAnalyzeResponse>(
+      '/api/nutrition/photo/analyze',
+      payload,
+      { signal: controller.signal }
+    );
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Photo analysis timed out. Try a smaller photo or check your connection.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const athletesRequest = () => apiClient.get<AthletesResponse>('/api/athletes');
 
 export const shareCoachesRequest = () => apiClient.get<ShareCoachesResponse>('/api/share/coaches');

@@ -32,6 +32,7 @@ import {
   deleteNutritionEntryRequest,
   searchNutritionRequest,
   lookupNutritionRequest,
+  analyzeNutritionPhotoRequest,
 } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
 import { useSubject } from '../../providers/SubjectProvider';
@@ -67,12 +68,32 @@ type EntryFormState = {
   photoData: string | null;
 };
 
-type AddFoodMode = 'menu' | 'search' | 'photo' | 'manual';
+type AddFoodMode = 'menu' | 'search' | 'photo' | 'manual' | 'photoReview';
+
+type EditableDetectedFood = {
+  id: string;
+  name: string;
+  calories: string;
+  protein: string;
+  carbs: string;
+  fats: string;
+  fiber: string;
+  weightAmount: string;
+  weightUnit: string;
+  confidence: number | null;
+};
 
 type PhotoDetectedFood = {
   id: string;
   name: string;
   confidence: number | null;
+  calories?: number | null;
+  protein?: number | null;
+  carbs?: number | null;
+  fats?: number | null;
+  fiber?: number | null;
+  weightAmount?: number | null;
+  weightUnit?: string | null;
 };
 
 type NutritionMealAnalysisItem = {
@@ -189,6 +210,38 @@ function normalizePhotoDetectedFoods(raw: unknown) {
   return foods.slice(0, PHOTO_DETECTED_MAX_ITEMS);
 }
 
+function normalizeSuggestedItems(raw: unknown): PhotoDetectedFood[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const result: PhotoDetectedFood[] = [];
+  raw.forEach((entry, index) => {
+    const item = asRecord(entry);
+    const name = typeof item?.name === 'string' ? item.name.trim() : '';
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const confidenceRaw = Number(item?.confidence);
+    const confidence =
+      Number.isFinite(confidenceRaw) && confidenceRaw >= 0 && confidenceRaw <= 1
+        ? Number(confidenceRaw.toFixed(4))
+        : null;
+    result.push({
+      id: `photo-${index}-${key.replace(/\s+/g, '-')}`,
+      name,
+      confidence,
+      calories: Number.isFinite(Number(item?.calories)) ? Number(item?.calories) : null,
+      protein: Number.isFinite(Number(item?.protein)) ? Number(item?.protein) : null,
+      carbs: Number.isFinite(Number(item?.carbs)) ? Number(item?.carbs) : null,
+      fats: Number.isFinite(Number(item?.fats)) ? Number(item?.fats) : null,
+      fiber: Number.isFinite(Number(item?.fiber)) ? Number(item?.fiber) : null,
+      weightAmount: Number.isFinite(Number(item?.weightAmount)) ? Number(item?.weightAmount) : null,
+      weightUnit: typeof item?.weightUnit === 'string' ? item.weightUnit : null,
+    });
+  });
+  return result.slice(0, PHOTO_DETECTED_MAX_ITEMS);
+}
+
 function normalizeMealAnalysis(raw: unknown): NutritionMealAnalysis | null {
   const record = asRecord(raw);
   if (!record) {
@@ -263,14 +316,43 @@ function extractMealAnalysis(payload: unknown) {
   return normalizeMealAnalysis(asRecord(asRecord(payload)?.photoAnalysis)?.mealAnalysis);
 }
 
+function toEditableFood(food: PhotoDetectedFood): EditableDetectedFood {
+  return {
+    id: food.id,
+    name: food.name,
+    calories: food.calories != null ? String(Math.round(food.calories)) : '',
+    protein: food.protein != null ? String(Math.round(food.protein)) : '',
+    carbs: food.carbs != null ? String(Math.round(food.carbs)) : '',
+    fats: food.fats != null ? String(Math.round(food.fats)) : '',
+    fiber: food.fiber != null ? String(Math.round(food.fiber)) : '',
+    weightAmount: food.weightAmount != null ? String(Math.round(food.weightAmount * 10) / 10) : '',
+    weightUnit: food.weightUnit ?? 'g',
+    confidence: food.confidence,
+  };
+}
+
 function mapDetectedFoodToSuggestion(food: PhotoDetectedFood): NutritionSuggestion {
   const confidence =
-    typeof food.confidence === 'number' ? `${Math.round(food.confidence * 100)}% confidence` : null;
+    typeof food.confidence === 'number' ? `${Math.round(food.confidence * 100)}% match` : null;
+  const calStr = food.calories != null ? `${Math.round(food.calories)} kcal` : null;
+  const serving = [calStr, confidence].filter(Boolean).join(' · ') || null;
   return {
     id: food.id,
     name: food.name,
     source: 'Photo analysis',
-    serving: confidence,
+    serving,
+    prefill:
+      food.calories != null || food.protein != null || food.carbs != null || food.fats != null
+        ? {
+            calories: food.calories ?? undefined,
+            protein: food.protein ?? undefined,
+            carbs: food.carbs ?? undefined,
+            fats: food.fats ?? undefined,
+            fiber: food.fiber ?? undefined,
+            weightAmount: food.weightAmount ?? undefined,
+            weightUnit: food.weightUnit ?? undefined,
+          }
+        : undefined,
   };
 }
 
@@ -321,8 +403,12 @@ export function NutritionScreen() {
   const [macroForm, setMacroForm] = useState({ calories: '', protein: '', carbs: '', fats: '' });
   const [macroFeedback, setMacroFeedback] = useState<string | null>(null);
   const [photoStatus, setPhotoStatus] = useState<string | null>(null);
+  const [photoStatusKind, setPhotoStatusKind] = useState<'info' | 'success' | 'error'>('info');
+  const [photoAnalyzing, setPhotoAnalyzing] = useState(false);
   const [photoDetectedFoods, setPhotoDetectedFoods] = useState<PhotoDetectedFood[]>([]);
   const [photoMealAnalysis, setPhotoMealAnalysis] = useState<NutritionMealAnalysis | null>(null);
+  const [editableDetectedFoods, setEditableDetectedFoods] = useState<EditableDetectedFood[]>([]);
+  const [expandedFoodIds, setExpandedFoodIds] = useState<Set<string>>(new Set());
   const [suggestions, setSuggestions] = useState<NutritionSuggestion[]>([]);
   const [suggestionStatus, setSuggestionStatus] = useState('Type at least 2 characters to see suggestions.');
   const [suggestionLoading, setSuggestionLoading] = useState(false);
@@ -740,12 +826,16 @@ export function NutritionScreen() {
     setAddFoodMode('menu');
     setScannerFeedback(null);
     handleCloseScanner();
+    setEditableDetectedFoods([]);
+    setExpandedFoodIds(new Set());
   };
 
   const handleBackToAddFoodMenu = () => {
     setAddFoodMode('menu');
     setScannerFeedback(null);
     handleCloseScanner();
+    setEditableDetectedFoods([]);
+    setExpandedFoodIds(new Set());
   };
 
   const toggleSection = (setter: Dispatch<SetStateAction<boolean>>) => {
@@ -851,17 +941,20 @@ export function NutritionScreen() {
 
   const handleCapturePhoto = async () => {
     setPhotoStatus(null);
+    setPhotoStatusKind('info');
     setPhotoDetectedFoods([]);
     setPhotoMealAnalysis(null);
     try {
       const imagePicker = getImagePickerModule();
       if (!imagePicker) {
         setPhotoStatus(getImagePickerMissingMessage());
+        setPhotoStatusKind('error');
         return;
       }
       const permission = await imagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
         setPhotoStatus('Camera permission is required to attach a meal photo.');
+        setPhotoStatusKind('error');
         return;
       }
       const result = await imagePicker.launchCameraAsync({
@@ -870,18 +963,67 @@ export function NutritionScreen() {
         base64: true,
       });
       if (result.canceled) {
-        setPhotoStatus('Capture cancelled.');
         return;
       }
       const asset = result.assets?.[0];
-      if (asset?.base64) {
-        handleEntryChange('photoData', asset.base64);
-        setPhotoStatus('Photo attached.');
-      } else {
+      if (!asset?.base64) {
         setPhotoStatus('Unable to read photo. Try again.');
+        setPhotoStatusKind('error');
+        return;
+      }
+      handleEntryChange('photoData', asset.base64);
+      setPhotoAnalyzing(true);
+      setPhotoStatus('Analysing photo...');
+      setPhotoStatusKind('info');
+      try {
+        const analysis = await analyzeNutritionPhotoRequest({
+          photoData: asset.base64,
+          type: entryForm.type,
+        });
+        const mealAnalysis = extractMealAnalysis(analysis);
+        if (mealAnalysis) setPhotoMealAnalysis(mealAnalysis);
+        const suggested = normalizeSuggestedItems(
+          (analysis as Record<string, unknown>)?.suggestedItems
+        );
+        if (suggested.length) {
+          applyPhotoDetectedFoods(suggested);
+          setEditableDetectedFoods(suggested.map(toEditableFood));
+          setExpandedFoodIds(new Set());
+          setAddFoodMode('photoReview');
+          setPhotoStatus(null);
+        } else {
+          setPhotoStatus('Photo analysed. Fill in details below.');
+          setPhotoStatusKind('success');
+        }
+      } catch (analysisError) {
+        const uncertain = parsePhotoUncertainError(analysisError);
+        if (uncertain) {
+          if (uncertain.mealAnalysis) setPhotoMealAnalysis(uncertain.mealAnalysis);
+          applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
+          if (uncertain.detectedFoods.length) {
+            setEditableDetectedFoods(uncertain.detectedFoods.map(toEditableFood));
+            setExpandedFoodIds(new Set());
+            setAddFoodMode('photoReview');
+            setPhotoStatus(null);
+          } else {
+            setPhotoStatus('Multiple foods detected — review below before logging.');
+            setPhotoStatusKind('info');
+          }
+        } else {
+          const msg =
+            analysisError instanceof Error && analysisError.message
+              ? analysisError.message
+              : 'Photo analysis unavailable. Fill in food details manually.';
+          setPhotoStatus(msg);
+          setPhotoStatusKind('error');
+        }
+      } finally {
+        setPhotoAnalyzing(false);
       }
     } catch {
+      setPhotoAnalyzing(false);
       setPhotoStatus(getImagePickerMissingMessage());
+      setPhotoStatusKind('error');
     }
   };
 
@@ -956,13 +1098,13 @@ export function NutritionScreen() {
         setPhotoMealAnalysis(uncertain.mealAnalysis);
         applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
         setEntryFeedback(uncertain.message);
-        setPhotoStatus(
-          uncertain.detectedFoods.length
-            ? 'Photo imported. Multiple foods detected, review suggestions before logging.'
-            : 'Photo imported, but the result is uncertain. Type a food name or try another photo.'
-        );
-        if (uncertain.detectedFoods[0]) {
-          handleEntryChange('name', uncertain.detectedFoods[0].name);
+        if (uncertain.detectedFoods.length) {
+          setEditableDetectedFoods(uncertain.detectedFoods.map(toEditableFood));
+          setExpandedFoodIds(new Set());
+          setAddFoodMode('photoReview');
+          setPhotoStatus(null);
+        } else {
+          setPhotoStatus('Photo imported, but the result is uncertain. Type a food name or try another photo.');
         }
         return;
       }
@@ -975,8 +1117,104 @@ export function NutritionScreen() {
   const handleRemovePhoto = () => {
     handleEntryChange('photoData', null);
     setPhotoStatus(null);
+    setPhotoStatusKind('info');
+    setPhotoAnalyzing(false);
     setPhotoDetectedFoods([]);
     setPhotoMealAnalysis(null);
+  };
+
+  const updateEditableFood = (id: string, field: keyof EditableDetectedFood, value: string) => {
+    setEditableDetectedFoods((prev) => prev.map((f) => (f.id === id ? { ...f, [field]: value } : f)));
+  };
+
+  const deleteEditableFood = (id: string) => {
+    setEditableDetectedFoods((prev) => prev.filter((f) => f.id !== id));
+    setExpandedFoodIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const addEditableFood = () => {
+    const id = `manual-${Date.now()}`;
+    setEditableDetectedFoods((prev) => [
+      ...prev,
+      { id, name: '', calories: '', protein: '', carbs: '', fats: '', fiber: '', weightAmount: '', weightUnit: 'g', confidence: null },
+    ]);
+    setExpandedFoodIds((prev) => new Set([...prev, id]));
+  };
+
+  const toggleExpandFood = (id: string) => {
+    setExpandedFoodIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBackFromPhotoReview = () => {
+    setAddFoodMode('photo');
+    setEditableDetectedFoods([]);
+    setExpandedFoodIds(new Set());
+    setEntryFeedback(null);
+  };
+
+  const handleLogEditableFoods = async () => {
+    const validFoods = editableDetectedFoods.filter((f) => f.name.trim());
+    if (!validFoods.length) {
+      setEntryFeedback('Add at least one food item name before logging.');
+      return;
+    }
+    setEntryFeedback('Logging foods...');
+    const items = validFoods.map((f) => ({
+      name: f.name.trim(),
+      type: entryForm.type,
+      ...(f.calories && { calories: Number(f.calories) }),
+      ...(f.protein && { protein: Number(f.protein) }),
+      ...(f.carbs && { carbs: Number(f.carbs) }),
+      ...(f.fats && { fats: Number(f.fats) }),
+      ...(f.fiber && { fiber: Number(f.fiber) }),
+      ...(f.weightAmount && { weightAmount: Number(f.weightAmount) }),
+      ...(f.weightUnit && { weightUnit: f.weightUnit }),
+    }));
+    try {
+      const result = await runOrQueue<NutritionLogResponse>({
+        endpoint: '/api/nutrition',
+        payload: {
+          type: entryForm.type,
+          date: selectedDate,
+          ...(entryForm.photoData && { photoData: entryForm.photoData }),
+          items,
+        },
+        description: 'Detected meal photo foods',
+      });
+      if (result.status === 'sent') {
+        const loggedCount = Array.isArray(result.result?.entriesLogged)
+          ? result.result.entriesLogged.length || 0
+          : 0;
+        setEntryFeedback(
+          result.result?.message ||
+            (loggedCount > 0 ? `${loggedCount} foods logged.` : 'Foods logged.')
+        );
+        refetch();
+      } else {
+        setEntryFeedback('Offline detected - foods queued and will sync automatically.');
+      }
+      resetEntryForm();
+      setPhotoStatus(null);
+      setPhotoDetectedFoods([]);
+      setEditableDetectedFoods([]);
+      setExpandedFoodIds(new Set());
+      clearSuggestions('Type at least 2 characters to see suggestions.');
+      setAddFoodModalVisible(false);
+      setAddFoodMode('menu');
+    } catch (error) {
+      setEntryFeedback(
+        error instanceof Error ? error.message : 'Unable to log foods right now.'
+      );
+    }
   };
 
   const handleViewHistoryPhoto = (entry: NutritionEntry) => {
@@ -1139,6 +1377,13 @@ export function NutritionScreen() {
     const items = detected.map((food) => ({
       name: food.name,
       type: entryForm.type,
+      ...(food.calories != null && { calories: food.calories }),
+      ...(food.protein != null && { protein: food.protein }),
+      ...(food.carbs != null && { carbs: food.carbs }),
+      ...(food.fats != null && { fats: food.fats }),
+      ...(food.fiber != null && { fiber: food.fiber }),
+      ...(food.weightAmount != null && { weightAmount: food.weightAmount }),
+      ...(food.weightUnit != null && { weightUnit: food.weightUnit }),
     }));
 
     try {
@@ -1210,6 +1455,107 @@ export function NutritionScreen() {
       </View>
     ) : null;
 
+  const renderPhotoMealAnalysisCard = () => {
+    if (!photoMealAnalysis) return null;
+    const hasTotals =
+      photoMealAnalysis.totalCalories != null ||
+      photoMealAnalysis.totalProtein != null ||
+      photoMealAnalysis.totalCarbs != null ||
+      photoMealAnalysis.totalFats != null;
+    return (
+      <View style={styles.analysisCard}>
+        <View style={styles.analysisCardHeader}>
+          <View style={styles.analysisIconWrap}>
+            <Ionicons name="sparkles" size={14} color={colors.accent} />
+          </View>
+          <AppText variant="body" weight="semibold" style={styles.analysisCardTitle}>
+            ML Analysis
+          </AppText>
+          {photoMealAnalysis.foodCount > 0 ? (
+            <View style={styles.analysisCountBadge}>
+              <AppText variant="label" style={styles.analysisCountText}>
+                {photoMealAnalysis.foodCount} item{photoMealAnalysis.foodCount !== 1 ? 's' : ''}
+              </AppText>
+            </View>
+          ) : null}
+        </View>
+        {hasTotals ? (
+          <View style={styles.analysisMacroRow}>
+            {photoMealAnalysis.totalCalories != null ? (
+              <View style={[styles.analysisMacroPill, styles.analysisMacroPillHighlight]}>
+                <AppText variant="label" weight="semibold" style={styles.analysisMacroPillHighlightText}>
+                  {Math.round(photoMealAnalysis.totalCalories)} kcal
+                </AppText>
+              </View>
+            ) : null}
+            {photoMealAnalysis.totalProtein != null ? (
+              <View style={styles.analysisMacroPill}>
+                <AppText variant="label" style={styles.analysisMacroPillText}>
+                  P {Math.round(photoMealAnalysis.totalProtein)}g
+                </AppText>
+              </View>
+            ) : null}
+            {photoMealAnalysis.totalCarbs != null ? (
+              <View style={styles.analysisMacroPill}>
+                <AppText variant="label" style={styles.analysisMacroPillText}>
+                  C {Math.round(photoMealAnalysis.totalCarbs)}g
+                </AppText>
+              </View>
+            ) : null}
+            {photoMealAnalysis.totalFats != null ? (
+              <View style={styles.analysisMacroPill}>
+                <AppText variant="label" style={styles.analysisMacroPillText}>
+                  F {Math.round(photoMealAnalysis.totalFats)}g
+                </AppText>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {photoMealAnalysis.items.length > 0 ? (
+          <View style={styles.analysisItemsList}>
+            <AppText variant="label" style={styles.analysisItemHint}>
+              Tap an item to pre-fill the form and edit before logging
+            </AppText>
+            {photoMealAnalysis.items.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                style={styles.analysisItem}
+                activeOpacity={0.75}
+                onPress={() => applySuggestion(mapDetectedFoodToSuggestion(item as PhotoDetectedFood))}
+              >
+                <View style={styles.analysisItemInfo}>
+                  <AppText variant="body" weight="medium" style={styles.analysisItemName}>
+                    {item.name}
+                  </AppText>
+                  <View style={styles.analysisItemMeta}>
+                    {item.calories != null ? (
+                      <AppText variant="label" style={styles.analysisItemCal}>
+                        {Math.round(item.calories)} kcal
+                      </AppText>
+                    ) : null}
+                    {item.weightAmount != null && item.weightUnit ? (
+                      <AppText variant="label" style={styles.analysisItemWeight}>
+                        {Math.round(item.weightAmount)}{item.weightUnit}
+                      </AppText>
+                    ) : null}
+                  </View>
+                </View>
+                {item.confidence != null ? (
+                  <View style={styles.confidenceBadge}>
+                    <AppText variant="label" style={styles.confidenceBadgeText}>
+                      {Math.round(item.confidence * 100)}%
+                    </AppText>
+                  </View>
+                ) : null}
+                <Ionicons name="chevron-forward" size={14} color={colors.muted} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
   const renderMacroInputFields = () => (
     <>
       <AppInput
@@ -1251,10 +1597,17 @@ export function NutritionScreen() {
     </>
   );
 
+  const photoStatusColor =
+    photoStatusKind === 'success'
+      ? colors.success
+      : photoStatusKind === 'error'
+        ? colors.danger
+        : colors.muted;
+
   const renderEntryFeedback = () => (
     <>
-      {photoStatus ? (
-        <AppText variant="muted" style={styles.modalHelperText}>
+      {photoStatus && !photoAnalyzing ? (
+        <AppText variant="muted" style={[styles.modalHelperText, { color: photoStatusColor }]}>
           {photoStatus}
         </AppText>
       ) : null}
@@ -1271,7 +1624,182 @@ export function NutritionScreen() {
     </>
   );
 
+  const renderPhotoReviewBody = () => {
+    const validCount = editableDetectedFoods.filter((f) => f.name.trim()).length;
+    return (
+      <ScrollView
+        contentContainerStyle={styles.modalBody}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {previewUri ? (
+          <View style={styles.reviewPhotoStrip}>
+            <Image source={{ uri: previewUri }} style={styles.reviewPhotoThumb} />
+            <View style={styles.reviewPhotoStripText}>
+              <AppText variant="body" weight="semibold">
+                {editableDetectedFoods.length} item{editableDetectedFoods.length !== 1 ? 's' : ''} detected
+              </AppText>
+              <AppText variant="muted">Edit, remove, or add missing foods below</AppText>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.reviewHeaderRow}>
+            <AppText variant="body" weight="semibold">
+              {editableDetectedFoods.length} item{editableDetectedFoods.length !== 1 ? 's' : ''} detected
+            </AppText>
+            <AppText variant="muted">Edit, remove, or add missing foods below</AppText>
+          </View>
+        )}
+
+        {editableDetectedFoods.map((food) => {
+          const isExpanded = expandedFoodIds.has(food.id);
+          const macroSummary = [
+            food.protein && `P ${food.protein}g`,
+            food.carbs && `C ${food.carbs}g`,
+            food.fats && `F ${food.fats}g`,
+          ].filter(Boolean).join(' · ');
+          return (
+            <View key={food.id} style={styles.reviewFoodCard}>
+              <TouchableOpacity
+                style={styles.reviewFoodHeader}
+                onPress={() => toggleExpandFood(food.id)}
+                activeOpacity={0.8}
+              >
+                <View style={styles.reviewFoodHeaderLeft}>
+                  <AppText
+                    variant="body"
+                    weight="medium"
+                    style={food.name ? undefined : styles.reviewFoodPlaceholder}
+                  >
+                    {food.name || 'Unnamed item'}
+                  </AppText>
+                  <View style={styles.reviewFoodMetaRow}>
+                    {food.calories ? (
+                      <View style={styles.reviewFoodCalBadge}>
+                        <AppText variant="label" style={styles.reviewFoodCalText}>
+                          {food.calories} kcal
+                        </AppText>
+                      </View>
+                    ) : null}
+                    {macroSummary ? (
+                      <AppText variant="label" style={styles.reviewFoodMacros}>
+                        {macroSummary}
+                      </AppText>
+                    ) : null}
+                    {food.confidence != null ? (
+                      <View style={styles.reviewConfBadge}>
+                        <AppText variant="label" style={styles.reviewConfText}>
+                          {Math.round(food.confidence * 100)}%
+                        </AppText>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                <View style={styles.reviewFoodHeaderActions}>
+                  <TouchableOpacity
+                    style={styles.reviewDeleteBtn}
+                    onPress={() => deleteEditableFood(food.id)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={colors.danger} />
+                  </TouchableOpacity>
+                  <Ionicons
+                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={colors.muted}
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {isExpanded ? (
+                <View style={styles.reviewFoodForm}>
+                  <AppInput
+                    label="Name"
+                    value={food.name}
+                    onChangeText={(v) => updateEditableFood(food.id, 'name', v)}
+                  />
+                  <View style={styles.reviewInputRow}>
+                    <View style={styles.reviewInputHalf}>
+                      <AppInput
+                        label="Calories"
+                        keyboardType="numeric"
+                        value={food.calories}
+                        onChangeText={(v) => updateEditableFood(food.id, 'calories', v)}
+                      />
+                    </View>
+                    <View style={styles.reviewInputHalf}>
+                      <AppInput
+                        label="Protein (g)"
+                        keyboardType="numeric"
+                        value={food.protein}
+                        onChangeText={(v) => updateEditableFood(food.id, 'protein', v)}
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.reviewInputRow}>
+                    <View style={styles.reviewInputHalf}>
+                      <AppInput
+                        label="Carbs (g)"
+                        keyboardType="numeric"
+                        value={food.carbs}
+                        onChangeText={(v) => updateEditableFood(food.id, 'carbs', v)}
+                      />
+                    </View>
+                    <View style={styles.reviewInputHalf}>
+                      <AppInput
+                        label="Fats (g)"
+                        keyboardType="numeric"
+                        value={food.fats}
+                        onChangeText={(v) => updateEditableFood(food.id, 'fats', v)}
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.reviewInputRow}>
+                    <View style={[styles.reviewInputHalf, { flex: 2 }]}>
+                      <AppInput
+                        label="Weight"
+                        keyboardType="numeric"
+                        value={food.weightAmount}
+                        onChangeText={(v) => updateEditableFood(food.id, 'weightAmount', v)}
+                      />
+                    </View>
+                    <View style={styles.reviewInputHalf}>
+                      <AppInput
+                        label="Unit"
+                        placeholder="g / ml"
+                        value={food.weightUnit}
+                        onChangeText={(v) => updateEditableFood(food.id, 'weightUnit', v)}
+                      />
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+
+        <TouchableOpacity style={styles.reviewAddItemBtn} onPress={addEditableFood} activeOpacity={0.8}>
+          <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
+          <AppText variant="body" style={styles.reviewAddItemText}>
+            Add missing item
+          </AppText>
+        </TouchableOpacity>
+
+        <AppButton
+          title={`Log ${validCount} food${validCount !== 1 ? 's' : ''}`}
+          onPress={handleLogEditableFoods}
+          disabled={validCount === 0}
+        />
+        {renderEntryFeedback()}
+      </ScrollView>
+    );
+  };
+
   const renderAddFoodBody = () => {
+    if (addFoodMode === 'photoReview') {
+      return renderPhotoReviewBody();
+    }
+
     if (addFoodMode === 'menu') {
       return (
         <View style={styles.modalBody}>
@@ -1349,11 +1877,30 @@ export function NutritionScreen() {
             {renderSuggestionPanel()}
             {photoDetectedFoods.length ? (
               <View style={styles.detectedFoodsContainer}>
-                <AppText variant="muted">
-                  Detected foods from this photo: {photoDetectedFoods.map((item) => item.name).join(', ')}.
+                <AppText variant="label" style={styles.detectedFoodsLabel}>
+                  Detected from photo
                 </AppText>
+                <View style={styles.detectedFoodsChips}>
+                  {photoDetectedFoods.map((item) => (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.detectedFoodChip}
+                      activeOpacity={0.7}
+                      onPress={() => applySuggestion(mapDetectedFoodToSuggestion(item))}
+                    >
+                      <AppText variant="label" style={styles.detectedFoodChipName}>
+                        {item.name}
+                      </AppText>
+                      {item.confidence != null ? (
+                        <AppText variant="label" style={styles.detectedFoodChipConf}>
+                          {Math.round(item.confidence * 100)}%
+                        </AppText>
+                      ) : null}
+                    </TouchableOpacity>
+                  ))}
+                </View>
                 <AppButton
-                  title={`Log ${photoDetectedFoods.length} detected foods`}
+                  title={`Log ${photoDetectedFoods.length} detected food${photoDetectedFoods.length !== 1 ? 's' : ''}`}
                   variant="ghost"
                   onPress={handleLogDetectedFoodsFromPhoto}
                 />
@@ -1379,38 +1926,66 @@ export function NutritionScreen() {
         ) : null}
         {addFoodMode === 'photo' ? (
           <>
+            {!previewUri ? (
+              <View style={styles.photoPlaceholder}>
+                <View style={styles.photoPlaceholderIcon}>
+                  <Ionicons name="camera-outline" size={32} color={colors.muted} />
+                </View>
+                <AppText variant="muted" style={styles.photoPlaceholderText}>
+                  Snap or import a meal photo for automatic nutrition analysis
+                </AppText>
+              </View>
+            ) : (
+              <View style={styles.photoPreviewCard}>
+                <View style={styles.photoPreviewImageWrap}>
+                  <Image source={{ uri: previewUri }} style={styles.photoPreviewLarge} />
+                  {photoAnalyzing ? (
+                    <View style={styles.photoAnalyzingOverlay}>
+                      <View style={styles.photoAnalyzingBadge}>
+                        <Ionicons name="sparkles" size={14} color={colors.accent} />
+                        <AppText variant="label" style={styles.photoAnalyzingText}>
+                          Analysing with ML…
+                        </AppText>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+                {!photoAnalyzing ? (
+                  <TouchableOpacity
+                    style={styles.inlineIconButton}
+                    onPress={handleRemovePhoto}
+                    accessibilityLabel="Remove attached photo"
+                  >
+                    <Ionicons name="trash-outline" size={18} color={colors.danger} />
+                    <AppText variant="label" style={styles.inlineIconButtonText}>
+                      Remove
+                    </AppText>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            )}
             <View style={styles.photoActionRow}>
               <AppButton
-                title={entryForm.photoData ? 'Retake meal photo' : 'Snap meal photo'}
+                title={entryForm.photoData ? 'Retake' : 'Snap photo'}
                 variant="ghost"
                 style={styles.photoActionButton}
                 onPress={handleCapturePhoto}
+                disabled={photoAnalyzing}
               />
               <AppButton
-                title="Import from library"
+                title="Import & log"
                 variant="ghost"
                 style={styles.photoActionButton}
                 onPress={handleImportPhoto}
+                disabled={photoAnalyzing}
               />
             </View>
-            <AppText variant="muted" style={styles.modalCopy}>
-              Snap attaches a photo to the draft entry. Import sends the photo to the backend for
-              automatic analysis and logs it immediately.
-            </AppText>
-            {previewUri ? (
-              <View style={styles.photoPreviewCard}>
-                <Image source={{ uri: previewUri }} style={styles.photoPreviewLarge} />
-                <TouchableOpacity
-                  style={styles.inlineIconButton}
-                  onPress={handleRemovePhoto}
-                  accessibilityLabel="Remove attached photo"
-                >
-                  <Ionicons name="trash-outline" size={18} color={colors.danger} />
-                  <AppText variant="label" style={styles.inlineIconButtonText}>
-                    Remove
-                  </AppText>
-                </TouchableOpacity>
-              </View>
+            {renderPhotoMealAnalysisCard()}
+            {photoDetectedFoods.length > 0 ? (
+              <AppButton
+                title={`Log all ${photoDetectedFoods.length} detected food${photoDetectedFoods.length !== 1 ? 's' : ''}`}
+                onPress={handleLogDetectedFoodsFromPhoto}
+              />
             ) : null}
             <AppInput
               label="Name"
@@ -1419,7 +1994,11 @@ export function NutritionScreen() {
               onChangeText={(value) => handleEntryChange('name', value)}
             />
             {renderMacroInputFields()}
-            <AppButton title="Log meal photo entry" onPress={handleAddEntry} />
+            <AppButton
+              title="Log meal photo entry"
+              onPress={handleAddEntry}
+              disabled={photoAnalyzing}
+            />
             {renderEntryFeedback()}
           </>
         ) : null}
@@ -1759,8 +2338,8 @@ export function NutritionScreen() {
               ) : (
                 <TouchableOpacity
                   style={styles.sheetIconButton}
-                  onPress={handleBackToAddFoodMenu}
-                  accessibilityLabel="Back to add food options"
+                  onPress={addFoodMode === 'photoReview' ? handleBackFromPhotoReview : handleBackToAddFoodMenu}
+                  accessibilityLabel="Back"
                 >
                   <Ionicons name="chevron-back" size={18} color={colors.text} />
                 </TouchableOpacity>
@@ -1809,10 +2388,11 @@ const SUMMARY_GRADIENT: readonly [string, string] = [
 ];
 
 const ADD_FOOD_MODE_COPY: Record<AddFoodMode, string> = {
-  menu: 'Choose the fastest way to log today’s intake.',
-  search: 'Search, scan, and auto-fill food details.',
-  photo: 'Capture a meal photo or import one for analysis.',
-  manual: 'Add a custom entry with exact nutrition values.',
+  menu: "Choose the fastest way to log today's intake.",
+  search: "Search, scan, and auto-fill food details.",
+  photo: "Capture a meal photo or import one for analysis.",
+  manual: "Add a custom entry with exact nutrition values.",
+  photoReview: "Review and edit detected foods before logging.",
 };
 
 const SUPPORTED_BARCODE_TYPES: BarcodeType[] = [
@@ -2372,13 +2952,191 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  photoPreviewImageWrap: {
+    position: 'relative',
+  },
   photoPreviewLarge: {
     width: '100%',
-    aspectRatio: 1,
+    aspectRatio: 4 / 3,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.background,
+  },
+  photoPlaceholder: {
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xl,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  photoPlaceholderIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  photoPlaceholderText: {
+    textAlign: 'center',
+    lineHeight: 20,
+    paddingHorizontal: spacing.lg,
+  },
+  photoAnalyzingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(10,22,40,0.6)',
+  },
+  photoAnalyzingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: 'rgba(0,229,204,0.3)',
+  },
+  photoAnalyzingText: {
+    color: colors.accent,
+  },
+  analysisCard: {
+    borderRadius: 20,
+    padding: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.glass,
+    borderWidth: 1,
+    borderColor: 'rgba(0,229,204,0.18)',
+  },
+  analysisCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  analysisCardTitle: {
+    flex: 1,
+  },
+  analysisIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,229,204,0.1)',
+  },
+  analysisCountBadge: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  analysisCountText: {
+    color: colors.muted,
+  },
+  analysisMacroRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  analysisMacroPill: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  analysisMacroPillHighlight: {
+    backgroundColor: 'rgba(0,229,204,0.1)',
+    borderColor: 'rgba(0,229,204,0.25)',
+  },
+  analysisMacroPillHighlightText: {
+    color: colors.accent,
+  },
+  analysisMacroPillText: {
+    color: colors.muted,
+  },
+  analysisItemsList: {
+    gap: spacing.xs,
+    paddingTop: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  analysisItemHint: {
+    color: colors.muted,
+    marginBottom: spacing.xxs,
+  },
+  analysisItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xxs,
+  },
+  analysisItemInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  analysisItemName: {
+    fontSize: 14,
+  },
+  analysisItemMeta: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  analysisItemCal: {
+    color: colors.muted,
+  },
+  analysisItemWeight: {
+    color: colors.muted,
+  },
+  confidenceBadge: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(160,128,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(160,128,255,0.22)',
+  },
+  confidenceBadgeText: {
+    color: colors.accentStrong,
+  },
+  detectedFoodsLabel: {
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  detectedFoodsChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  detectedFoodChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  detectedFoodChipName: {
+    color: colors.text,
+  },
+  detectedFoodChipConf: {
+    color: colors.accentStrong,
   },
   inlineIconButton: {
     flexDirection: 'row',
@@ -2652,5 +3410,129 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.background,
+  },
+  // Photo review screen
+  reviewPhotoStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  reviewPhotoThumb: {
+    width: 72,
+    height: 72,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  reviewPhotoStripText: {
+    flex: 1,
+    gap: 4,
+  },
+  reviewHeaderRow: {
+    gap: 4,
+    paddingBottom: spacing.xs,
+  },
+  reviewFoodCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    overflow: 'hidden',
+  },
+  reviewFoodHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  reviewFoodHeaderLeft: {
+    flex: 1,
+    gap: 6,
+  },
+  reviewFoodPlaceholder: {
+    color: colors.muted,
+  },
+  reviewFoodMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  reviewFoodCalBadge: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(77,245,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(77,245,255,0.22)',
+  },
+  reviewFoodCalText: {
+    color: colors.accent,
+  },
+  reviewFoodMacros: {
+    color: colors.muted,
+    fontSize: 12,
+  },
+  reviewConfBadge: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(160,128,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(160,128,255,0.22)',
+  },
+  reviewConfText: {
+    color: colors.accentStrong,
+  },
+  reviewFoodHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  reviewDeleteBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,107,129,0.24)',
+    backgroundColor: 'rgba(255,107,129,0.08)',
+  },
+  reviewFoodForm: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingTop: spacing.md,
+  },
+  reviewInputRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  reviewInputHalf: {
+    flex: 1,
+  },
+  reviewAddItemBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(77,245,255,0.28)',
+    backgroundColor: 'rgba(77,245,255,0.04)',
+  },
+  reviewAddItemText: {
+    color: colors.accent,
   },
 });
