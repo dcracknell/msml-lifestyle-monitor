@@ -29,3 +29,4 @@ lifestyle-mobile/ios/
 # Python cache and local model artifacts
 __pycache__/
 lifestyle-web/server/NUT_model/*.pth
+lifestyle-web/server/NUT_model/checkpoint/

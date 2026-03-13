@@ -5,9 +5,13 @@
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
+    "predev": "node scripts/ensure-native-deps.js",
     "dev": "nodemon src/server.js",
+    "prestart": "node scripts/ensure-native-deps.js",
     "start": "node src/server.js",
+    "pretest": "node scripts/ensure-native-deps.js",
     "test": "jest",
+    "prereset-db": "node scripts/ensure-native-deps.js",
     "reset-db": "node scripts/reset-db.js",
     "check:nut-model": "bash -lc 'PY=\"${NUT_MODEL_PYTHON_BIN:-}\"; if [ -z \"$PY\" ]; then if [ -x NUT_model/.venv/bin/python ]; then PY=\"NUT_model/.venv/bin/python\"; else PY=\"python\"; fi; fi; \"$PY\" NUT_model/nut_estimator.py --self-check --model NUT_model/checkpoint/canet_NUT.pth'"
   },
