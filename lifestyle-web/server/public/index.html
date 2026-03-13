@@ -25,14 +25,17 @@
     <aside class="sidebar" id="appSidebar">
       <div class="brand">
         <span class="dot"></span>
-        <div>
+        <div class="brand-copy">
           <p class="eyebrow">MSML</p>
-          <h1>Lifestyle</h1>
+          <h1>Lifestyle Monitor</h1>
+          <p class="muted small-text">Performance dashboard</p>
         </div>
       </div>
 
       <div class="profile-card" id="profileCard">
-        <div class="avatar shimmer"></div>
+        <div class="avatar-shell">
+          <div class="avatar avatar-fallback shimmer" aria-hidden="true">M</div>
+        </div>
         <div>
           <p class="label">Signed out</p>
           <p class="muted">Sign in to access your personalized dashboard.</p>
@@ -40,7 +43,8 @@
       </div>
 
       <div class="nav" id="sideNav">
-        <div class="nav-group">
+        <div class="nav-group" aria-label="Overview">
+          <p class="nav-group-label">Overview</p>
           <button type="button" class="nav-item active" data-page="overview" aria-pressed="true">
             Overview
           </button>
@@ -49,17 +53,16 @@
         <div class="nav-divider" role="presentation"></div>
 
         <div class="nav-group" aria-label="Training">
+          <p class="nav-group-label">Training</p>
           <button type="button" class="nav-item" data-page="activity" aria-pressed="false">
             Activity
-          </button>
-          <button type="button" class="nav-item" data-page="sessions" aria-pressed="false">
-            Sessions
           </button>
         </div>
 
         <div class="nav-divider" role="presentation"></div>
 
-        <div class="nav-group" aria-label="Recovery">
+        <div class="nav-group" aria-label="Health">
+          <p class="nav-group-label">Health</p>
           <button type="button" class="nav-item" data-page="sleep" aria-pressed="false">
             Sleep
           </button>
@@ -70,7 +73,8 @@
 
         <div class="nav-divider" role="presentation"></div>
 
-        <div class="nav-group" aria-label="Fuel">
+        <div class="nav-group" aria-label="Body">
+          <p class="nav-group-label">Body</p>
           <button type="button" class="nav-item" data-page="nutrition" aria-pressed="false">
             Nutrition
           </button>
@@ -81,7 +85,8 @@
 
         <div class="nav-divider" role="presentation"></div>
 
-        <div class="nav-group" aria-label="Account and Sharing">
+        <div class="nav-group" aria-label="Account">
+          <p class="nav-group-label">Account</p>
           <button type="button" class="nav-item" data-page="profile" aria-pressed="false">
             Settings
           </button>
@@ -98,8 +103,11 @@
       </div>
 
       <div class="tip-card">
-        <p class="eyebrow">Coach Note</p>
-        <p>Balance hard sessions with mobility work to boost readiness.</p>
+        <p class="eyebrow">Desktop flow</p>
+        <p>
+          Follow the same rhythm as the app: check the top signals first, open a focused page second,
+          and use upload or manual entry whenever camera capture is not available.
+        </p>
       </div>
     </aside>
     <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
@@ -115,12 +123,48 @@
         Menu
       </button>
       <section class="glass login-panel" id="loginPanel">
-        <div>
-          <p class="eyebrow">Welcome</p>
-          <h2>Sync your day</h2>
-          <p class="muted">
-            Sign in with your credentials or create a new account to start tracking performance.
-          </p>
+        <div class="auth-intro">
+          <div class="brand auth-brand">
+            <span class="dot"></span>
+            <div class="brand-copy">
+              <p class="eyebrow">MSML</p>
+              <h2>Lifestyle Monitor</h2>
+            </div>
+          </div>
+
+          <div class="auth-copy">
+            <p class="eyebrow">Welcome</p>
+            <h3>Same system as the app, tuned for desktop.</h3>
+            <p class="muted">
+              The website now follows the app’s simplified flow: check the biggest signals first,
+              move into one domain at a time, and use search, upload, or manual entry when camera
+              capture is not available.
+            </p>
+          </div>
+
+          <div class="auth-capability-grid" aria-label="Website highlights">
+            <article class="auth-capability-card">
+              <p class="eyebrow">Overview first</p>
+              <h4>Readiness, sleep, load</h4>
+              <p class="muted small-text">
+                Start with the same condensed front page priorities used in the mobile app.
+              </p>
+            </article>
+            <article class="auth-capability-card">
+              <p class="eyebrow">Desktop friendly</p>
+              <h4>Upload or type instead</h4>
+              <p class="muted small-text">
+                Search the food database, upload meal photos, and log entries manually without a camera.
+              </p>
+            </article>
+            <article class="auth-capability-card">
+              <p class="eyebrow">Coach ready</p>
+              <h4>View one athlete cleanly</h4>
+              <p class="muted small-text">
+                Keep the same shared-athlete workflow while making the desktop dashboard easier to scan.
+              </p>
+            </article>
+          </div>
         </div>
 
         <div class="auth-stack">
@@ -159,7 +203,7 @@
             <div class="avatar-picker">
               <div class="avatar-picker-header">
                 <p class="label">Avatar</p>
-                <p class="muted small-text">Pick an icon or paste your own PNG/WebP.</p>
+                <p class="muted small-text">Choose a preset or paste an image URL for your profile.</p>
               </div>
               <div class="avatar-options" id="avatarOptions">
                 <button
@@ -189,7 +233,7 @@
                     src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=120&q=60"
                     alt="" />
                 </button>
-                <button type="button" class="avatar-option" data-avatar-option="custom">Upload link</button>
+                <button type="button" class="avatar-option" data-avatar-option="custom">Paste URL</button>
               </div>
               <label class="custom-avatar-field">
                 Custom image URL
@@ -207,14 +251,14 @@
 
           <form id="forgotForm" class="hidden auth-subpanel" method="post">
             <p class="muted small-text">
-              Enter your account email and we’ll alert the head coach so they can help you reset your password.
+              Enter your account email and the head coach can help you reset your password.
             </p>
             <label>
               Email
               <input type="email" id="forgotEmail" placeholder="you@example.com" required />
             </label>
             <div class="auth-subpanel-actions">
-              <button type="submit" class="outline-btn">Notify head coach</button>
+              <button type="submit" class="outline-btn">Request reset</button>
               <button type="button" class="link-btn" data-auth-back="login">Back to sign in</button>
             </div>
             <p class="form-feedback" id="forgotFeedback"></p>
@@ -224,14 +268,20 @@
 
       <section class="dashboard hidden" id="dashboard">
         <header class="dashboard-header">
-          <div>
+          <div class="dashboard-header-main">
             <p class="eyebrow" id="greeting">Dashboard</p>
-            <h2 id="pageTitle">Daily Dashboard</h2>
-            <p class="muted" id="pageSubtitle">Live snapshot of readiness, movement, and fuel.</p>
-            <p class="muted viewing-chip" id="viewingChip">Viewing your own performance</p>
+            <div class="dashboard-header-title-row">
+              <h2 id="pageTitle">Overview</h2>
+              <div class="status-pill dashboard-context-pill">Desktop workspace</div>
+            </div>
+            <p class="muted" id="pageSubtitle">Sleep, readiness, load, and fuel in one place.</p>
+            <p class="muted viewing-chip" id="viewingChip">Viewing your own dashboard</p>
           </div>
           <div class="header-actions">
             <div class="status-pill" id="readinessHeadline">Readiness tracking</div>
+            <p class="header-support-copy">
+              Search, upload, and manual logging mirror the app flow when camera capture is not available.
+            </p>
           </div>
         </header>
 
@@ -252,50 +302,47 @@
         </section>
 
         <div class="subpage" data-subpage="overview">
-          <section class="overview-sync-row">
-            <article class="glass sync-status-card">
-              <div class="card-header">
-                <p class="eyebrow">Today's sync</p>
-                <h3>Telemetry recap</h3>
+          <section class="overview-hero-grid">
+            <article class="glass overview-hero-card">
+              <div class="overview-hero-header">
+                <div>
+                  <p class="eyebrow">Overview</p>
+                  <h3>Top-line signals</h3>
+                </div>
+                <p class="muted small-text overview-hero-note">
+                  The web dashboard now follows the app’s cleaner “strongest signals first” layout.
+                </p>
               </div>
-              <p class="muted" id="overviewSyncCopy">
-                Sync your wearable, meals, and sleep to populate today's recap.
+              <p class="muted overview-hero-copy" id="overviewSyncCopy">
+                Sync your wearable, meals, and sleep to populate today’s recap.
               </p>
-              <ul class="sync-metric-list">
-                <li>
-                  <div>
-                    <p class="label">Readiness</p>
-                    <p class="muted small-text" id="overviewSyncReadinessNote">Awaiting data.</p>
-                  </div>
+              <div class="overview-hero-metrics">
+                <article class="overview-hero-metric recovery">
+                  <p class="label">Readiness</p>
                   <strong id="overviewSyncReadiness">—</strong>
-                </li>
-                <li>
-                  <div>
-                    <p class="label">Steps</p>
-                    <p class="muted small-text" id="overviewSyncStepsNote">Awaiting data.</p>
-                  </div>
+                  <p class="muted small-text" id="overviewSyncReadinessNote">Awaiting data.</p>
+                </article>
+                <article class="overview-hero-metric training">
+                  <p class="label">Steps</p>
                   <strong id="overviewSyncSteps">—</strong>
-                </li>
-                <li>
-                  <div>
-                    <p class="label">Calories</p>
-                    <p class="muted small-text" id="overviewSyncCaloriesNote">Awaiting data.</p>
-                  </div>
+                  <p class="muted small-text" id="overviewSyncStepsNote">Awaiting data.</p>
+                </article>
+                <article class="overview-hero-metric nutrition">
+                  <p class="label">Calories</p>
                   <strong id="overviewSyncCalories">—</strong>
-                </li>
-                <li>
-                  <div>
-                    <p class="label">Sleep</p>
-                    <p class="muted small-text" id="overviewSyncSleepNote">Awaiting data.</p>
-                  </div>
+                  <p class="muted small-text" id="overviewSyncCaloriesNote">Awaiting data.</p>
+                </article>
+                <article class="overview-hero-metric sleep">
+                  <p class="label">Sleep</p>
                   <strong id="overviewSyncSleep">—</strong>
-                </li>
-              </ul>
+                  <p class="muted small-text" id="overviewSyncSleepNote">Awaiting data.</p>
+                </article>
+              </div>
             </article>
 
             <article class="glass coach-signal-card">
               <div class="card-header">
-                <p class="eyebrow">Coaching cue</p>
+                <p class="eyebrow">Daily insight</p>
                 <h3 id="overviewMomentumTitle">Waiting for sync</h3>
               </div>
               <p class="muted" id="overviewMomentumCopy">
@@ -303,7 +350,7 @@
                 appears.
               </p>
               <div class="highlight-foot">
-                <p class="label">Next check-in</p>
+                <p class="label">Next focus</p>
                 <p id="overviewMomentumFoot">Share a quick sync note after your wearable uploads.</p>
               </div>
             </article>
@@ -506,6 +553,14 @@
               <ul class="activity-session-list" id="activitySessions"></ul>
             </article>
 
+            <article class="glass activity-panel span-2">
+              <div class="card-header">
+                <p class="eyebrow">Training log</p>
+                <h3>Recent Sessions</h3>
+              </div>
+              <ul class="session-list" id="sessionsList"></ul>
+            </article>
+
             <article class="glass activity-panel">
               <div class="card-header split">
                 <div>
@@ -527,6 +582,16 @@
               <ul class="activity-efforts" id="activityBestEfforts"></ul>
             </article>
 
+            <article class="glass activity-panel">
+              <div class="card-header">
+                <p class="eyebrow">Coach focus</p>
+                <h3>Next Week Emphasis</h3>
+              </div>
+              <p class="muted" id="sessionsSummary">
+                Build consistency with 3 aerobic sessions and 2 strength touches.
+              </p>
+            </article>
+
             <article class="glass activity-panel" id="stravaPanel">
               <div class="card-header split">
                 <div>
@@ -546,26 +611,6 @@
               <p class="form-feedback" id="stravaFeedback"></p>
             </article>
           </div>
-        </div>
-
-        <div class="subpage hidden" data-subpage="sessions">
-          <article class="glass session-card">
-            <div class="card-header">
-              <p class="eyebrow">Training Log</p>
-              <h3>Recent Sessions</h3>
-            </div>
-            <ul class="session-list" id="sessionsList"></ul>
-          </article>
-
-          <article class="glass highlight-card">
-            <div class="card-header">
-              <p class="eyebrow">Coach Focus</p>
-              <h3>Next Week Emphasis</h3>
-            </div>
-            <p class="muted" id="sessionsSummary">
-              Build consistency with 3 aerobic sessions and 2 strength touches.
-            </p>
-          </article>
         </div>
 
         <div class="subpage hidden" data-subpage="sleep">
@@ -832,7 +877,8 @@
                 <h3>Log food or drink</h3>
               </div>
               <p class="muted small-text form-intro">
-                Search for an item or scan a barcode, then tweak the amount/unit to see the macros update. Meal photos can be reviewed and edited before you save them.
+                Desktop keeps this simple: search the database, use barcode scanning when a browser
+                camera is available, or upload a meal photo and edit the detected foods before saving.
               </p>
               <form id="nutritionForm" class="nutrition-form">
                 <div class="suggestion-wrapper">
@@ -844,30 +890,30 @@
                   <div class="suggestion-bar" id="nutritionSuggestionBar" aria-label="Quick suggestions"></div>
                 </div>
                 <div class="lookup-row">
-                  <div class="barcode-scan flex-1">
-                    <p class="eyebrow subtle">Barcode scan</p>
+                  <div class="lookup-card barcode-scan flex-1">
+                    <p class="eyebrow">Barcode</p>
                     <button type="button" class="outline-btn secondary" id="nutritionScanButton">
-                      Scan a barcode
+                      Scan with browser camera
                     </button>
                     <p class="muted tiny-text barcode-scan-status" id="nutritionScanStatus">
-                      Use your camera to auto-fill packaged food macros.
+                      Optional on supported devices. Search or manual entry works without camera access.
                     </p>
                     <div class="barcode-preview-wrapper hidden" id="nutritionScanPreviewWrapper">
                       <video id="nutritionScanPreview" class="barcode-preview" autoplay muted playsinline></video>
                     </div>
                   </div>
-                  <div class="lookup-actions">
+                  <div class="lookup-card lookup-actions">
                     <button type="button" class="outline-btn secondary" id="nutritionLookupButton">
-                      Look up nutrition
+                      Search food database
                     </button>
-                    <p class="muted tiny-text">Pulls calories/macros from a global food database.</p>
+                    <p class="muted tiny-text">Pull calories and macros from a global food database.</p>
                   </div>
                 </div>
                 <div class="photo-import-row">
                   <input type="file" id="nutritionPhotoInput" accept="image/*" class="hidden" />
                   <div class="photo-import-actions">
                     <button type="button" class="outline-btn secondary" id="nutritionPhotoButton">
-                      Import meal photo
+                      Upload meal photo
                     </button>
                     <button
                       type="button"
@@ -877,14 +923,14 @@
                     </button>
                   </div>
                   <p class="muted tiny-text" id="nutritionPhotoStatus">
-                    Upload a meal photo to auto-detect foods, edit the meal, and then log it.
+                    Upload a meal photo from this device to auto-detect foods, refine the meal, and log it.
                   </p>
                   <label
                     id="nutritionPhotoDropZone"
                     class="photo-drop-zone"
                     for="nutritionPhotoInput"
                     aria-label="Drop a local meal photo here or click to choose a file">
-                    Drop a local food image here, or click to browse.
+                    Drop a meal image here, or click to browse this device.
                   </label>
                   <div class="photo-preview-wrapper hidden" id="nutritionPhotoPreviewWrapper">
                     <img id="nutritionPhotoPreview" class="photo-preview" alt="Meal photo preview" />
