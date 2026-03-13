@@ -182,6 +182,115 @@ FOOD_DENSITY = {
     "default": 0.80,
 }
 
+# ── Local nutrition fallback (kcal / protein / carbs / fats / fiber per 100 g) ─
+# Used when the USDA API is unavailable or returns no result.
+# Values are typical cooked/ready-to-eat averages from public nutrition data.
+FOOD_NUTRITION_PER_100G = {
+    # Vegetables
+    "broccoli":        {"kcal": 34,  "protein": 2.8, "carbs": 6.6,  "fats": 0.4, "fiber": 2.6},
+    "cabbage":         {"kcal": 25,  "protein": 1.3, "carbs": 5.8,  "fats": 0.1, "fiber": 2.5},
+    "carrot":          {"kcal": 41,  "protein": 0.9, "carbs": 10.0, "fats": 0.2, "fiber": 2.8},
+    "cauliflower":     {"kcal": 25,  "protein": 1.9, "carbs": 5.0,  "fats": 0.3, "fiber": 2.0},
+    "celery":          {"kcal": 16,  "protein": 0.7, "carbs": 3.0,  "fats": 0.2, "fiber": 1.6},
+    "cucumber":        {"kcal": 15,  "protein": 0.7, "carbs": 3.6,  "fats": 0.1, "fiber": 0.5},
+    "eggplant":        {"kcal": 25,  "protein": 1.0, "carbs": 5.9,  "fats": 0.2, "fiber": 3.0},
+    "garlic":          {"kcal": 149, "protein": 6.4, "carbs": 33.1, "fats": 0.5, "fiber": 2.1},
+    "ginger":          {"kcal": 80,  "protein": 1.8, "carbs": 18.0, "fats": 0.8, "fiber": 2.0},
+    "lettuce":         {"kcal": 15,  "protein": 1.4, "carbs": 2.9,  "fats": 0.2, "fiber": 1.3},
+    "mushroom":        {"kcal": 22,  "protein": 3.1, "carbs": 3.3,  "fats": 0.3, "fiber": 1.0},
+    "onion":           {"kcal": 40,  "protein": 1.1, "carbs": 9.3,  "fats": 0.1, "fiber": 1.7},
+    "pepper":          {"kcal": 31,  "protein": 1.0, "carbs": 6.9,  "fats": 0.3, "fiber": 2.1},
+    "potato":          {"kcal": 77,  "protein": 2.0, "carbs": 17.0, "fats": 0.1, "fiber": 2.2},
+    "pumpkin":         {"kcal": 26,  "protein": 1.0, "carbs": 6.5,  "fats": 0.1, "fiber": 0.5},
+    "radish":          {"kcal": 16,  "protein": 0.7, "carbs": 3.4,  "fats": 0.1, "fiber": 1.6},
+    "spinach":         {"kcal": 23,  "protein": 2.9, "carbs": 3.6,  "fats": 0.4, "fiber": 2.2},
+    "tomato":          {"kcal": 18,  "protein": 0.9, "carbs": 3.9,  "fats": 0.2, "fiber": 1.2},
+    "zucchini":        {"kcal": 17,  "protein": 1.2, "carbs": 3.1,  "fats": 0.3, "fiber": 1.0},
+    # Fruits
+    "apple":           {"kcal": 52,  "protein": 0.3, "carbs": 14.0, "fats": 0.2, "fiber": 2.4},
+    "banana":          {"kcal": 89,  "protein": 1.1, "carbs": 23.0, "fats": 0.3, "fiber": 2.6},
+    "blueberry":       {"kcal": 57,  "protein": 0.7, "carbs": 14.5, "fats": 0.3, "fiber": 2.4},
+    "cherry":          {"kcal": 63,  "protein": 1.1, "carbs": 16.0, "fats": 0.2, "fiber": 2.1},
+    "grape":           {"kcal": 67,  "protein": 0.6, "carbs": 17.0, "fats": 0.4, "fiber": 0.9},
+    "kiwi":            {"kcal": 61,  "protein": 1.1, "carbs": 15.0, "fats": 0.5, "fiber": 3.0},
+    "lemon":           {"kcal": 29,  "protein": 1.1, "carbs": 9.3,  "fats": 0.3, "fiber": 2.8},
+    "mango":           {"kcal": 60,  "protein": 0.8, "carbs": 15.0, "fats": 0.4, "fiber": 1.6},
+    "orange":          {"kcal": 47,  "protein": 0.9, "carbs": 12.0, "fats": 0.1, "fiber": 2.4},
+    "pear":            {"kcal": 57,  "protein": 0.4, "carbs": 15.0, "fats": 0.1, "fiber": 3.1},
+    "pineapple":       {"kcal": 50,  "protein": 0.5, "carbs": 13.0, "fats": 0.1, "fiber": 1.4},
+    "strawberry":      {"kcal": 32,  "protein": 0.7, "carbs": 7.7,  "fats": 0.3, "fiber": 2.0},
+    "watermelon":      {"kcal": 30,  "protein": 0.6, "carbs": 7.6,  "fats": 0.2, "fiber": 0.4},
+    # Grains / breads
+    "rice":            {"kcal": 130, "protein": 2.7, "carbs": 28.0, "fats": 0.3, "fiber": 0.4},
+    "fried rice":      {"kcal": 163, "protein": 3.2, "carbs": 28.0, "fats": 4.3, "fiber": 0.5},
+    "fried_rice":      {"kcal": 163, "protein": 3.2, "carbs": 28.0, "fats": 4.3, "fiber": 0.5},
+    "noodles":         {"kcal": 138, "protein": 4.5, "carbs": 25.0, "fats": 2.0, "fiber": 1.2},
+    "spaghetti":       {"kcal": 131, "protein": 5.0, "carbs": 25.0, "fats": 1.1, "fiber": 1.8},
+    "pasta":           {"kcal": 131, "protein": 5.0, "carbs": 25.0, "fats": 1.1, "fiber": 1.8},
+    "bread":           {"kcal": 265, "protein": 9.0, "carbs": 49.0, "fats": 3.2, "fiber": 2.7},
+    "toast":           {"kcal": 313, "protein": 10.0,"carbs": 57.0, "fats": 3.4, "fiber": 2.3},
+    "bagel":           {"kcal": 257, "protein": 9.8, "carbs": 50.0, "fats": 1.6, "fiber": 2.3},
+    "hamburger bun":   {"kcal": 279, "protein": 9.0, "carbs": 50.0, "fats": 4.1, "fiber": 2.0},
+    "hamburger_bun":   {"kcal": 279, "protein": 9.0, "carbs": 50.0, "fats": 4.1, "fiber": 2.0},
+    "pizza":           {"kcal": 266, "protein": 11.0,"carbs": 33.0, "fats": 10.0,"fiber": 2.3},
+    "dumpling":        {"kcal": 170, "protein": 6.6, "carbs": 22.0, "fats": 6.0, "fiber": 1.0},
+    # Meat / poultry
+    "beef":            {"kcal": 250, "protein": 26.0,"carbs": 0.0,  "fats": 17.0,"fiber": 0.0},
+    "steak":           {"kcal": 271, "protein": 26.0,"carbs": 0.0,  "fats": 18.0,"fiber": 0.0},
+    "pork":            {"kcal": 242, "protein": 27.0,"carbs": 0.0,  "fats": 14.0,"fiber": 0.0},
+    "bacon":           {"kcal": 541, "protein": 37.0,"carbs": 1.4,  "fats": 42.0,"fiber": 0.0},
+    "ham":             {"kcal": 163, "protein": 17.0,"carbs": 2.0,  "fats": 9.3, "fiber": 0.0},
+    "sausage":         {"kcal": 301, "protein": 13.0,"carbs": 2.0,  "fats": 27.0,"fiber": 0.0},
+    "chicken":         {"kcal": 165, "protein": 31.0,"carbs": 0.0,  "fats": 3.6, "fiber": 0.0},
+    "fried chicken":   {"kcal": 246, "protein": 21.0,"carbs": 7.8,  "fats": 14.0,"fiber": 0.4},
+    "fried_chicken":   {"kcal": 246, "protein": 21.0,"carbs": 7.8,  "fats": 14.0,"fiber": 0.4},
+    "turkey":          {"kcal": 135, "protein": 29.0,"carbs": 0.0,  "fats": 1.0, "fiber": 0.0},
+    "lamb":            {"kcal": 294, "protein": 25.0,"carbs": 0.0,  "fats": 21.0,"fiber": 0.0},
+    # Seafood
+    "fish":            {"kcal": 206, "protein": 22.0,"carbs": 0.0,  "fats": 12.0,"fiber": 0.0},
+    "salmon":          {"kcal": 208, "protein": 20.0,"carbs": 0.0,  "fats": 13.0,"fiber": 0.0},
+    "shrimp":          {"kcal": 85,  "protein": 20.0,"carbs": 0.0,  "fats": 0.9, "fiber": 0.0},
+    "crab":            {"kcal": 97,  "protein": 19.0,"carbs": 0.0,  "fats": 1.5, "fiber": 0.0},
+    "lobster":         {"kcal": 98,  "protein": 20.0,"carbs": 1.3,  "fats": 0.6, "fiber": 0.0},
+    "oyster":          {"kcal": 68,  "protein": 7.1, "carbs": 3.9,  "fats": 2.5, "fiber": 0.0},
+    # Dairy / eggs
+    "egg":             {"kcal": 143, "protein": 13.0,"carbs": 0.7,  "fats": 10.0,"fiber": 0.0},
+    "fried egg":       {"kcal": 196, "protein": 14.0,"carbs": 0.4,  "fats": 15.0,"fiber": 0.0},
+    "fried_egg":       {"kcal": 196, "protein": 14.0,"carbs": 0.4,  "fats": 15.0,"fiber": 0.0},
+    "boiled egg":      {"kcal": 155, "protein": 13.0,"carbs": 1.1,  "fats": 11.0,"fiber": 0.0},
+    "boiled_egg":      {"kcal": 155, "protein": 13.0,"carbs": 1.1,  "fats": 11.0,"fiber": 0.0},
+    "cheese":          {"kcal": 402, "protein": 25.0,"carbs": 1.3,  "fats": 33.0,"fiber": 0.0},
+    "butter":          {"kcal": 717, "protein": 0.9, "carbs": 0.1,  "fats": 81.0,"fiber": 0.0},
+    "yogurt":          {"kcal": 61,  "protein": 3.5, "carbs": 4.7,  "fats": 3.3, "fiber": 0.0},
+    "milk":            {"kcal": 61,  "protein": 3.2, "carbs": 4.8,  "fats": 3.3, "fiber": 0.0},
+    # Snacks / fast food / desserts
+    "chips":           {"kcal": 547, "protein": 7.0, "carbs": 53.0, "fats": 35.0,"fiber": 4.4},
+    "french fries":    {"kcal": 312, "protein": 3.4, "carbs": 41.0, "fats": 15.0,"fiber": 3.4},
+    "french_fries":    {"kcal": 312, "protein": 3.4, "carbs": 41.0, "fats": 15.0,"fiber": 3.4},
+    "popcorn":         {"kcal": 375, "protein": 12.0,"carbs": 74.0, "fats": 4.3, "fiber": 14.5},
+    "cracker":         {"kcal": 502, "protein": 8.8, "carbs": 67.0, "fats": 21.0,"fiber": 2.9},
+    "cookie":          {"kcal": 488, "protein": 5.4, "carbs": 65.0, "fats": 23.0,"fiber": 1.5},
+    "cake":            {"kcal": 347, "protein": 5.4, "carbs": 52.0, "fats": 13.0,"fiber": 1.0},
+    "donut":           {"kcal": 452, "protein": 4.9, "carbs": 51.0, "fats": 25.0,"fiber": 1.3},
+    "soup":            {"kcal": 45,  "protein": 3.5, "carbs": 5.4,  "fats": 1.4, "fiber": 0.8},
+    "salad":           {"kcal": 25,  "protein": 1.5, "carbs": 4.5,  "fats": 0.3, "fiber": 1.5},
+    "burger":          {"kcal": 295, "protein": 17.0,"carbs": 23.0, "fats": 14.0,"fiber": 1.5},
+    "sandwich":        {"kcal": 249, "protein": 13.0,"carbs": 26.0, "fats": 10.0,"fiber": 1.8},
+    "hot dog":         {"kcal": 290, "protein": 11.0,"carbs": 21.0, "fats": 18.0,"fiber": 0.9},
+    "hot_dog":         {"kcal": 290, "protein": 11.0,"carbs": 21.0, "fats": 18.0,"fiber": 0.9},
+    "taco":            {"kcal": 226, "protein": 12.0,"carbs": 21.0, "fats": 10.0,"fiber": 2.0},
+    "burrito":         {"kcal": 217, "protein": 10.0,"carbs": 26.0, "fats": 8.0, "fiber": 2.4},
+    "fried food":      {"kcal": 320, "protein": 10.0,"carbs": 30.0, "fats": 18.0,"fiber": 1.0},
+    "fried_food":      {"kcal": 320, "protein": 10.0,"carbs": 30.0, "fats": 18.0,"fiber": 1.0},
+    # Condiments
+    "ketchup":         {"kcal": 101, "protein": 1.4, "carbs": 25.0, "fats": 0.1, "fiber": 0.3},
+    "mayonnaise":      {"kcal": 680, "protein": 0.9, "carbs": 0.6,  "fats": 75.0,"fiber": 0.0},
+    "mustard":         {"kcal": 66,  "protein": 4.4, "carbs": 8.1,  "fats": 3.0, "fiber": 3.3},
+    "soy sauce":       {"kcal": 53,  "protein": 8.1, "carbs": 4.9,  "fats": 0.1, "fiber": 0.8},
+    "soy_sauce":       {"kcal": 53,  "protein": 8.1, "carbs": 4.9,  "fats": 0.1, "fiber": 0.8},
+}
+# ──────────────────────────────────────────────────────────────────────────────
+
 
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -250,6 +359,16 @@ def resolve_density(food_name):
     if spaced in FOOD_DENSITY:
         return FOOD_DENSITY[spaced]
     return FOOD_DENSITY["default"]
+
+
+def get_local_nutrition(food_name):
+    """Return FOOD_NUTRITION_PER_100G entry for food_name, or None if not found."""
+    normalized = normalize_food_key(food_name)
+    entry = FOOD_NUTRITION_PER_100G.get(normalized)
+    if entry:
+        return entry
+    spaced = normalized.replace("_", " ")
+    return FOOD_NUTRITION_PER_100G.get(spaced)
 
 
 def resolve_usda_query(food_name):
@@ -344,6 +463,23 @@ def scale_usda_nutrients(nutrients_per_100g, mass_g):
     }
 
 
+def _local_fallback_result(food_name, query):
+    """Build a result dict from FOOD_NUTRITION_PER_100G if the food is known."""
+    local = get_local_nutrition(food_name)
+    if not local:
+        return {"query": query, "found": False}
+    return {
+        "query": query,
+        "found": True,
+        "source": "local_fallback",
+        "caloriesPer100g": float(local["kcal"]),
+        "proteinPer100g": float(local["protein"]),
+        "carbsPer100g": float(local["carbs"]),
+        "fatsPer100g": float(local["fats"]),
+        "fiberPer100g": float(local["fiber"]),
+    }
+
+
 def lookup_usda_nutrients(food_name, session, cache):
     query = resolve_usda_query(food_name)
     cache_key = query.lower()
@@ -351,8 +487,9 @@ def lookup_usda_nutrients(food_name, session, cache):
         return cache[cache_key]
 
     if not USDA_API_KEY:
-        cache[cache_key] = {"query": query, "found": False}
-        return cache[cache_key]
+        result = _local_fallback_result(food_name, query)
+        cache[cache_key] = result
+        return result
 
     try:
         response = session.get(
@@ -368,7 +505,7 @@ def lookup_usda_nutrients(food_name, session, cache):
         payload = response.json()
         foods = payload.get("foods") or []
         if not foods:
-            result = {"query": query, "found": False}
+            result = _local_fallback_result(food_name, query)
             cache[cache_key] = result
             return result
 
@@ -397,7 +534,7 @@ def lookup_usda_nutrients(food_name, session, cache):
         cache[cache_key] = result
         return result
     except requests.RequestException:
-        result = {"query": query, "found": False}
+        result = _local_fallback_result(food_name, query)
         cache[cache_key] = result
         return result
 
