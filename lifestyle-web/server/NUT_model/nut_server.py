@@ -103,6 +103,8 @@ _usda_cache: dict = {}
 _usda_lock = threading.Lock()
 # Thread pool for parallel USDA lookups (I/O-bound, so many workers are fine).
 _usda_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="usda")
+# Per-lookup timeout (seconds). Reduce to fail-fast when USDA API is slow.
+_USDA_LOOKUP_TIMEOUT = float(os.environ.get("NUT_USDA_LOOKUP_TIMEOUT", "6"))
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -135,7 +137,7 @@ def _lookup_usda_parallel(labels: list) -> dict:
     results = {}
     for future, label in futures.items():
         try:
-            results[label] = future.result(timeout=12)
+            results[label] = future.result(timeout=_USDA_LOOKUP_TIMEOUT)
         except Exception:
             results[label] = {"found": False, "query": resolve_usda_query(label)}
     return results

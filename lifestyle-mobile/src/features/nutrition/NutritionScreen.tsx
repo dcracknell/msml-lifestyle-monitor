@@ -972,9 +972,11 @@ export function NutritionScreen() {
         return;
       }
       handleEntryChange('photoData', asset.base64);
+      setEditableDetectedFoods([]);
+      setExpandedFoodIds(new Set());
+      setPhotoStatus(null);
       setPhotoAnalyzing(true);
-      setPhotoStatus('Analysing photo...');
-      setPhotoStatusKind('info');
+      setAddFoodMode('photoReview');
       try {
         const analysis = await analyzeNutritionPhotoRequest({
           photoData: asset.base64,
@@ -988,12 +990,9 @@ export function NutritionScreen() {
         if (suggested.length) {
           applyPhotoDetectedFoods(suggested);
           setEditableDetectedFoods(suggested.map(toEditableFood));
-          setExpandedFoodIds(new Set());
-          setAddFoodMode('photoReview');
-          setPhotoStatus(null);
         } else {
-          setPhotoStatus('Photo analysed. Fill in details below.');
-          setPhotoStatusKind('success');
+          setPhotoStatus('No foods detected. Add them manually below.');
+          setPhotoStatusKind('info');
         }
       } catch (analysisError) {
         const uncertain = parsePhotoUncertainError(analysisError);
@@ -1002,18 +1001,15 @@ export function NutritionScreen() {
           applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
           if (uncertain.detectedFoods.length) {
             setEditableDetectedFoods(uncertain.detectedFoods.map(toEditableFood));
-            setExpandedFoodIds(new Set());
-            setAddFoodMode('photoReview');
-            setPhotoStatus(null);
           } else {
-            setPhotoStatus('Multiple foods detected — review below before logging.');
+            setPhotoStatus('Analysis uncertain. Add foods manually below.');
             setPhotoStatusKind('info');
           }
         } else {
           const msg =
             analysisError instanceof Error && analysisError.message
               ? analysisError.message
-              : 'Photo analysis unavailable. Fill in food details manually.';
+              : 'Photo analysis unavailable. Add foods manually below.';
           setPhotoStatus(msg);
           setPhotoStatusKind('error');
         }
@@ -1032,7 +1028,6 @@ export function NutritionScreen() {
     setEntryFeedback(null);
     setPhotoDetectedFoods([]);
     setPhotoMealAnalysis(null);
-    let importedPhotoData: string | null = null;
     try {
       const imagePicker = getImagePickerModule();
       if (!imagePicker) {
@@ -1050,7 +1045,6 @@ export function NutritionScreen() {
         base64: true,
       });
       if (result.canceled) {
-        setPhotoStatus('Import cancelled.');
         return;
       }
       const asset = result.assets?.[0];
@@ -1058,59 +1052,55 @@ export function NutritionScreen() {
         setPhotoStatus('Unable to read the selected photo. Try another image.');
         return;
       }
-      importedPhotoData = asset.base64;
-      handleEntryChange('photoData', importedPhotoData);
-
-      setEntryFeedback('Importing photo...');
-      const upload = await runOrQueue<NutritionLogResponse>({
-        endpoint: '/api/nutrition',
-        payload: {
+      handleEntryChange('photoData', asset.base64);
+      setEditableDetectedFoods([]);
+      setExpandedFoodIds(new Set());
+      setPhotoStatus(null);
+      setPhotoAnalyzing(true);
+      setAddFoodMode('photoReview');
+      try {
+        const analysis = await analyzeNutritionPhotoRequest({
+          photoData: asset.base64,
           type: entryForm.type,
-          date: selectedDate,
-          photoData: importedPhotoData,
-        },
-        description: 'Imported meal photo',
-      });
-
-      if (upload.status === 'sent') {
-        applyMealAnalysis(upload.result);
-        setEntryFeedback(upload.result?.message || 'Photo imported into the food register.');
-        setPhotoStatus('Imported photo logged.');
-        handleEntryChange('photoData', null);
-        refetch();
-        resetEntryForm();
-        setAddFoodModalVisible(false);
-        setAddFoodMode('menu');
-        return;
-      }
-
-      setEntryFeedback('Offline detected - photo import queued and will sync automatically.');
-      setPhotoStatus('Imported photo queued for analysis.');
-      resetEntryForm();
-      setAddFoodModalVisible(false);
-      setAddFoodMode('menu');
-    } catch (error) {
-      const uncertain = parsePhotoUncertainError(error);
-      if (uncertain) {
-        if (importedPhotoData) {
-          handleEntryChange('photoData', importedPhotoData);
-        }
-        setPhotoMealAnalysis(uncertain.mealAnalysis);
-        applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
-        setEntryFeedback(uncertain.message);
-        if (uncertain.detectedFoods.length) {
-          setEditableDetectedFoods(uncertain.detectedFoods.map(toEditableFood));
-          setExpandedFoodIds(new Set());
-          setAddFoodMode('photoReview');
-          setPhotoStatus(null);
+        });
+        const mealAnalysis = extractMealAnalysis(analysis);
+        if (mealAnalysis) setPhotoMealAnalysis(mealAnalysis);
+        const suggested = normalizeSuggestedItems(
+          (analysis as Record<string, unknown>)?.suggestedItems
+        );
+        if (suggested.length) {
+          applyPhotoDetectedFoods(suggested);
+          setEditableDetectedFoods(suggested.map(toEditableFood));
         } else {
-          setPhotoStatus('Photo imported, but the result is uncertain. Type a food name or try another photo.');
+          setPhotoStatus('No foods detected. Add them manually below.');
+          setPhotoStatusKind('info');
         }
-        return;
+      } catch (analysisError) {
+        const uncertain = parsePhotoUncertainError(analysisError);
+        if (uncertain) {
+          if (uncertain.mealAnalysis) setPhotoMealAnalysis(uncertain.mealAnalysis);
+          applyPhotoDetectedFoods(uncertain.detectedFoods, uncertain.message);
+          if (uncertain.detectedFoods.length) {
+            setEditableDetectedFoods(uncertain.detectedFoods.map(toEditableFood));
+          } else {
+            setPhotoStatus('Analysis uncertain. Add foods manually below.');
+            setPhotoStatusKind('info');
+          }
+        } else {
+          const msg =
+            analysisError instanceof Error && analysisError.message
+              ? analysisError.message
+              : 'Photo analysis unavailable. Add foods manually below.';
+          setPhotoStatus(msg);
+          setPhotoStatusKind('error');
+        }
+      } finally {
+        setPhotoAnalyzing(false);
       }
-      setEntryFeedback(
-        error instanceof Error ? error.message : 'Unable to import meal photo right now.'
-      );
+    } catch {
+      setPhotoAnalyzing(false);
+      setPhotoStatus(getImagePickerMissingMessage());
+      setPhotoStatusKind('error');
     }
   };
 
@@ -1626,6 +1616,12 @@ export function NutritionScreen() {
 
   const renderPhotoReviewBody = () => {
     const validCount = editableDetectedFoods.filter((f) => f.name.trim()).length;
+    const headerTitle = photoAnalyzing
+      ? 'Analysing photo…'
+      : `${editableDetectedFoods.length} item${editableDetectedFoods.length !== 1 ? 's' : ''} detected`;
+    const headerSub = photoAnalyzing
+      ? 'Results will appear here. You can add items now too.'
+      : 'Edit, remove, or add missing foods below';
     return (
       <ScrollView
         contentContainerStyle={styles.modalBody}
@@ -1636,18 +1632,14 @@ export function NutritionScreen() {
           <View style={styles.reviewPhotoStrip}>
             <Image source={{ uri: previewUri }} style={styles.reviewPhotoThumb} />
             <View style={styles.reviewPhotoStripText}>
-              <AppText variant="body" weight="semibold">
-                {editableDetectedFoods.length} item{editableDetectedFoods.length !== 1 ? 's' : ''} detected
-              </AppText>
-              <AppText variant="muted">Edit, remove, or add missing foods below</AppText>
+              <AppText variant="body" weight="semibold">{headerTitle}</AppText>
+              <AppText variant="muted">{headerSub}</AppText>
             </View>
           </View>
         ) : (
           <View style={styles.reviewHeaderRow}>
-            <AppText variant="body" weight="semibold">
-              {editableDetectedFoods.length} item{editableDetectedFoods.length !== 1 ? 's' : ''} detected
-            </AppText>
-            <AppText variant="muted">Edit, remove, or add missing foods below</AppText>
+            <AppText variant="body" weight="semibold">{headerTitle}</AppText>
+            <AppText variant="muted">{headerSub}</AppText>
           </View>
         )}
 
@@ -1786,9 +1778,9 @@ export function NutritionScreen() {
         </TouchableOpacity>
 
         <AppButton
-          title={`Log ${validCount} food${validCount !== 1 ? 's' : ''}`}
+          title={photoAnalyzing ? 'Analysing…' : `Log ${validCount} food${validCount !== 1 ? 's' : ''}`}
           onPress={handleLogEditableFoods}
-          disabled={validCount === 0}
+          disabled={validCount === 0 || photoAnalyzing}
         />
         {renderEntryFeedback()}
       </ScrollView>
@@ -1973,7 +1965,7 @@ export function NutritionScreen() {
                 disabled={photoAnalyzing}
               />
               <AppButton
-                title="Import & log"
+                title="Import & review"
                 variant="ghost"
                 style={styles.photoActionButton}
                 onPress={handleImportPhoto}
