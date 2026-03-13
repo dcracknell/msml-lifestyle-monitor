@@ -1012,6 +1012,8 @@ const nutritionInsightSelect = document.getElementById('nutritionInsightSelect')
 const nutritionInsightSummary = document.getElementById('nutritionInsightSummary');
 const nutritionInsightFlag = document.getElementById('nutritionInsightFlag');
 const defaultScanStatusMessage = nutritionScanStatus?.textContent || '';
+const barcodeScanButtonLabel = 'Scan with browser camera';
+const barcodeStopButtonLabel = 'Stop camera scan';
 const appLoadingScreen = document.getElementById('appLoadingScreen');
 const forgotForm = document.getElementById('forgotForm');
 const forgotEmailInput = document.getElementById('forgotEmail');
@@ -4642,7 +4644,7 @@ function stopBarcodeScan(options = {}) {
   }
   nutritionScanPreviewWrapper?.classList.add('hidden');
   if (nutritionScanButton) {
-    nutritionScanButton.textContent = 'Scan a barcode';
+    nutritionScanButton.textContent = barcodeScanButtonLabel;
     nutritionScanButton.disabled = false;
   }
   if (message) {
@@ -4692,11 +4694,11 @@ async function startBarcodeScan() {
   if (!nutritionScanButton || barcodeScanState.active) return;
   warmupBarcodeDetector();
   if (!isBarcodeScannerSupported()) {
-    setScanStatus('Barcode scanning is not supported in this browser.', { isError: true });
+    setScanStatus('Browser camera scanning is unavailable here. Search or upload a photo instead.', { isError: true });
     return;
   }
   nutritionScanButton.disabled = true;
-  setScanStatus('Opening camera...');
+  setScanStatus('Opening browser camera...');
   try {
     const detector = await ensureBarcodeDetector();
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -4720,14 +4722,14 @@ async function startBarcodeScan() {
       }
     }
     nutritionScanPreviewWrapper?.classList.remove('hidden');
-    nutritionScanButton.textContent = 'Stop scanning';
+    nutritionScanButton.textContent = barcodeStopButtonLabel;
     nutritionScanButton.disabled = false;
     setScanStatus('Align the barcode inside the frame.');
     barcodeScanState.frameId = requestAnimationFrame(() => processBarcodeFrame(detector));
   } catch (error) {
     console.error('Unable to start barcode scan', error);
     stopBarcodeScan({
-      message: error?.message || 'Unable to access the camera for scanning.',
+      message: error?.message || 'Unable to access the browser camera for scanning.',
       isError: true,
       resetToDefault: false,
     });
@@ -4738,7 +4740,7 @@ function initializeBarcodeScanner() {
   if (!nutritionScanButton) return;
   if (!isBarcodeScannerSupported()) {
     nutritionScanButton.disabled = true;
-    setScanStatus('Barcode scanning is not supported in this browser.', { isError: true });
+    setScanStatus('Browser camera scanning is unavailable here. Search or upload a photo instead.', { isError: true });
     return;
   }
   setScanStatus(defaultScanStatusMessage);
@@ -4918,44 +4920,36 @@ function handleAmountInputChange() {
 
 const pageCopy = {
   overview: {
-    title: 'Daily Dashboard',
-    subtitle: 'Live snapshot of readiness, movement, and fuel.',
+    title: 'Overview',
+    subtitle: 'Sleep, readiness, load, and fuel in one place.',
   },
   activity: {
-    title: 'Activity Tracking',
-    subtitle: 'Apple Watch / Garmin style analytics with Strava sync.',
-  },
-  sessions: {
-    title: 'Session Planner',
-    subtitle: 'Blend intensity and skill work with guardrails from your data.',
-  },
-  readiness: {
-    title: 'Readiness Signals',
-    subtitle: 'Monitor stress, sleep, and adaptation trends.',
+    title: 'Activity',
+    subtitle: 'Sessions, pace, load, and Strava sync.',
   },
   sleep: {
-    title: 'Sleep Insights',
-    subtitle: 'Preview nightly recovery while the expanded module is built.',
+    title: 'Sleep',
+    subtitle: 'Nightly recovery, goals, and stage balance.',
   },
   vitals: {
-    title: 'Vitals & Labs',
-    subtitle: 'Track heart readings, blood pressure, and glucose trends.',
+    title: 'Vitals',
+    subtitle: 'Heart rhythm, blood pressure, glucose, and recovery signals.',
   },
   nutrition: {
-    title: 'Fuel & Hydration',
-    subtitle: 'Macro ratios and hydration rhythm for the current block.',
+    title: 'Nutrition',
+    subtitle: 'Daily intake, macro targets, and photo-assisted logging.',
   },
   weight: {
-    title: 'Weight Intelligence',
-    subtitle: 'Log weigh-ins and compare against calorie exposure.',
+    title: 'Weight',
+    subtitle: 'Weight trend, calories, and body metrics.',
   },
   profile: {
-    title: 'Profile & Security',
-    subtitle: 'Update your login details and keep your account current.',
+    title: 'Settings',
+    subtitle: 'Profile, security, avatar, and integrations.',
   },
   sharing: {
-    title: 'Share Data',
-    subtitle: 'Invite your coach to view your dashboard.',
+    title: 'Share',
+    subtitle: 'Invite coaches to view your dashboard.',
   },
 };
 
@@ -5407,13 +5401,13 @@ function handleProfileAvatarUrlInput(event) {
 function updateViewingChip(subject) {
   if (!viewingChip) return;
   if (!subject || !state.user) {
-    viewingChip.textContent = 'Viewing your own performance';
+    viewingChip.textContent = 'Viewing your own dashboard';
     return;
   }
   viewingChip.textContent =
     subject.id === state.user.id
-      ? 'Viewing your own performance'
-      : `Viewing ${subject.name}'s performance`;
+      ? 'Viewing your own dashboard'
+      : `Viewing ${subject.name}'s dashboard`;
 }
 
 function updateSubjectContext(subject) {
@@ -5861,6 +5855,10 @@ function handleAthleteSelection(selection) {
   loadWeight(athlete.id);
 }
 function setActivePage(targetPage = 'overview') {
+  if (targetPage === 'sessions') {
+    targetPage = 'activity';
+  }
+
   document.querySelectorAll('#sideNav [data-page]').forEach((button) => {
     const isActive = button.dataset.page === targetPage;
     button.classList.toggle('active', isActive);
@@ -7487,19 +7485,35 @@ function personalizeDashboard(user) {
 
   profileCard.innerHTML = '';
 
-  const avatar = document.createElement('img');
-  avatar.className = 'avatar';
-  avatar.alt = user.name;
+  const avatarShell = document.createElement('div');
+  avatarShell.className = 'avatar-shell';
+  const initials =
+    (user.name || '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join('') || 'A';
+  const createAvatarFallback = () => {
+    const fallback = document.createElement('div');
+    fallback.className = 'avatar avatar-fallback';
+    fallback.setAttribute('aria-hidden', 'true');
+    fallback.textContent = initials;
+    return fallback;
+  };
   const avatarSrc = resolveAvatarSrc(user);
   if (avatarSrc) {
+    const avatar = document.createElement('img');
+    avatar.className = 'avatar';
+    avatar.alt = user.name;
     avatar.src = avatarSrc;
+    avatarShell.appendChild(avatar);
+    avatar.onerror = () => {
+      avatarShell.replaceChildren(createAvatarFallback());
+    };
   } else {
-    avatar.style.background = 'var(--gradient)';
+    avatarShell.appendChild(createAvatarFallback());
   }
-  avatar.onerror = () => {
-    avatar.removeAttribute('src');
-    avatar.style.background = 'var(--gradient)';
-  };
 
   const info = document.createElement('div');
   const roleParts = [user.role, user.weight_category].filter(Boolean);
@@ -7509,7 +7523,7 @@ function personalizeDashboard(user) {
     <h3>${user.name}</h3>
   `;
 
-  profileCard.appendChild(avatar);
+  profileCard.appendChild(avatarShell);
   profileCard.appendChild(info);
 }
 
