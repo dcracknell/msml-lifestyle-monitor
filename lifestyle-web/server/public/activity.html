@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Activity · MSML Coach</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/vendor/chart.umd.js" defer></script>
+  <style>
+    /* ── Page-level overrides ── */
+    .topbar-subtitle {
+      font-size: 12px; color: var(--muted);
+      margin-top: 2px; letter-spacing: .01em;
+    }
+    /* Rank badge inside team board */
+    .rank-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; border-radius: 3px;
+      font-size: 10px; font-weight: 700;
+      background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .rank-badge.r1 { border-color: var(--teal-dim); color: var(--teal); }
+    /* Pulse cards — alternating accent */
+    .pulse-card:nth-child(4),
+    .pulse-card:nth-child(5) { border-top-color: var(--amber); }
+    .pulse-card:nth-child(6) { border-top-color: var(--blue); }
+
+    /* Sessions table */
+    .sessions-table { width: 100%; border-collapse: collapse; }
+    .sessions-table th {
+      font-size: 10px; font-weight: 600; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted);
+      padding: 0 8px 8px 0; text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .sessions-table td {
+      padding: 10px 8px 10px 0;
+      font-size: 12px; color: var(--label);
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .sessions-table tr:last-child td { border-bottom: none; }
+    .sessions-table tr:hover td { color: var(--text); }
+    .s-name-cell { color: var(--text); font-weight: 500; }
+    .s-stats-cell { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+    /* Split table */
+    .splits-table { width: 100%; border-collapse: collapse; }
+    .splits-table th {
+      font-size: 10px; font-weight: 600; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted);
+      padding: 0 6px 8px 0; text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .splits-table td {
+      padding: 9px 6px 9px 0;
+      font-size: 12px; color: var(--label);
+      border-bottom: 1px solid var(--border);
+    }
+    .splits-table tr:last-child td { border-bottom: none; }
+    .split-num { color: var(--muted); font-size: 10px; font-weight: 700; }
+    .split-hr  { color: var(--red); font-weight: 600; }
+    .split-elev { color: var(--muted); font-size: 11px; }
+
+    /* Best efforts table */
+    .efforts-table { width: 100%; border-collapse: collapse; }
+    .efforts-table td {
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px; vertical-align: middle;
+    }
+    .efforts-table tr:last-child td { border-bottom: none; }
+    .eff-label { color: var(--muted); font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .07em; }
+    .eff-val { font-size: 18px; font-weight: 700; color: var(--text);
+      font-variant-numeric: tabular-nums; }
+    .eff-date { font-size: 11px; color: var(--muted); text-align: right; }
+
+    /* Strava credential block  */
+    .strava-cred-block {
+      margin: 14px 0 12px; padding: 12px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+    .strava-cred-title {
+      font-size: 10px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .1em; margin-bottom: 10px;
+    }
+    .strava-cred-tokens { display: flex; flex-direction: column; gap: 6px; }
+    .cred-token {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px;
+    }
+    .cred-token code {
+      font-family: ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+      font-size: 11px; color: var(--label);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 3px; padding: 2px 6px;
+    }
+    .cred-pill {
+      font-size: 10px; font-weight: 600; padding: 2px 7px;
+      border-radius: 20px; border: 1px solid transparent; white-space: nowrap;
+    }
+    .cred-pill.absent { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-dim); }
+    .cred-pill.ok     { color: var(--teal);  border-color: var(--teal-dim);  background: var(--teal-dim); }
+    .strava-cred-hint { font-size: 11px; color: var(--muted); margin-top: 10px; }
+    .strava-actions   { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .strava-disabled-note { font-size: 12px; color: var(--muted); }
+
+    /* Act page wrapper */
+    .act-page { display: flex; flex-direction: column; gap: 16px; padding: 16px 24px 48px; }
+
+    /* Responsive helpers specific to this page */
+    @media (max-width: 1300px) { .pulse-row { grid-template-columns: repeat(3,1fr); } }
+    @media (max-width: 900px)  {
+      .pulse-row        { grid-template-columns: repeat(2,1fr); }
+      .act-sessions-row { grid-template-columns: 1fr; }
+      .act-charts-row   { grid-template-columns: 1fr; }
+      .act-bottom-row   { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px)  { .pulse-row { grid-template-columns: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <div class="brand-copy">
+        <p class="brand-eyebrow">MSML</p>
+        <h1 class="brand-title">Lifestyle Monitor</h1>
+      </div>
+    </div>
+
+    <div class="sidebar-profile">
+      <div class="sidebar-avatar" style="background:var(--teal-dim);color:var(--teal);font-size:12px;font-weight:700;">DC</div>
+      <div>
+        <p class="sidebar-profile-name">Coach D</p>
+        <p class="sidebar-profile-hint">Head coach</p>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-group">
+        <p class="nav-group-label">Overview</p>
+        <a href="/index.html" class="nav-item">Overview</a>
+      </div>
+      <div class="nav-divider"></div>
+      <div class="nav-group">
+        <p class="nav-group-label">Training</p>
+        <a href="/activity.html" class="nav-item active">Activity</a>
+      </div>
+      <div class="nav-divider"></div>
+      <div class="nav-group">
+        <p class="nav-group-label">Health</p>
+        <a href="/index.html" class="nav-item">Sleep</a>
+        <a href="/index.html" class="nav-item">Vitals</a>
+      </div>
+      <div class="nav-divider"></div>
+      <div class="nav-group">
+        <p class="nav-group-label">Body</p>
+        <a href="/index.html" class="nav-item">Nutrition</a>
+        <a href="/index.html" class="nav-item">Weight</a>
+      </div>
+      <div class="nav-divider"></div>
+      <div class="nav-group">
+        <p class="nav-group-label">Account</p>
+        <a href="/index.html" class="nav-item">Settings</a>
+        <a href="/index.html" class="nav-item">Share</a>
+        <a href="/bluetooth.html" class="nav-item nav-link">Devices ↗</a>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- ── Main ─────────────────────────────────────────────────────────────── -->
+  <main>
+
+    <!-- 0 · Top bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <p class="topbar-greeting">Good morning, Coach</p>
+        <h2 class="topbar-title">Activity</h2>
+        <p class="topbar-subtitle">Sessions · Pace · Load · Strava sync</p>
+      </div>
+      <div class="topbar-right">
+        <span class="goal-chip">Goal: Performance</span>
+        <span class="viewing-pill">
+          <span class="live-dot" aria-hidden="true"></span>
+          Viewing: Jordan C.
+        </span>
+      </div>
+    </header>
+
+    <!-- 1 · Team Board -->
+    <section class="team-board">
+      <div class="team-board-header">
+        <p class="section-eyebrow">Team Board</p>
+        <select class="athlete-switcher-wrap" aria-label="Switch athlete" style="padding:4px 8px;font-size:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);">
+          <option>Jordan C.</option>
+          <option>Maya R.</option>
+          <option>Alex T.</option>
+          <option>Sam K.</option>
+        </select>
+      </div>
+      <ul class="athlete-ranking">
+        <li>
+          <span class="rank-badge r1">1</span>
+          <span class="athlete-avatar-initials" style="background:var(--teal-dim);color:var(--teal);">JC</span>
+          <span class="athlete-name">Jordan C.</span>
+          <span class="athlete-steps">12,847 steps</span>
+          <span class="athlete-readiness">82%</span>
+        </li>
+        <li>
+          <span class="rank-badge">2</span>
+          <span class="athlete-avatar-initials">MR</span>
+          <span class="athlete-name">Maya R.</span>
+          <span class="athlete-steps">11,203 steps</span>
+          <span class="athlete-readiness" style="color:var(--teal);">74%</span>
+        </li>
+        <li>
+          <span class="rank-badge">3</span>
+          <span class="athlete-avatar-initials">AT</span>
+          <span class="athlete-name">Alex T.</span>
+          <span class="athlete-steps">9,456 steps</span>
+          <span class="athlete-readiness" style="color:var(--amber);">68%</span>
+        </li>
+        <li>
+          <span class="rank-badge">4</span>
+          <span class="athlete-avatar-initials">SK</span>
+          <span class="athlete-name">Sam K.</span>
+          <span class="athlete-steps">7,832 steps</span>
+          <span class="athlete-readiness" style="color:var(--amber);">61%</span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ── Page content ──────────────────────────────────────────────────── -->
+    <div class="act-page">
+
+      <!-- 2 · Training Pulse — 6 metric cards -->
+      <div class="pulse-row">
+        <article class="pulse-card">
+          <p class="pulse-label">Weekly Distance</p>
+          <strong class="pulse-value">42.8</strong>
+          <p class="pulse-unit">km &nbsp;·&nbsp; last 7 days</p>
+        </article>
+        <article class="pulse-card">
+          <p class="pulse-label">Time on Feet</p>
+          <strong class="pulse-value">5:24</strong>
+          <p class="pulse-unit">h:mm &nbsp;·&nbsp; moving time</p>
+        </article>
+        <article class="pulse-card">
+          <p class="pulse-label">Average Pace</p>
+          <strong class="pulse-value">5:08</strong>
+          <p class="pulse-unit">min/km &nbsp;·&nbsp; all runs</p>
+        </article>
+        <article class="pulse-card">
+          <p class="pulse-label">Longest Effort</p>
+          <strong class="pulse-value">18.4</strong>
+          <p class="pulse-unit">km &nbsp;·&nbsp; 7 Mar</p>
+        </article>
+        <article class="pulse-card">
+          <p class="pulse-label">Training Load</p>
+          <strong class="pulse-value">287</strong>
+          <p class="pulse-unit">suffer score &nbsp;·&nbsp; 7-day</p>
+        </article>
+        <article class="pulse-card">
+          <p class="pulse-label">VO₂ Max</p>
+          <strong class="pulse-value">52.4</strong>
+          <p class="pulse-unit">ml/kg/min &nbsp;·&nbsp; estimated</p>
+        </article>
+      </div>
+
+      <!-- 3 · Recent Sessions + Splits -->
+      <div class="act-sessions-row">
+
+        <!-- Sessions -->
+        <article class="card sessions-card">
+          <div class="sessions-header">
+            <p class="section-eyebrow">Recent Sessions</p>
+            <p class="card-meta">Last 7 runs</p>
+          </div>
+          <table class="sessions-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Session</th>
+                <th>Distance</th>
+                <th>Pace</th>
+                <th>Time</th>
+                <th>Load</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="s-date-cell" style="color:var(--muted);font-size:11px;white-space:nowrap;">13 Mar</td>
+                <td><span class="s-name-cell">Morning Run</span><br><span class="s-stats-cell">Easy aerobic</span></td>
+                <td style="white-space:nowrap;">12.2 km</td>
+                <td style="white-space:nowrap;">5:08 /km</td>
+                <td style="white-space:nowrap;">1h 02m</td>
+                <td><span class="load-badge high">High</span></td>
+              </tr>
+              <tr>
+                <td style="color:var(--muted);font-size:11px;white-space:nowrap;">11 Mar</td>
+                <td><span class="s-name-cell">Tempo Intervals</span><br><span class="s-stats-cell">Threshold work</span></td>
+                <td>8.4 km</td>
+                <td>4:42 /km</td>
+                <td>40m</td>
+                <td><span class="load-badge high">High</span></td>
+              </tr>
+              <tr>
+                <td style="color:var(--muted);font-size:11px;white-space:nowrap;">9 Mar</td>
+                <td><span class="s-name-cell">Recovery Jog</span><br><span class="s-stats-cell">Zone 1–2</span></td>
+                <td>6.1 km</td>
+                <td>5:52 /km</td>
+                <td>36m</td>
+                <td><span class="load-badge low">Low</span></td>
+              </tr>
+              <tr>
+                <td style="color:var(--muted);font-size:11px;white-space:nowrap;">7 Mar</td>
+                <td><span class="s-name-cell">Long Run</span><br><span class="s-stats-cell">Endurance base</span></td>
+                <td>18.4 km</td>
+                <td>5:24 /km</td>
+                <td>1h 39m</td>
+                <td><span class="load-badge high">High</span></td>
+              </tr>
+              <tr>
+                <td style="color:var(--muted);font-size:11px;white-space:nowrap;">5 Mar</td>
+                <td><span class="s-name-cell">Hill Repeats</span><br><span class="s-stats-cell">Strength &amp; power</span></td>
+                <td>5.8 km</td>
+                <td>4:55 /km</td>
+                <td>35m</td>
+                <td><span class="load-badge medium">Med</span></td>
+              </tr>
+              <tr>
+                <td style="color:var(--muted);font-size:11px;white-space:nowrap;">3 Mar</td>
+                <td><span class="s-name-cell">Easy Jog</span><br><span class="s-stats-cell">Zone 1</span></td>
+                <td>6.0 km</td>
+                <td>5:48 /km</td>
+                <td>35m</td>
+                <td><span class="load-badge low">Low</span></td>
+              </tr>
+              <tr>
+                <td style="color:var(--muted);font-size:11px;white-space:nowrap;">1 Mar</td>
+                <td><span class="s-name-cell">Threshold Run</span><br><span class="s-stats-cell">Lactate work</span></td>
+                <td>10.2 km</td>
+                <td>4:58 /km</td>
+                <td>51m</td>
+                <td><span class="load-badge medium">Med</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+
+        <!-- Splits — Long Run 7 Mar -->
+        <article class="card splits-card">
+          <div class="card-header split">
+            <div>
+              <p class="section-eyebrow">Splits</p>
+              <h3 class="card-title">Long Run · 7 Mar · 18.4 km</h3>
+            </div>
+            <button type="button" class="outline-btn secondary small">Export ↗</button>
+          </div>
+          <table class="splits-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Segment</th>
+                <th>Dist</th>
+                <th>Pace</th>
+                <th style="color:var(--red);">HR</th>
+                <th>Elev</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="split-num">1</td>
+                <td style="color:var(--text);">0 – 5 km</td>
+                <td>5.00 km</td>
+                <td>5:22</td>
+                <td class="split-hr">147</td>
+                <td class="split-elev">+28 m</td>
+              </tr>
+              <tr>
+                <td class="split-num">2</td>
+                <td style="color:var(--text);">5 – 10 km</td>
+                <td>5.00 km</td>
+                <td>5:18</td>
+                <td class="split-hr">152</td>
+                <td class="split-elev">+14 m</td>
+              </tr>
+              <tr>
+                <td class="split-num">3</td>
+                <td style="color:var(--text);">10 – 15 km</td>
+                <td>5.00 km</td>
+                <td>5:31</td>
+                <td class="split-hr">158</td>
+                <td class="split-elev">+22 m</td>
+              </tr>
+              <tr>
+                <td class="split-num">4</td>
+                <td style="color:var(--text);">15 – 18.4 km</td>
+                <td>3.40 km</td>
+                <td>5:29</td>
+                <td class="split-hr">163</td>
+                <td class="split-elev">+8 m</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:24px;">
+            <div>
+              <p class="field-label">Total climb</p>
+              <p style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px;">+72 m</p>
+            </div>
+            <div>
+              <p class="field-label">Avg HR</p>
+              <p style="font-size:15px;font-weight:600;color:var(--red);margin-top:2px;">155 bpm</p>
+            </div>
+            <div>
+              <p class="field-label">Avg Pace</p>
+              <p style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px;">5:24 /km</p>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <!-- 4 · Charts -->
+      <div class="act-charts-row">
+        <article class="card chart-card">
+          <div class="act-chart-header">
+            <p class="section-eyebrow">Pace vs Heart Rate</p>
+            <span class="chart-legend-dot teal"></span>
+          </div>
+          <canvas id="paceHrChart"></canvas>
+        </article>
+        <article class="card chart-card">
+          <div class="act-chart-header">
+            <p class="section-eyebrow">Load Trend · Last 7 Sessions</p>
+            <span class="chart-legend-dot amber"></span>
+          </div>
+          <canvas id="loadTrendChart"></canvas>
+        </article>
+      </div>
+
+      <!-- 5 · Best Efforts + Strava Sync -->
+      <div class="act-bottom-row">
+
+        <!-- Best Efforts -->
+        <article class="card efforts-card">
+          <p class="section-eyebrow">Best Efforts</p>
+          <table class="efforts-table">
+            <tbody>
+              <tr>
+                <td>
+                  <p class="eff-label">Fastest 5K</p>
+                  <p class="eff-val">24:18</p>
+                </td>
+                <td class="eff-date">5 Mar 2026</td>
+              </tr>
+              <tr>
+                <td>
+                  <p class="eff-label">Fastest 10K</p>
+                  <p class="eff-val">51:04</p>
+                </td>
+                <td class="eff-date">1 Mar 2026</td>
+              </tr>
+              <tr>
+                <td>
+                  <p class="eff-label">Longest Run</p>
+                  <p class="eff-val">18.4 km</p>
+                </td>
+                <td class="eff-date">7 Mar 2026</td>
+              </tr>
+              <tr>
+                <td>
+                  <p class="eff-label">Peak Weekly Load</p>
+                  <p class="eff-val">312 pts</p>
+                </td>
+                <td class="eff-date">week of 7 Mar</td>
+              </tr>
+              <tr>
+                <td>
+                  <p class="eff-label">Best Average Pace (10K+)</p>
+                  <p class="eff-val">4:42 /km</p>
+                </td>
+                <td class="eff-date">11 Mar 2026</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+
+        <!-- Strava Sync -->
+        <article class="card strava-card">
+          <div class="card-header split">
+            <div>
+              <p class="section-eyebrow">Strava Sync</p>
+              <h3 class="card-title">Account Link</h3>
+            </div>
+            <span class="status-chip">Not connected</span>
+          </div>
+          <p class="field-hint">Connect Strava to pull Apple Watch / Garmin run data directly into this dashboard.</p>
+
+          <div class="strava-cred-block">
+            <p class="strava-cred-title">Missing credentials</p>
+            <div class="strava-cred-tokens">
+              <span class="cred-token">
+                <code>STRAVA_CLIENT_ID</code>
+                <span class="cred-pill absent">not set</span>
+              </span>
+              <span class="cred-token">
+                <code>STRAVA_CLIENT_SECRET</code>
+                <span class="cred-pill absent">not set</span>
+              </span>
+              <span class="cred-token">
+                <code>STRAVA_REDIRECT_URI</code>
+                <span class="cred-pill absent">not set</span>
+              </span>
+            </div>
+            <p class="strava-cred-hint">Add these keys in Settings → Strava connection to enable OAuth.</p>
+          </div>
+
+          <div class="strava-actions">
+            <button type="button" class="outline-btn secondary" disabled style="opacity:.45;cursor:not-allowed;">Connect Strava</button>
+          </div>
+          <p class="strava-disabled-note" style="margin-top:10px;">Credentials required before OAuth can be initiated.</p>
+        </article>
+      </div>
+
+    </div><!-- /act-page -->
+  </main>
+</div><!-- /app-shell -->
+
+<script>
+window.addEventListener('load', function () {
+  if (typeof Chart === 'undefined') return;
+
+  var TEAL  = '#2dd4bf';
+  var AMBER = '#f59e0b';
+  var GRID  = '#1a2535';
+  var TICK  = '#64748b';
+  var RED   = '#ef4444';
+  var FONT  = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+
+  Chart.defaults.font.family = FONT;
+  Chart.defaults.color = TICK;
+
+  var baseScale = {
+    grid: { color: GRID, drawBorder: false },
+    ticks: { color: TICK, font: { size: 11 } }
+  };
+
+  /* ─── Pace vs Heart Rate scatter ─── */
+  new Chart(document.getElementById('paceHrChart'), {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'Session data',
+        /* x = heart rate bpm, y = pace min/km (lower = faster) */
+        data: [
+          {x:138,y:5.97},{x:142,y:5.83},{x:145,y:5.68},{x:148,y:5.55},
+          {x:150,y:5.47},{x:153,y:5.30},{x:156,y:5.18},{x:158,y:5.12},
+          {x:161,y:4.98},{x:163,y:4.92},{x:165,y:4.83},{x:167,y:4.75},
+          {x:169,y:4.70},{x:171,y:4.63},{x:173,y:4.55},{x:175,y:4.48},
+          {x:152,y:5.40},{x:160,y:5.03},{x:168,y:4.77},{x:172,y:4.58}
+        ],
+        backgroundColor: TEAL + 'bb',
+        borderColor: TEAL,
+        borderWidth: 0,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        pointBorderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              var pace = ctx.parsed.y;
+              var min  = Math.floor(pace);
+              var sec  = Math.round((pace - min) * 60);
+              return ctx.parsed.x + ' bpm  ·  ' + min + ':' + (sec < 10 ? '0' : '') + sec + ' /km';
+            }
+          }
+        }
+      },
+      scales: {
+        x: Object.assign({}, baseScale, {
+          title: { display: true, text: 'Heart Rate (bpm)', color: TICK, font: { size: 11 } }
+        }),
+        y: Object.assign({}, baseScale, {
+          reverse: true,
+          title: { display: true, text: 'Pace (min/km)', color: TICK, font: { size: 11 } },
+          ticks: {
+            color: TICK, font: { size: 11 },
+            callback: function(v) {
+              var min = Math.floor(v);
+              var sec = Math.round((v - min) * 60);
+              return min + ':' + (sec < 10 ? '0' : '') + sec;
+            }
+          }
+        })
+      }
+    }
+  });
+
+  /* ─── Load Trend bar ─── */
+  /* Sessions in ascending date order: 1 Mar → 13 Mar */
+  var sessions = ['1 Mar','3 Mar','5 Mar','7 Mar','9 Mar','11 Mar','13 Mar'];
+  var loads    = [92, 35, 78, 118, 28, 95, 88];
+  var colours  = loads.map(function(v) {
+    if (v >= 100) return TEAL   + 'dd';   /* high  = teal */
+    if (v >= 60)  return AMBER  + 'cc';   /* med   = amber */
+    return '#64748b55';                   /* low   = muted */
+  });
+
+  new Chart(document.getElementById('loadTrendChart'), {
+    type: 'bar',
+    data: {
+      labels: sessions,
+      datasets: [{
+        label: 'Training Load',
+        data: loads,
+        backgroundColor: colours,
+        borderColor: colours.map(function(c){ return c.slice(0,7); }),
+        borderWidth: 1,
+        borderRadius: 2,
+        borderSkipped: false
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              var v = ctx.parsed.y;
+              var tier = v >= 100 ? 'High' : v >= 60 ? 'Med' : 'Low';
+              return ctx.parsed.y + ' pts  ·  ' + tier;
+            }
+          }
+        }
+      },
+      scales: {
+        x: baseScale,
+        y: Object.assign({}, baseScale, {
+          beginAtZero: true,
+          title: { display: true, text: 'Suffer score', color: TICK, font: { size: 11 } }
+        })
+      }
+    }
+  });
+});
+</script>
+</body>
+</html>
