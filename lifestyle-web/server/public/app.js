@@ -2812,6 +2812,14 @@ function hideChartMessage(canvasId) {
   return { canvas, container };
 }
 
+function setChartCardTitle(canvasId, title) {
+  const canvas = document.getElementById(canvasId);
+  const titleEl = canvas?.closest('.chart-card')?.querySelector('.section-eyebrow');
+  if (titleEl && typeof title === 'string' && title.trim()) {
+    titleEl.textContent = title;
+  }
+}
+
 let pendingChartResizeFrame = null;
 function resizeAllCharts() {
   if (!state || !state.charts) {
@@ -3295,23 +3303,21 @@ function renderNutritionTrendChart(days = []) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const sorted = getChronologicalTrend(days);
-  if (!sorted.length) {
-    state.charts.nutritionTrend?.destroy();
-    state.charts.nutritionTrend = null;
-    showChartMessage(canvasId, 'Log intake to unlock trend insights.');
-    return;
-  }
+  const DEMO_DAYS = ['Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13','Mar 14'];
+  const usingDemo = !sorted.length;
 
-  const labels = sorted.map((day) => formatDate(day.date));
-  const actualCalories = sorted.map((day) => Number(day.calories) || 0);
-  const targetCalories = sorted.map((day) =>
-    Number.isFinite(day?.targetCalories) ? Number(day.targetCalories) : null
-  );
+  const labels = usingDemo ? DEMO_DAYS : sorted.map((day) => formatDate(day.date));
+  const actualCalories = usingDemo
+    ? [1850, 2100, 1920, 2250, 1780, 2050, 1980]
+    : sorted.map((day) => Number(day.calories) || 0);
+  const targetCalories = usingDemo
+    ? [2000, 2000, 2000, 2000, 2000, 2000, 2000]
+    : sorted.map((day) => (Number.isFinite(day?.targetCalories) ? Number(day.targetCalories) : null));
   const hasTargetData = targetCalories.some((value) => Number.isFinite(value));
 
   const datasets = [
     {
-      label: 'Calories',
+      label: usingDemo ? 'Calories (example)' : 'Calories',
       data: actualCalories,
       borderColor: '#4df5ff',
       backgroundColor: 'rgba(77, 245, 255, 0.2)',
@@ -3322,7 +3328,7 @@ function renderNutritionTrendChart(days = []) {
   ];
   if (hasTargetData) {
     datasets.push({
-      label: 'Target',
+      label: usingDemo ? 'Target (example)' : 'Target',
       data: targetCalories,
       borderColor: '#a95dff',
       borderDash: [6, 4],
@@ -3338,10 +3344,7 @@ function renderNutritionTrendChart(days = []) {
   state.charts.nutritionTrend?.destroy();
   state.charts.nutritionTrend = createChart(ctx, {
     type: 'line',
-    data: {
-      labels,
-      datasets,
-    },
+    data: { labels, datasets },
     options: {
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
@@ -3368,10 +3371,30 @@ function renderMacroHistoryChart(days = [], goals = null) {
       Number(day?.fiber) > 0 ||
       Number(day?.calories) > 0
   );
-  if (!sorted.length || !hasMacros) {
+  const DEMO_MACRO_DAYS = ['Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13','Mar 14'];
+  const usingMacroDemo = !sorted.length || !hasMacros;
+  if (usingMacroDemo) {
+    const demoCtx = canvas.getContext('2d');
     state.charts.nutritionMacroTrend?.destroy();
-    state.charts.nutritionMacroTrend = null;
-    showChartMessage(canvasId, 'Need at least one day of macro data.');
+    state.charts.nutritionMacroTrend = createChart(demoCtx, {
+      type: 'line',
+      data: {
+        labels: DEMO_MACRO_DAYS,
+        datasets: [
+          { label: 'Protein (example)', data: [145,160,138,172,128,155,148], borderColor: '#27d2fe', backgroundColor: 'rgba(39,210,254,0.1)', tension: 0.35, fill: false, pointRadius: 0 },
+          { label: 'Carbs (example)',   data: [220,260,235,285,198,245,238], borderColor: '#5f6bff', backgroundColor: 'rgba(95,107,255,0.1)',  tension: 0.35, fill: false, pointRadius: 0 },
+          { label: 'Fats (example)',    data: [68,78,72,85,62,74,71],       borderColor: '#a95dff', backgroundColor: 'rgba(169,93,255,0.1)',   tension: 0.35, fill: false, pointRadius: 0 },
+          { label: 'Fiber (example)',   data: [24,28,22,31,19,26,25],       borderColor: '#5fd38d', backgroundColor: 'rgba(95,211,141,0.1)',   tension: 0.35, fill: false, pointRadius: 0 },
+        ],
+      },
+      options: {
+        plugins: { legend: { labels: { color: '#dfe6ff' } } },
+        scales: {
+          x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        },
+      },
+    });
     return;
   }
 
@@ -3426,6 +3449,108 @@ function renderMacroHistoryChart(days = [], goals = null) {
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
+      scales: {
+        x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      },
+    },
+  });
+}
+
+// ── Today's macro split doughnut ─────────────────────────────────────────
+function renderMacroDonutChart(totals = null) {
+  const canvasId = 'nutritionMacroDonutChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const protein = Number(totals?.protein) || 0;
+  const carbs   = Number(totals?.carbs)   || 0;
+  const fats    = Number(totals?.fats)    || 0;
+  const total   = protein + carbs + fats;
+  const usingDonutDemo = !total;
+  const dProtein = usingDonutDemo ? 148 : protein;
+  const dCarbs   = usingDonutDemo ? 238 : carbs;
+  const dFats    = usingDonutDemo ? 71  : fats;
+  const dTotal   = dProtein + dCarbs + dFats || 1;
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.nutritionMacroDonut?.destroy();
+  state.charts.nutritionMacroDonut = createChart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: [
+        `Protein — ${dProtein}g (${Math.round((dProtein / dTotal) * 100)}%)${usingDonutDemo ? ' *' : ''}`,
+        `Carbs — ${dCarbs}g (${Math.round((dCarbs / dTotal) * 100)}%)${usingDonutDemo ? ' *' : ''}`,
+        `Fats — ${dFats}g (${Math.round((dFats / dTotal) * 100)}%)${usingDonutDemo ? ' *' : ''}`,
+      ],
+      datasets: [{
+        data: [dProtein, dCarbs, dFats],
+        backgroundColor: ['rgba(39,210,254,0.82)', 'rgba(95,107,255,0.82)', 'rgba(169,93,255,0.82)'],
+        borderColor:     ['#27d2fe', '#5f6bff', '#a95dff'],
+        borderWidth: 2,
+        hoverOffset: 8,
+      }],
+    },
+    options: {
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: '#9bb0d6', padding: 14, font: { size: 11, weight: '600' } },
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${ctx.raw}g  (${Math.round((ctx.raw / total) * 100)}%)`,
+          },
+        },
+      },
+      responsive: true,
+      maintainAspectRatio: true,
+    },
+  });
+}
+
+// ── Daily calorie surplus / deficit bar chart ─────────────────────────────
+function renderSurplusChart(days = []) {
+  const canvasId = 'nutritionSurplusChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const sorted = getChronologicalTrend(days).slice(-14);
+  const withTarget = sorted.filter(
+    (d) => Number.isFinite(Number(d?.targetCalories)) && Number(d.targetCalories) > 0
+  );
+  const usingDeficitDemo = !withTarget.length;
+  const labels    = usingDeficitDemo ? ['Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13','Mar 14'] : withTarget.map((d) => formatDate(d.date));
+  const surpluses = usingDeficitDemo ? [-150, 100, -80, 250, -220, 50, -20] : withTarget.map((d) => Math.round(Number(d.calories) - Number(d.targetCalories)));
+  const bgColors   = surpluses.map((v) => v >= 0 ? 'rgba(255,107,129,0.75)' : 'rgba(45,212,191,0.75)');
+  const bdColors   = surpluses.map((v) => v >= 0 ? '#ff6b81' : '#2dd4bf');
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.nutritionSurplus?.destroy();
+  state.charts.nutritionSurplus = createChart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'kcal vs target',
+        data: surpluses,
+        backgroundColor: bgColors,
+        borderColor:     bdColors,
+        borderWidth: 1,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.raw;
+              return v >= 0 ? ` +${v} kcal surplus` : ` ${v} kcal deficit`;
+            },
+          },
+        },
       },
       scales: {
         x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
@@ -3635,9 +3760,12 @@ function renderNutritionDashboard(data = {}) {
   renderNutritionTrendChart(data.monthTrend);
   renderMacroHistoryChart(data.monthTrend, data.goals);
   renderNutritionInsights(data);
+  renderMacroDonutChart(data.dailyTotals);
+  renderSurplusChart(data.monthTrend);
   syncMacroTargetFields(data.goals);
   updateNutritionPreview();
   rerenderOverviewFromState();
+  queueChartResize();
 }
 
 function renderWeightDashboard(data = {}) {
@@ -8144,7 +8272,212 @@ function renderVitalsDashboard(vitals = state.vitals) {
   }
 
   renderVitalsHistory(timeline);
-  renderVitalsChart(timeline);
+  renderVitalsHrvChart(timeline);
+  renderVitalsRestingHrChart(timeline);
+  renderVitalsGlucoseChart(timeline);
+}
+
+function renderVitalsHrvChart(timeline = []) {
+  const canvasId = 'vitalsHrvChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const chronological = sortVitalsTimeline(timeline).filter((entry) =>
+    Number.isFinite(Number(entry?.hrvScore))
+  );
+  if (!chronological.length) {
+    state.charts.vitalsHrv?.destroy();
+    state.charts.vitalsHrv = null;
+    showChartMessage(canvasId, 'Sync HRV readings to reveal recovery trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.vitalsHrv?.destroy();
+  state.charts.vitalsHrv = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: chronological.map((entry) => formatDate(entry.date)),
+      datasets: [
+        {
+          label: 'HRV (ms)',
+          data: chronological.map((entry) => Number(entry.hrvScore)),
+          borderColor: '#43d9c9',
+          backgroundColor: 'rgba(67, 217, 201, 0.12)',
+          borderWidth: 2,
+          tension: 0.35,
+          fill: true,
+          pointRadius: 3,
+          pointBackgroundColor: '#43d9c9',
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) {
+              return `${value} ms`;
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+function renderVitalsRestingHrChart(timeline = []) {
+  const canvasId = 'vitalsHrChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const chronological = sortVitalsTimeline(timeline).filter((entry) =>
+    Number.isFinite(Number(entry?.restingHr))
+  );
+  if (!chronological.length) {
+    state.charts.vitalsRestingHr?.destroy();
+    state.charts.vitalsRestingHr = null;
+    showChartMessage(canvasId, 'Sync heart rate readings to see resting HR trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  const averageHr =
+    chronological.reduce((sum, entry) => sum + Number(entry.restingHr), 0) / chronological.length;
+  state.charts.vitalsRestingHr?.destroy();
+  state.charts.vitalsRestingHr = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: chronological.map((entry) => formatDate(entry.date)),
+      datasets: [
+        {
+          label: 'Resting HR',
+          data: chronological.map((entry) => Number(entry.restingHr)),
+          borderColor: '#f87171',
+          backgroundColor: 'rgba(248, 113, 113, 0.14)',
+          borderWidth: 2,
+          tension: 0.35,
+          fill: false,
+          pointRadius: 3,
+          pointBackgroundColor: '#f87171',
+        },
+        {
+          label: 'Average',
+          data: Array(chronological.length).fill(Math.round(averageHr * 10) / 10),
+          borderColor: 'rgba(255,255,255,0.35)',
+          borderWidth: 1,
+          borderDash: [5, 4],
+          pointRadius: 0,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) {
+              return `${value} bpm`;
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+function renderVitalsGlucoseChart(timeline = []) {
+  const canvasId = 'vitalsGlucoseChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const chronological = sortVitalsTimeline(timeline).filter((entry) =>
+    Number.isFinite(Number(entry?.glucose))
+  );
+  if (!chronological.length) {
+    state.charts.vitalsGlucose?.destroy();
+    state.charts.vitalsGlucose = null;
+    showChartMessage(canvasId, 'Sync glucose readings to reveal blood sugar trend.');
+    return;
+  }
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.vitalsGlucose?.destroy();
+  state.charts.vitalsGlucose = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: chronological.map((entry) => formatDate(entry.date)),
+      datasets: [
+        {
+          label: 'Glucose',
+          data: chronological.map((entry) => Number(entry.glucose)),
+          borderColor: '#a78bfa',
+          backgroundColor: 'rgba(167, 139, 250, 0.14)',
+          borderWidth: 2,
+          tension: 0.35,
+          fill: false,
+          pointRadius: 3,
+          pointBackgroundColor: '#a78bfa',
+        },
+        {
+          label: 'Reference',
+          data: Array(chronological.length).fill(100),
+          borderColor: 'rgba(255,255,255,0.35)',
+          borderWidth: 1,
+          borderDash: [5, 4],
+          pointRadius: 0,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) {
+              return `${value} mg/dL`;
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
 }
 
 function renderVitalsHistory(timeline = []) {
@@ -9130,12 +9463,12 @@ function renderActivityBestEfforts(efforts = []) {
 }
 
 function renderActivityCharts(charts = {}) {
-  renderActivityMileageChart(charts.mileageTrend || []);
-  renderActivityPaceChart(charts.heartRatePace || []);
-  renderActivityLoadChart(state.activity.sessions);
+  const mileageTrend = charts.mileageTrend || [];
+  renderActivityPaceChart(charts.heartRatePace || [], mileageTrend);
+  renderActivityLoadChart(state.activity.sessions, mileageTrend);
 }
 
-function renderActivityLoadChart(sessions = []) {
+function renderActivityLoadChart(sessions = [], mileageTrend = []) {
   const canvasId = 'activityLoadChart';
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
@@ -9147,11 +9480,62 @@ function renderActivityLoadChart(sessions = []) {
         new Date(a?.startTime || 0).getTime() - new Date(b?.startTime || 0).getTime()
     );
   if (!withLoad.length) {
+    const durationTrend = (Array.isArray(mileageTrend) ? mileageTrend : [])
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(a?.startTime || 0).getTime() - new Date(b?.startTime || 0).getTime()
+      )
+      .filter((entry) => Number.isFinite(Number(entry?.movingMinutes)) && Number(entry.movingMinutes) > 0);
+    if (!durationTrend.length) {
+      setChartCardTitle(canvasId, 'Load Trend');
+      state.charts.activityLoad?.destroy();
+      state.charts.activityLoad = null;
+      showChartMessage(canvasId, 'Complete sessions to see training load trend.');
+      return;
+    }
+    setChartCardTitle(canvasId, 'Duration Trend');
+    const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+    const ctx = (activeCanvas || canvas).getContext('2d');
     state.charts.activityLoad?.destroy();
-    state.charts.activityLoad = null;
-    showChartMessage(canvasId, 'Complete sessions to see training load trend.');
+    state.charts.activityLoad = createChart(ctx, {
+      type: 'bar',
+      data: {
+        labels: durationTrend.map((entry) => formatDate(entry.startTime)),
+        datasets: [
+          {
+            label: 'Duration (min)',
+            data: durationTrend.map((entry) => Math.round(Number(entry.movingMinutes))),
+            backgroundColor: 'rgba(255, 154, 82, 0.45)',
+            borderColor: '#ff9a52',
+            borderWidth: 1,
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        plugins: {
+          legend: { display: false },
+          smartViewport: getSmartViewportOptions({ maxVisiblePoints: 20 }),
+        },
+        scales: {
+          x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          y: {
+            min: 0,
+            ticks: {
+              color: '#9bb0d6',
+              callback(value) {
+                return `${value} min`;
+              },
+            },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+        },
+      },
+    });
     return;
   }
+  setChartCardTitle(canvasId, 'Load Trend');
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   state.charts.activityLoad?.destroy();
@@ -9241,24 +9625,79 @@ function renderActivityMileageChart(trend = []) {
   });
 }
 
-function renderActivityPaceChart(points = []) {
-  const canvas = document.getElementById('activityPaceChart');
+function renderActivityPaceChart(points = [], mileageTrend = []) {
+  const canvasId = 'activityPaceChart';
+  const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   if (!points.length) {
+    const distanceTrend = (Array.isArray(mileageTrend) ? mileageTrend : [])
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(a?.startTime || 0).getTime() - new Date(b?.startTime || 0).getTime()
+      )
+      .filter((entry) => Number.isFinite(Number(entry?.distanceKm)) && Number(entry.distanceKm) > 0);
+    if (!distanceTrend.length) {
+      setChartCardTitle(canvasId, 'Pace vs Heart Rate');
+      state.charts.activityPace?.destroy();
+      state.charts.activityPace = null;
+      showChartMessage(canvasId, 'Add a few runs to compare pace vs HR.');
+      return;
+    }
+    setChartCardTitle(canvasId, 'Mileage Trend');
+    const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+    const ctx = (activeCanvas || canvas).getContext('2d');
     state.charts.activityPace?.destroy();
-    state.charts.activityPace = null;
-    showChartMessage('activityPaceChart', 'Add a few runs to compare pace vs HR.');
+    state.charts.activityPace = createChart(ctx, {
+      type: 'line',
+      data: {
+        labels: distanceTrend.map((entry) => formatDate(entry.startTime)),
+        datasets: [
+          {
+            label: 'Distance (km)',
+            data: distanceTrend.map((entry) => Number(entry.distanceKm)),
+            borderColor: '#27d2fe',
+            backgroundColor: 'rgba(39, 210, 254, 0.18)',
+            borderWidth: 2,
+            tension: 0.35,
+            fill: true,
+            pointRadius: 3,
+          },
+        ],
+      },
+      options: {
+        plugins: {
+          legend: { display: false },
+          smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+        },
+        scales: {
+          x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          y: {
+            min: 0,
+            ticks: {
+              color: '#9bb0d6',
+              callback(value) {
+                return `${value} km`;
+              },
+            },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+        },
+      },
+    });
     return;
   }
-  const { canvas: activeCanvas } = hideChartMessage('activityPaceChart') || {};
+  setChartCardTitle(canvasId, 'Pace vs Heart Rate');
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   const dataset = points
     .filter((point) => Number.isFinite(point.paceSeconds) && Number.isFinite(point.heartRate))
     .map((point) => ({ x: point.paceSeconds, y: point.heartRate, label: point.label }));
   if (!dataset.length) {
+    setChartCardTitle(canvasId, 'Pace vs Heart Rate');
     state.charts.activityPace?.destroy();
     state.charts.activityPace = null;
-    showChartMessage('activityPaceChart', 'Add one more run with HR data to plot pace.');
+    showChartMessage(canvasId, 'Add one more run with HR data to plot pace.');
     return;
   }
   state.charts.activityPace?.destroy();

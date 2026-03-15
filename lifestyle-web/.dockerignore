@@ -5,6 +5,10 @@ server/.env.local
 server/lifestyle-dashboard@1.0.0
 server/noip-duc_3.3.0
 server/noip-duc_3.3.0.tar.gz
+server/NUT_model/.venv
+__pycache__
+*.pyc
+*.pyo
 database/storage
 npm-debug.log
 .DS_Store

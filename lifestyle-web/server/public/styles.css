@@ -1,20 +1,27 @@
 /* ─── Reset ──────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; zoom: 1.25; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: 19px;
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
   min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 img, canvas { display: block; max-width: 100%; }
 button { cursor: pointer; font: inherit; border: none; background: none; }
 a { color: inherit; text-decoration: none; }
 ul { list-style: none; }
 input, select, textarea { font: inherit; }
-h1, h2, h3, h4 { font-weight: 600; line-height: 1.2; }
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+}
 
 /* ─── Design tokens ──────────────────────────────────────────────────────── */
 :root {
@@ -35,9 +42,11 @@ h1, h2, h3, h4 { font-weight: 600; line-height: 1.2; }
   --red:         #ef4444;
   --red-dim:     rgba(239, 68, 68, 0.12);
   --green:       #22c55e;
-  --sb-width:    220px;
-  --radius:      4px;
-  --gap:         16px;
+  --sb-width:    260px;
+  --radius:      8px;
+  --gap:         24px;
+  --font-sans:   'Manrope', 'Segoe UI', sans-serif;
+  --font-display:'Space Grotesk', 'Avenir Next', 'Segoe UI', sans-serif;
 }
 
 /* ─── Utilities ──────────────────────────────────────────────────────────── */
@@ -69,26 +78,29 @@ body:not(.app-loading) .startup-loading-screen { display: none; }
 .sidebar {
   position: fixed; top: 0; left: 0; bottom: 0; z-index: 200;
   width: var(--sb-width);
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #0a1628 0%, #080f1c 100%);
+  border-right: 1px solid rgba(45,212,191,0.1);
   display: flex; flex-direction: column;
   overflow: hidden;
+  box-shadow: 4px 0 24px rgba(0,0,0,0.4);
 }
 
 /* Brand */
 .brand {
   display: flex; align-items: center; gap: 10px;
   padding: 18px 16px 14px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(45,212,191,0.1);
   flex-shrink: 0;
 }
 .brand-icon {
-  flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%;
-  background: #2d1b69; border: 1px solid #4c2d9c;
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+  background: linear-gradient(135deg, #1a4a8a 0%, #6e33d4 100%);
+  border: 1px solid rgba(110,51,212,0.5);
+  box-shadow: 0 0 12px rgba(110,51,212,0.4);
   display: block;
 }
-.brand-name { font-size: 13px; font-weight: 700; color: var(--text); letter-spacing: .01em; }
-.brand-sub { font-size: 10px; color: var(--muted); margin-top: 2px; line-height: 1.3; }
+.brand-name { font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: .01em; }
+.brand-sub { font-size: 10px; color: var(--teal); margin-top: 2px; line-height: 1.3; opacity: 0.8; }
 
 /* Coach card */
 .sidebar-profile {
@@ -137,17 +149,18 @@ body:not(.app-loading) .startup-loading-screen { display: none; }
 }
 .nav-item {
   display: flex; align-items: center; gap: 8px;
-  width: 100%; padding: 7px 16px; text-align: left;
-  font-size: 13px; color: #6a9ab8;
-  transition: color .12s, background .12s;
+  width: 100%; padding: 8px 16px; text-align: left;
+  font-size: 13px; font-weight: 500; color: #7a9bb8;
+  transition: color .15s, background .15s;
+  border-radius: 0; border-left: 2px solid transparent;
 }
 .nav-item svg { flex-shrink: 0; }
-.nav-item:hover { color: var(--text); background: var(--surface-2); }
+.nav-item:hover { color: var(--text); background: rgba(45,212,191,0.05); border-left-color: rgba(45,212,191,0.3); }
 .nav-item.active {
-  color: #00c49a;
-  background: #0c2820;
-  border-left: 2px solid #00c49a;
-  padding-left: 14px;
+  color: var(--teal);
+  background: linear-gradient(90deg, rgba(45,212,191,0.12) 0%, transparent 100%);
+  border-left: 2px solid var(--teal);
+  font-weight: 600;
 }
 .nav-link { display: flex; }
 .nav-divider { height: 1px; background: var(--border); margin: 2px 16px; }
@@ -278,10 +291,12 @@ form button[type="submit"]:hover { opacity: .88; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   gap: 16px; flex-wrap: wrap;
-  padding: 20px 24px 14px;
-  border-bottom: 1px solid var(--border);
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid rgba(45,212,191,0.08);
   position: sticky; top: 0; z-index: 100;
-  background: var(--bg);
+  background: rgba(8,15,24,0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .topbar-left { display: flex; flex-direction: column; gap: 2px; }
 .topbar-greeting {
@@ -292,15 +307,16 @@ form button[type="submit"]:hover { opacity: .88; }
 .topbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .goal-chip {
-  padding: 4px 10px; font-size: 11px; font-weight: 500;
-  border: 1px solid var(--border); border-radius: 20px;
-  color: var(--label); background: var(--surface);
+  padding: 5px 12px; font-size: 11px; font-weight: 600;
+  border: 1px solid rgba(245,158,11,0.3); border-radius: 20px;
+  color: var(--amber); background: rgba(245,158,11,0.08);
+  letter-spacing: .02em;
 }
 .viewing-pill {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 10px; font-size: 11px; font-weight: 500;
-  border: 1px solid var(--border); border-radius: 20px;
-  color: var(--label); background: var(--surface);
+  padding: 5px 12px; font-size: 11px; font-weight: 600;
+  border: 1px solid rgba(45,212,191,0.3); border-radius: 20px;
+  color: var(--teal); background: rgba(45,212,191,0.08);
 }
 .live-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--teal);
@@ -311,8 +327,10 @@ form button[type="submit"]:hover { opacity: .88; }
 /* ─── Team Board ─────────────────────────────────────────────────────────── */
 .team-board {
   margin: 16px 24px;
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface); overflow: hidden;
+  border: 1px solid var(--border-2); border-radius: 12px;
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
 }
 .team-board-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -361,8 +379,15 @@ form button[type="submit"]:hover { opacity: .88; }
 
 /* ─── Common card ────────────────────────────────────────────────────────── */
 .card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px;
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-2);
+  border-radius: 12px; padding: 18px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.2);
+  transition: box-shadow .2s, border-color .2s;
+}
+.card:hover {
+  box-shadow: 0 4px 24px rgba(0,0,0,0.45), 0 1px 3px rgba(0,0,0,0.2);
+  border-color: #2a3a52;
 }
 .card-header { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
 .card-header.split { flex-direction: row; align-items: flex-start; justify-content: space-between; }
@@ -380,10 +405,14 @@ form button[type="submit"]:hover { opacity: .88; }
   display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap);
 }
 .metric-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-top-width: 2px; border-radius: var(--radius); padding: 16px;
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-2);
+  border-top-width: 2px; border-radius: 12px; padding: 16px;
   display: flex; flex-direction: column; gap: 3px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  transition: box-shadow .2s, transform .15s;
 }
+.metric-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4); transform: translateY(-1px); }
 .metric-label {
   font-size: 10px; font-weight: 600; letter-spacing: .1em;
   text-transform: uppercase; color: var(--muted);
@@ -394,34 +423,39 @@ form button[type="submit"]:hover { opacity: .88; }
 }
 .metric-status { font-size: 12px; margin-top: 2px; margin-bottom: 8px; }
 .metric-bar {
-  height: 2px; background: var(--border-2);
-  border-radius: 1px; overflow: hidden; margin-top: auto;
+  height: 4px; background: var(--border-2);
+  border-radius: 2px; overflow: hidden; margin-top: auto;
 }
-.metric-bar-fill { height: 100%; border-radius: 1px; width: 0; transition: width .4s ease; }
+.metric-bar-fill { height: 100%; border-radius: 2px; width: 0; transition: width .4s ease; }
 
 .metric-teal { border-top-color: var(--teal); }
 .metric-teal .metric-bar-fill { background: var(--teal); }
 .metric-teal .metric-status { color: var(--teal); }
+.metric-teal:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(45,212,191,0.1); }
 
 .metric-amber { border-top-color: var(--amber); }
 .metric-amber .metric-bar-fill { background: var(--amber); }
 .metric-amber .metric-status { color: var(--amber); }
+.metric-amber:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(245,158,11,0.1); }
 
 .metric-blue { border-top-color: var(--blue); }
 .metric-blue .metric-bar-fill { background: var(--blue); }
 .metric-blue .metric-status { color: var(--blue); }
+.metric-blue:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(96,165,250,0.1); }
 
 .sync-copy { font-size: 12px; color: var(--muted); }
 
 /* ─── Two-column row ─────────────────────────────────────────────────────── */
 .two-col-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
 .section-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px;
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-2);
+  border-radius: 12px; padding: 18px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
 }
 
 /* Goal progress list */
-.goal-progress-list { display: flex; flex-direction: column; gap: 14px; }
+.goal-progress-list { display: flex; flex-direction: column; gap: 10px; }
 .goal-progress-list li { display: flex; flex-direction: column; gap: 6px; }
 .goal-row {
   display: flex; justify-content: space-between;
@@ -429,24 +463,83 @@ form button[type="submit"]:hover { opacity: .88; }
 }
 .goal-row .goal-pct { font-weight: 500; }
 .goal-bar {
-  height: 2px; background: var(--border-2);
-  border-radius: 1px; overflow: hidden;
+  height: 5px; background: var(--border-2);
+  border-radius: 3px; overflow: hidden;
 }
 .goal-bar-fill { height: 100%; border-radius: 1px; transition: width .4s ease; }
 .goal-bar-fill         { background: var(--teal); }
 .goal-bar-fill.under   { background: var(--amber); }
 .goal-bar-fill.met     { background: var(--teal); }
 
+/* JS-generated goal progress items */
+.goal-progress-item {
+  background: rgba(8,15,24,0.4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--teal);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.goal-progress-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.goal-progress-item .label {
+  font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px;
+}
+.goal-progress-item .muted { color: var(--muted); }
+.goal-progress-item .small-text { font-size: 11px; }
+.goal-progress-value {
+  text-align: right; flex-shrink: 0;
+}
+.goal-progress-value strong {
+  display: block; font-size: 14px; font-weight: 700; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.goal-progress-value span {
+  font-size: 10px; color: var(--muted); font-weight: 500; letter-spacing: .03em;
+}
+.goal-progress-bar {
+  height: 5px; background: var(--border-2); border-radius: 3px; overflow: hidden;
+}
+.goal-progress-bar span {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--teal), #60efdf);
+  transition: width .5s ease;
+}
+
 /* Coverage grid */
 .coverage-hint { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
-.coverage-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; }
+.coverage-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
 .coverage-day { display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .coverage-day-label { font-size: 10px; color: var(--muted); }
 .coverage-bar-wrap { width: 100%; height: 40px; display: flex; align-items: flex-end; }
-.coverage-bar {
-  width: 100%; background: var(--border-2);
-  border-radius: 2px; overflow: hidden; position: relative;
+
+/* JS-generated coverage rows */
+.coverage-row {
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(8,15,24,0.4);
+  border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px;
 }
+.coverage-row > div:first-child { flex: 1; min-width: 0; }
+.coverage-row .label {
+  font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 1px;
+}
+.coverage-row .muted.small-text { font-size: 11px; color: var(--muted); }
+.coverage-bar {
+  flex: 1; max-width: 100px; height: 5px;
+  background: var(--border-2); border-radius: 3px; overflow: hidden;
+}
+.coverage-bar span {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--teal), #60efdf);
+  transition: width .5s ease;
+}
+.coverage-value {
+  font-size: 14px; font-weight: 700; color: var(--teal);
+  font-variant-numeric: tabular-nums; min-width: 42px; text-align: right;
+}
+/* Legacy coverage bar fill classes (kept for older code paths) */
 .coverage-bar-fill { height: 100%; border-radius: 2px; }
 .coverage-bar-fill.has-data { background: var(--teal); }
 .coverage-bar-fill.partial  { background: var(--amber); }
@@ -455,21 +548,39 @@ form button[type="submit"]:hover { opacity: .88; }
 /* ─── Trend boards ───────────────────────────────────────────────────────── */
 .trend-boards { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--gap); }
 .chart-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px;
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-2);
+  border-top: 2px solid var(--teal);
+  border-radius: 12px; padding: 18px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  transition: box-shadow .2s;
 }
+.chart-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(45,212,191,0.06); }
 .chart-card canvas { width: 100% !important; }
 
 /* ─── Signals table ──────────────────────────────────────────────────────── */
 .signals-table { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--gap); }
 .signal-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px;
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-2);
+  border-top: 2px solid var(--blue);
+  border-radius: 12px; padding: 18px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  transition: box-shadow .2s;
 }
-.signal-card ul { display: flex; flex-direction: column; }
+.signal-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+.signal-card ul {
+  display: flex; flex-direction: column;
+  max-height: 220px; overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(8,15,24,0.35);
+  padding: 0 10px;
+  margin-top: 6px;
+}
 .signal-card li {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 0; border-bottom: 1px solid var(--border);
+  padding: 7px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label);
 }
 .signal-card li:last-child { border-bottom: none; }
@@ -563,10 +674,17 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   display: grid; grid-template-columns: repeat(6,1fr); gap: var(--gap);
 }
 .pulse-card {
-  background: var(--surface); border: 1px solid var(--border);
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-2);
   border-top: 2px solid var(--teal);
-  border-radius: var(--radius); padding: 14px 16px;
+  border-radius: 12px; padding: 16px 18px;
   display: flex; flex-direction: column; gap: 3px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3), 0 0 0 0 rgba(45,212,191,0);
+  transition: box-shadow .2s, transform .15s;
+}
+.pulse-card:hover {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 16px rgba(45,212,191,0.08);
+  transform: translateY(-1px);
 }
 .pulse-label {
   font-size: 10px; font-weight: 600; letter-spacing: .1em;
@@ -590,12 +708,12 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .sessions-header .section-eyebrow { margin-bottom: 0; }
 
 /* Session list rows — populated by app.js */
-.act-session-list { display: flex; flex-direction: column; }
+.act-session-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .act-session-list li {
   display: grid;
   grid-template-columns: 70px 1fr auto;
   align-items: center; gap: 12px;
-  padding: 10px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; cursor: pointer; transition: background .1s;
 }
 .act-session-list li:last-child { border-bottom: none; }
@@ -624,20 +742,20 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   color: var(--muted); border-color: var(--border);
 }
 /* Fallback: session-list style from older app.js code */
-.session-list { display: flex; flex-direction: column; }
+.session-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .session-list li {
   display: flex; justify-content: space-between;
-  padding: 10px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label);
 }
 .session-list li:last-child { border-bottom: none; }
 
 /* Splits */
-.act-split-list { display: flex; flex-direction: column; }
+.act-split-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
 .act-split-list li {
   display: grid; grid-template-columns: 28px 1fr 56px 52px 44px;
   align-items: center; gap: 8px;
-  padding: 9px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label);
 }
 .act-split-list li:last-child { border-bottom: none; }
@@ -648,10 +766,10 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .act-split-list .sp-elev { color: var(--muted); font-size: 11px; text-align: right; }
 .split-empty { color: var(--muted); font-size: 12px; padding: 12px 0; }
 /* Fallback for app.js-injected split items */
-.activity-split-list { display: flex; flex-direction: column; }
+.activity-split-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
 .activity-split-list li {
   display: flex; justify-content: space-between;
-  padding: 8px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label);
 }
 .activity-split-list li:last-child { border-bottom: none; }
@@ -680,10 +798,10 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .efforts-card, .strava-card { overflow: hidden; }
 
 /* Best efforts list */
-.act-efforts-list { display: flex; flex-direction: column; }
+.act-efforts-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .act-efforts-list li {
   display: flex; align-items: baseline; justify-content: space-between;
-  padding: 10px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   gap: 12px;
 }
 .act-efforts-list li:last-child { border-bottom: none; }
@@ -768,11 +886,11 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .sleep-mini-value { font-size: 18px; font-weight: 700; color: var(--text); letter-spacing: -.02em; }
 
 /* Stage Balance card */
-.sleep-stage-list { display: flex; flex-direction: column; margin-top: 12px; }
+.sleep-stage-list { display: flex; flex-direction: column; margin-top: 12px; max-height: 220px; overflow-y: auto; }
 .sleep-stage-row {
   display: grid; grid-template-columns: 8px 52px 36px 56px 1fr;
   align-items: center; gap: 10px;
-  padding: 12px 0; border-bottom: 1px solid var(--border);
+  padding: 7px 0; border-bottom: 1px solid var(--border);
 }
 .sleep-stage-row:last-of-type { border-bottom: none; }
 .stage-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -796,8 +914,9 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 
 /* Trend card */
 .sleep-trend-card { overflow: hidden; }
+.sleep-log-table-wrap { max-height: 260px; overflow-y: auto; margin-top: 16px; }
 .sleep-log-table {
-  width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 12px;
+  width: 100%; border-collapse: collapse; font-size: 12px;
 }
 .sleep-log-table thead th {
   text-align: left; padding: 6px 8px; font-size: 10px; font-weight: 600;
@@ -836,11 +955,11 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 
 /* Vitals Log list */
 .vitals-log-card { overflow: hidden; }
-.vitals-log-list { display: flex; flex-direction: column; margin-top: 12px; }
+.vitals-log-list { display: flex; flex-direction: column; margin-top: 12px; max-height: 260px; overflow-y: auto; }
 .vitals-log-list li {
   display: grid; grid-template-columns: 52px 1fr 90px 72px auto;
   align-items: center; gap: 12px;
-  padding: 10px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px;
 }
 .vitals-log-list li:last-child { border-bottom: none; }
@@ -945,10 +1064,10 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .nutrition-date-input { display: none; }
 .nutrition-log-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
 .nutrition-entry-count { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
-.nutrition-log-list { display: flex; flex-direction: column; }
+.nutrition-log-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .nutrition-log-list li {
   display: flex; justify-content: space-between;
-  padding: 8px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label);
 }
 .nutrition-log-list li:last-child { border-bottom: none; }
@@ -996,10 +1115,10 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 }
 .photo-preview-wrapper img { max-height: 160px; border-radius: var(--radius); }
 .barcode-preview { width: 100%; border-radius: var(--radius); }
-.nutrition-trend-list { display: flex; flex-direction: column; }
+.nutrition-trend-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .nutrition-trend-list li {
   display: flex; justify-content: space-between;
-  padding: 8px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label);
 }
 .nutrition-trend-list li:last-child { border-bottom: none; }
@@ -1015,10 +1134,10 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .weight-bmi-badge.healthy    { border-color: var(--teal-dim); color: var(--teal); }
 .weight-bmi-badge.overweight { border-color: var(--amber-dim); color: var(--amber); }
 .weight-bmi-badge.obese      { border-color: var(--red-dim); color: var(--red); }
-.weight-log-list { display: flex; flex-direction: column; }
+.weight-log-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .weight-log-list li {
   display: grid; grid-template-columns: 1fr 72px 72px 56px;
-  padding: 8px 0; border-bottom: 1px solid var(--border);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--label); align-items: center;
 }
 .weight-log-list li:last-child { border-bottom: none; }
@@ -1148,4 +1267,1140 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   .lookup-row { flex-direction: column; }
   .weight-signals-row { grid-template-columns: 1fr; }
   .act-session-list li { grid-template-columns: 60px 1fr auto; gap: 8px; }
+}
+
+/* ─── Colour-coded goal items (Steps=teal, Calories=amber, Sleep=blue) ────── */
+.goal-progress-item:nth-child(1) { border-left-color: var(--teal); }
+.goal-progress-item:nth-child(2) { border-left-color: var(--amber); }
+.goal-progress-item:nth-child(3) { border-left-color: var(--blue); }
+
+.goal-progress-item:nth-child(1) .goal-progress-bar span {
+  background: linear-gradient(90deg, var(--teal), #60efdf);
+}
+.goal-progress-item:nth-child(2) .goal-progress-bar span {
+  background: linear-gradient(90deg, var(--amber), #fcd34d);
+}
+.goal-progress-item:nth-child(3) .goal-progress-bar span {
+  background: linear-gradient(90deg, var(--blue), #93c5fd);
+}
+
+.goal-progress-item:nth-child(1) .goal-progress-value strong { color: var(--teal); }
+.goal-progress-item:nth-child(2) .goal-progress-value strong { color: var(--amber); }
+.goal-progress-item:nth-child(3) .goal-progress-value strong { color: var(--blue); }
+
+/* ─── Colour-coded coverage rows ─────────────────────────────────────────── */
+.coverage-row:nth-child(1) { border-left: 3px solid var(--teal); }
+.coverage-row:nth-child(2) { border-left: 3px solid var(--amber); }
+.coverage-row:nth-child(3) { border-left: 3px solid var(--blue); }
+
+.coverage-row:nth-child(1) .coverage-bar span { background: linear-gradient(90deg, var(--teal), #60efdf); }
+.coverage-row:nth-child(2) .coverage-bar span { background: linear-gradient(90deg, var(--amber), #fcd34d); }
+.coverage-row:nth-child(3) .coverage-bar span { background: linear-gradient(90deg, var(--blue), #93c5fd); }
+
+.coverage-row:nth-child(1) .coverage-value { color: var(--teal); }
+.coverage-row:nth-child(2) .coverage-value { color: var(--amber); }
+.coverage-row:nth-child(3) .coverage-value { color: var(--blue); }
+
+/* ─── Heart rate zone list ────────────────────────────────────────────────── */
+#heartRateList { padding: 0 10px; }
+#heartRateList li {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+#heartRateList li:last-child { border-bottom: none; }
+#heartRateList li span:first-child { font-weight: 600; color: var(--text); }
+#heartRateList li span:last-child  { color: var(--muted); font-size: 12px; }
+
+/* coloured left dot per zone using ::before */
+#heartRateList li:nth-child(1) span:first-child::before { background: #60a5fa; }
+#heartRateList li:nth-child(2) span:first-child::before { background: #2dd4bf; }
+#heartRateList li:nth-child(3) span:first-child::before { background: #f59e0b; }
+#heartRateList li:nth-child(4) span:first-child::before { background: #f97316; }
+#heartRateList li:nth-child(5) span:first-child::before { background: #ef4444; }
+#heartRateList li span:first-child::before {
+  content: ''; display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 8px; flex-shrink: 0;
+  background: var(--muted);
+  vertical-align: middle;
+}
+
+/* ─── Sleep summary (overview signal card) ───────────────────────────────── */
+#sleepSummary {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 6px;
+  background: rgba(8,15,24,0.4); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px;
+}
+#sleepSummary div {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; padding: 4px 0;
+}
+#sleepSummary div + div { border-top: 1px solid var(--border); }
+#sleepSummary div span:first-child {
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  padding: 2px 8px; border-radius: 20px;
+}
+#sleepSummary div:nth-child(1) span:first-child { background: rgba(67,217,201,0.15); color: #43d9c9; }
+#sleepSummary div:nth-child(2) span:first-child { background: rgba(126,174,252,0.15); color: #7eaefc; }
+#sleepSummary div:nth-child(3) span:first-child { background: rgba(142,139,255,0.15); color: #8e8bff; }
+#sleepSummary div span:last-child { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ─── Sleep stage breakdown (sleep subpage) ──────────────────────────────── */
+.sleep-stage-item {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 14px;
+  background: rgba(8,15,24,0.4);
+  border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 6px;
+}
+.sleep-stage-header {
+  display: flex; align-items: center; gap: 10px; font-size: 13px;
+}
+.sleep-stage-swatch {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+}
+.sleep-stage-header .label { font-weight: 600; color: var(--text); flex: 1; }
+.sleep-stage-header .sleep-stage-pct { font-size: 12px; font-weight: 700; }
+.sleep-stage-header .sleep-stage-duration { font-size: 12px; color: var(--muted); margin-left: auto; }
+.sleep-stage-bar-track {
+  height: 5px; background: var(--border-2); border-radius: 3px; overflow: hidden;
+}
+.sleep-stage-bar-fill { height: 100%; border-radius: 3px; opacity: 0.85; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CROSS-PAGE COMPONENT POLISH
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Nutrition goal cards ───────────────────────────────────────────────── */
+.nutrition-goal {
+  background: linear-gradient(160deg, var(--surface-2) 0%, var(--surface) 100%) !important;
+  border: 1px solid var(--border-2) !important;
+  border-top: 2px solid var(--teal) !important;
+  border-radius: 12px !important; padding: 16px !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  transition: box-shadow .2s, transform .15s;
+}
+.nutrition-goal:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 16px rgba(45,212,191,0.08); transform: translateY(-1px); }
+.nutrition-goal:nth-child(2) { border-top-color: var(--amber) !important; }
+.nutrition-goal:nth-child(2):hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 16px rgba(245,158,11,0.08); }
+.nutrition-goal:nth-child(3) { border-top-color: #a78bfa !important; }
+.nutrition-goal:nth-child(3):hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 16px rgba(167,139,250,0.08); }
+.nutrition-goal:nth-child(4) { border-top-color: var(--blue) !important; }
+.nutrition-goal:nth-child(4):hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 16px rgba(96,165,250,0.08); }
+
+.nutrition-goal h4 { font-size: 22px !important; }
+.nutrition-goal .progress-track { height: 5px !important; border-radius: 3px !important; }
+.nutrition-goal:nth-child(1) .progress-track span { background: linear-gradient(90deg, var(--teal), #60efdf); }
+.nutrition-goal:nth-child(2) .progress-track span { background: linear-gradient(90deg, var(--amber), #fcd34d); }
+.nutrition-goal:nth-child(3) .progress-track span { background: linear-gradient(90deg, #a78bfa, #c4b5fd); }
+.nutrition-goal:nth-child(4) .progress-track span { background: linear-gradient(90deg, var(--blue), #93c5fd); }
+
+/* ─── Macro rows ─────────────────────────────────────────────────────────── */
+.macro-row {
+  padding: 10px 14px !important;
+  background: rgba(8,15,24,0.35);
+  border: 1px solid var(--border) !important;
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.macro-row:last-child { border-bottom: 1px solid var(--border) !important; margin-bottom: 0; }
+.macro-row .label { color: var(--text) !important; font-size: 12px !important; }
+.macro-row:nth-child(1) .label { color: var(--blue) !important; }
+.macro-row:nth-child(2) .label { color: var(--teal) !important; }
+.macro-row:nth-child(3) .label { color: #a78bfa !important; }
+.macro-row:nth-child(1) .macro-bar span { background: linear-gradient(90deg, var(--blue), #93c5fd); }
+.macro-row:nth-child(2) .macro-bar span { background: linear-gradient(90deg, var(--teal), #60efdf); }
+.macro-row:nth-child(3) .macro-bar span { background: linear-gradient(90deg, #a78bfa, #c4b5fd); }
+.macro-row .macro-value { font-size: 14px !important; font-weight: 700 !important; }
+
+/* ─── Nutrition log entries ──────────────────────────────────────────────── */
+.nutrition-log-list li {
+  flex-direction: column !important;
+  padding: 10px 14px !important;
+  background: rgba(8,15,24,0.35);
+  border: 1px solid var(--border) !important;
+  border-radius: 8px;
+  border-bottom: none !important;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.nutrition-log-row-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+}
+.nutrition-log-row-head h4 { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 1px; }
+.nutrition-log-row-head .muted.small-text { font-size: 11px; color: var(--muted); }
+.nutrition-log-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.badge {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 20px;
+  background: var(--teal-dim); color: var(--teal); border: 1px solid rgba(45,212,191,0.25);
+}
+.nutrition-log-metrics {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-top: 2px;
+}
+.nutrition-log-metrics span {
+  font-size: 11px; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 7px;
+}
+.nutrition-delete-btn {
+  opacity: 0.4; font-size: 13px; color: var(--red); transition: opacity .15s;
+  background: none; border: none; cursor: pointer; padding: 2px 4px;
+}
+.nutrition-delete-btn:hover { opacity: 1; }
+
+/* ─── Vitals history list ────────────────────────────────────────────────── */
+#vitalsHistory li,
+.vitals-log-list li {
+  padding: 10px 14px !important;
+  background: rgba(8,15,24,0.35);
+  border: 1px solid var(--border) !important;
+  border-bottom: none !important;
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.vitals-history-meta { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+.vitals-history-meta span { font-size: 11px; color: var(--muted); }
+.vitals-history-meta span:first-child { font-size: 13px; font-weight: 600; color: var(--teal); }
+
+/* ─── Weight log rows ────────────────────────────────────────────────────── */
+.weight-log-list li {
+  padding: 10px 14px !important;
+  background: rgba(8,15,24,0.35);
+  border: 1px solid var(--border) !important;
+  border-bottom: none !important;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  grid-template-columns: unset !important;
+}
+.weight-log-meta { font-size: 12px; color: var(--muted); }
+.weight-log-meta:first-child { color: var(--text); font-weight: 600; flex: 1; }
+.weight-log-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.weight-log-values { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.weight-log-value { font-size: 15px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.weight-log-delta { font-size: 11px; font-weight: 600; }
+.weight-log-delta[style*="color: var(--teal)"],
+.weight-log-delta[style*="color:var(--teal)"] { color: var(--teal); }
+.weight-log-delta[style*="color: var(--red)"],
+.weight-log-delta[style*="color:var(--red)"] { color: var(--red); }
+.weight-log-delete {
+  opacity: 0.3; font-size: 13px; color: var(--red); transition: opacity .15s;
+  background: none; border: none; cursor: pointer; padding: 4px;
+}
+.weight-log-delete:hover { opacity: 1; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACTIVITY PAGE — SESSION ITEMS + PULSE COLOUR
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Pulse card value colours */
+.pulse-card:nth-child(1) .pulse-value,
+.pulse-card:nth-child(2) .pulse-value,
+.pulse-card:nth-child(3) .pulse-value { color: var(--teal); }
+.pulse-card:nth-child(4) .pulse-value,
+.pulse-card:nth-child(5) .pulse-value { color: var(--amber); }
+.pulse-card:nth-child(6) .pulse-value { color: var(--blue); }
+.pulse-value { font-size: 30px !important; }
+.pulse-label { color: var(--label) !important; font-size: 11px !important; }
+
+/* Session items — JS generates .session-item with .session-title + .session-metrics */
+.act-session-list { gap: 0 !important; }
+.session-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 14px;
+  background: rgba(8,15,24,0.35);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  font-size: 13px; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.session-item:first-child { border-radius: 8px 8px 0 0; }
+.session-item:last-child  { border-radius: 0 0 8px 8px; border-bottom: 1px solid var(--border); }
+.session-item:only-child  { border-radius: 8px; border-bottom: 1px solid var(--border); }
+.session-item:hover { background: rgba(45,212,191,0.05); border-color: rgba(45,212,191,0.2); }
+.session-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-item .muted { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.session-metrics {
+  display: flex; gap: 12px; flex-shrink: 0; align-items: center;
+  font-size: 12px; color: var(--label); font-variant-numeric: tabular-nums;
+}
+.session-metrics span:first-child { color: var(--teal); font-weight: 600; }
+
+/* Team board row highlight */
+.athlete-ranking li:hover { background: rgba(45,212,191,0.04) !important; }
+.athlete-ranking li:first-child { background: linear-gradient(90deg, rgba(45,212,191,0.06) 0%, transparent 60%); }
+
+/* Topbar title */
+.topbar-title { font-size: 22px !important; font-weight: 800 !important; letter-spacing: -.02em; }
+.topbar-greeting { color: var(--teal) !important; opacity: 0.7; }
+
+/* Section eyebrow */
+.section-eyebrow {
+  color: var(--teal) !important; opacity: 0.65;
+}
+
+/* Nav group label */
+.nav-group-label { color: rgba(45,212,191,0.4) !important; }
+
+/* Sidebar profile name */
+.sidebar-profile-name, #profileCard h3 { color: var(--text) !important; font-weight: 600 !important; }
+.sidebar-profile-hint, #profileCard p.label { color: var(--teal) !important; opacity: 0.6; font-size: 11px; }
+
+/* Sidebar avatar ring */
+.sidebar-avatar, .avatar.avatar-fallback {
+  border: 1px solid rgba(45,212,191,0.25) !important;
+  box-shadow: 0 0 8px rgba(45,212,191,0.15);
+}
+
+/* Sidebar status dot pulse */
+.sidebar-status-dot { background: var(--teal) !important; box-shadow: 0 0 6px var(--teal); animation: blink 2s ease-in-out infinite; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COLOUR + READABILITY UPGRADE — v7
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Brighten base text tokens ──────────────────────────────────────────── */
+:root {
+  --text:    #f0f4f8;       /* was #e2e8f0 — brighter base text             */
+  --label:   #b0bfd0;       /* was #94a3b8 — more readable secondary labels */
+  --muted:   #7a8fa8;       /* was #64748b — less washed-out                */
+  --purple:  #a78bfa;       /* new purple accent for weight/profile sections */
+  --purple-dim: rgba(167,139,250,0.12);
+  --green-dim:  rgba(34,197,94,0.12);
+}
+
+/* ─── Metric card values coloured by accent ──────────────────────────────── */
+.metric-teal  .metric-value { color: var(--teal); }
+.metric-amber .metric-value { color: var(--amber); }
+.metric-blue  .metric-value { color: var(--blue); }
+
+/* ─── Purple metric variant ──────────────────────────────────────────────── */
+.metric-purple { border-top-color: var(--purple); }
+.metric-purple .metric-bar-fill { background: var(--purple); }
+.metric-purple .metric-value  { color: var(--purple); }
+.metric-purple .metric-status { color: var(--purple); }
+.metric-purple:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(167,139,250,0.1); }
+
+/* ─── Green metric variant ───────────────────────────────────────────────── */
+.metric-green { border-top-color: var(--green); }
+.metric-green .metric-bar-fill { background: var(--green); }
+.metric-green .metric-value  { color: var(--green); }
+.metric-green .metric-status { color: var(--green); }
+.metric-green:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(34,197,94,0.1); }
+
+/* ─── Card titles — more prominent ──────────────────────────────────────── */
+.card-title { font-size: 15px !important; font-weight: 700 !important; color: var(--text) !important; letter-spacing: -.01em; }
+.card-meta  { color: var(--label) !important; }
+
+/* ─── Pulse cards — larger values, coloured labels ───────────────────────── */
+.pulse-value { font-size: 32px !important; letter-spacing: -.02em; }
+.pulse-card { transition: transform .15s, box-shadow .2s; }
+.pulse-card:hover { transform: translateY(-2px); box-shadow: 0 6px 28px rgba(0,0,0,0.5); }
+
+/* ─── Pulse card backgrounds — subtle accent tint per card ───────────────── */
+.pulse-card:nth-child(1),
+.pulse-card:nth-child(2),
+.pulse-card:nth-child(3) { border-top: 2px solid var(--teal); }
+.pulse-card:nth-child(4),
+.pulse-card:nth-child(5) { border-top: 2px solid var(--amber); }
+.pulse-card:nth-child(6) { border-top: 2px solid var(--blue); }
+
+/* ─── Goal progress items — cycle accent colours ─────────────────────────── */
+.goal-progress-item:nth-child(1) { border-left-color: var(--teal); }
+.goal-progress-item:nth-child(2) { border-left-color: var(--amber); }
+.goal-progress-item:nth-child(3) { border-left-color: var(--blue); }
+.goal-progress-item:nth-child(4) { border-left-color: var(--purple); }
+.goal-progress-item:nth-child(5) { border-left-color: var(--green); }
+.goal-progress-item:nth-child(6) { border-left-color: var(--teal); }
+
+.goal-progress-item:nth-child(1) .goal-progress-bar-fill { background: var(--teal); }
+.goal-progress-item:nth-child(2) .goal-progress-bar-fill { background: var(--amber); }
+.goal-progress-item:nth-child(3) .goal-progress-bar-fill { background: var(--blue); }
+.goal-progress-item:nth-child(4) .goal-progress-bar-fill { background: var(--purple); }
+.goal-progress-item:nth-child(5) .goal-progress-bar-fill { background: var(--green); }
+.goal-progress-item:nth-child(6) .goal-progress-bar-fill { background: var(--teal); }
+
+.goal-progress-value { font-size: 14px !important; font-weight: 700 !important; }
+
+/* ─── Data coverage rows — alternating accent dots ───────────────────────── */
+.coverage-row:nth-child(odd)  .coverage-bar-fill { background: var(--teal); }
+.coverage-row:nth-child(even) .coverage-bar-fill { background: var(--blue); }
+.coverage-value { font-weight: 700 !important; font-size: 13px !important; }
+
+/* ─── Heart rate zones — vivid dot colours ───────────────────────────────── */
+#heartRateList li:nth-child(1)::before { background: var(--blue); }
+#heartRateList li:nth-child(2)::before { background: var(--green); }
+#heartRateList li:nth-child(3)::before { background: var(--amber); }
+#heartRateList li:nth-child(4)::before { background: var(--red); }
+#heartRateList li:nth-child(5)::before { background: #ff6b6b; }
+#heartRateList li { font-size: 13px !important; color: var(--text) !important; }
+
+/* ─── Sleep stage badges — brighter pills ────────────────────────────────── */
+#sleepSummary div[data-stage="DEEP"]  { background: rgba(96,165,250,0.18) !important; color: var(--blue) !important; font-weight: 700 !important; }
+#sleepSummary div[data-stage="REM"]   { background: rgba(167,139,250,0.18) !important; color: var(--purple) !important; font-weight: 700 !important; }
+#sleepSummary div[data-stage="LIGHT"] { background: rgba(45,212,191,0.15) !important; color: var(--teal) !important; font-weight: 700 !important; }
+#sleepSummary div[data-stage="WAKE"]  { background: rgba(245,158,11,0.15) !important; color: var(--amber) !important; font-weight: 700 !important; }
+
+/* ─── Sleep stage breakdown bars ─────────────────────────────────────────── */
+.sleep-stage-item:nth-child(1) .sleep-stage-bar-fill { background: var(--blue); }
+.sleep-stage-item:nth-child(2) .sleep-stage-bar-fill { background: var(--purple); }
+.sleep-stage-item:nth-child(3) .sleep-stage-bar-fill { background: var(--teal); }
+.sleep-stage-item:nth-child(4) .sleep-stage-bar-fill { background: var(--amber); }
+
+/* ─── Nutrition macro bars ───────────────────────────────────────────────── */
+.macro-row:nth-child(1) .nutrition-goal-bar-fill { background: var(--teal); }
+.macro-row:nth-child(2) .nutrition-goal-bar-fill { background: var(--amber); }
+.macro-row:nth-child(3) .nutrition-goal-bar-fill { background: var(--purple); }
+.macro-row:nth-child(4) .nutrition-goal-bar-fill { background: var(--green); }
+.macro-row:nth-child(1) .macro-pct { color: var(--teal) !important; }
+.macro-row:nth-child(2) .macro-pct { color: var(--amber) !important; }
+.macro-row:nth-child(3) .macro-pct { color: var(--purple) !important; }
+.macro-row:nth-child(4) .macro-pct { color: var(--green) !important; }
+
+/* ─── Weight log — purple accent, green/red deltas ───────────────────────── */
+.weight-log-value { color: var(--purple) !important; }
+.weight-log-delta { font-size: 12px !important; font-weight: 700 !important; }
+
+/* ─── Vitals history — teal values, brighter meta ───────────────────────── */
+.vitals-history-meta span:first-child { font-size: 14px !important; font-weight: 700 !important; }
+
+/* ─── Nutrition badges — coloured by meal type ───────────────────────────── */
+.badge { font-size: 11px !important; padding: 3px 8px !important; border-radius: 20px !important; font-weight: 700 !important; }
+.badge.breakfast { background: rgba(245,158,11,0.18); color: var(--amber); }
+.badge.lunch     { background: rgba(45,212,191,0.15); color: var(--teal); }
+.badge.dinner    { background: rgba(96,165,250,0.18); color: var(--blue); }
+.badge.snack     { background: rgba(167,139,250,0.15); color: var(--purple); }
+
+/* ─── Section card headers — accent eyebrow ──────────────────────────────── */
+.section-card .card-title { font-size: 16px !important; }
+.section-eyebrow { font-size: 10px !important; font-weight: 700 !important; letter-spacing: .12em !important; }
+
+/* ─── Stat/signal cards — coloured numbers ───────────────────────────────── */
+.signal-card ul li:nth-child(odd)  strong { color: var(--teal); }
+.signal-card ul li:nth-child(even) strong { color: var(--amber); }
+.signal-card ul li { font-size: 13px !important; color: var(--label) !important; padding: 8px 10px !important; }
+.signal-card ul li strong { font-size: 15px !important; font-weight: 700 !important; }
+
+/* ─── Session metrics — colour first two spans differently ───────────────── */
+.session-metrics span:nth-child(2) { color: var(--amber); font-weight: 600; }
+.session-metrics span:nth-child(3) { color: var(--blue); font-weight: 600; }
+
+/* ─── Activity table — coloured alternating rows ─────────────────────────── */
+.table-scroll table tbody tr:hover td { background: rgba(45,212,191,0.04) !important; }
+.table-scroll table thead th { color: var(--teal) !important; font-size: 11px !important; letter-spacing: .08em; }
+
+/* ─── Sidebar nav active state — stronger glow ───────────────────────────── */
+.nav-item.active {
+  background: linear-gradient(90deg, rgba(45,212,191,0.15) 0%, rgba(45,212,191,0.04) 100%) !important;
+  border-left: 3px solid var(--teal) !important;
+  color: var(--teal) !important;
+}
+.nav-item:not(.active):hover {
+  background: rgba(45,212,191,0.06) !important;
+  color: var(--text) !important;
+}
+
+/* ─── Topbar — accent ring on page name ──────────────────────────────────── */
+.topbar-title { color: var(--text) !important; }
+.viewing-pill { background: rgba(45,212,191,0.15) !important; color: var(--teal) !important; font-weight: 700 !important; border: 1px solid rgba(45,212,191,0.3) !important; }
+.goal-chip    { background: rgba(245,158,11,0.15) !important; color: var(--amber) !important; font-weight: 700 !important; border: 1px solid rgba(245,158,11,0.3) !important; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   NUTRITION PHOTO ANALYSIS CARD — v7
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Outer card ─────────────────────────────────────────────────────────── */
+.nutrition-photo-card {
+  border-top: 2px solid var(--purple);
+  border-color: rgba(167,139,250,0.25);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 40px rgba(167,139,250,0.1);
+  background: linear-gradient(160deg, rgba(167,139,250,0.06) 0%, var(--surface) 40%);
+}
+.nutrition-photo-card .card-title { color: var(--text) !important; }
+
+/* ─── Clear button ───────────────────────────────────────────────────────── */
+.photo-clear-btn {
+  padding: 5px 12px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  background: rgba(239,68,68,0.12); color: var(--red);
+  border: 1px solid rgba(239,68,68,0.3);
+  transition: background .15s, opacity .15s;
+  cursor: pointer;
+}
+.photo-clear-btn:hover { background: rgba(239,68,68,0.22); }
+
+/* ─── Upload area wrapper ────────────────────────────────────────────────── */
+.photo-upload-area {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+/* ─── Drop zone ──────────────────────────────────────────────────────────── */
+.photo-drop-zone {
+  display: block; cursor: pointer; flex: 1;
+  border: 2px dashed rgba(167,139,250,0.5);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(167,139,250,0.08) 0%, rgba(96,165,250,0.05) 100%);
+  transition: border-color .2s, background .2s, box-shadow .2s;
+  padding: 24px 20px;
+  text-align: center;
+  box-shadow: inset 0 0 40px rgba(167,139,250,0.04);
+}
+.photo-drop-zone:hover,
+.photo-drop-zone.dragging {
+  border-color: var(--purple);
+  background: linear-gradient(135deg, rgba(167,139,250,0.16) 0%, rgba(96,165,250,0.10) 100%);
+  box-shadow: inset 0 0 40px rgba(167,139,250,0.08), 0 0 20px rgba(167,139,250,0.12);
+}
+.photo-drop-inner {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  pointer-events: none;
+}
+.photo-drop-icon {
+  width: 36px; height: 36px; color: var(--purple); opacity: 0.85;
+  filter: drop-shadow(0 0 6px rgba(167,139,250,0.4));
+}
+.photo-drop-label {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  letter-spacing: -.01em;
+}
+.photo-drop-hint {
+  font-size: 11px; color: var(--label); max-width: 280px;
+}
+
+/* ─── Photo preview thumbnail ────────────────────────────────────────────── */
+.nutrition-photo-preview-wrapper {
+  flex: 0 0 auto;
+  border-radius: 12px; overflow: hidden;
+  border: 1px solid rgba(167,139,250,0.25);
+  background: var(--surface);
+  align-self: stretch;
+  display: flex; align-items: center;
+}
+.nutrition-photo-img {
+  display: block;
+  width: 140px; height: 100%;
+  max-height: 140px; min-height: 80px;
+  object-fit: cover; border-radius: 12px;
+}
+
+/* When preview is shown — drop zone shrinks to a compact "change" strip */
+.photo-upload-area:has(#nutritionPhotoPreviewWrapper:not(.hidden)) .photo-drop-zone {
+  flex: 1;
+  padding: 12px 16px;
+  border-style: dashed;
+}
+.photo-upload-area:has(#nutritionPhotoPreviewWrapper:not(.hidden)) .photo-drop-icon {
+  width: 24px; height: 24px;
+}
+.photo-upload-area:has(#nutritionPhotoPreviewWrapper:not(.hidden)) .photo-drop-label {
+  font-size: 12px;
+}
+.photo-upload-area:has(#nutritionPhotoPreviewWrapper:not(.hidden)) .photo-drop-hint {
+  display: none;
+}
+
+/* ─── Status line ────────────────────────────────────────────────────────── */
+.nutrition-photo-status {
+  margin-top: 10px; font-size: 12px; font-weight: 600;
+  color: var(--teal); min-height: 16px;
+  display: flex; align-items: center; gap: 6px;
+}
+.nutrition-photo-status.error { color: var(--red); }
+.nutrition-photo-status:empty { display: none; }
+
+/* ─── Analysis results panel ─────────────────────────────────────────────── */
+.nutrition-photo-analysis {
+  margin-top: 16px;
+}
+.nutrition-photo-analysis:empty { display: none; }
+
+/* Summary header */
+.nutrition-photo-analysis-summary {
+  display: flex; flex-direction: column; gap: 4px;
+  background: rgba(167,139,250,0.08);
+  border: 1px solid rgba(167,139,250,0.2);
+  border-radius: 10px; padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.nutrition-photo-analysis-summary strong {
+  font-size: 14px; font-weight: 700; color: var(--purple);
+}
+.nutrition-photo-analysis-summary .muted.small-text {
+  font-size: 12px; color: var(--label); line-height: 1.5;
+}
+.nutrition-photo-analysis-hint {
+  font-size: 11px; color: var(--muted); margin-top: 2px;
+}
+.tiny-text { font-size: 11px !important; }
+
+/* Action buttons row */
+.nutrition-photo-analysis-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+}
+.nutrition-photo-analysis-actions .outline-btn {
+  font-size: 12px; padding: 6px 14px;
+}
+.nutrition-photo-analysis-actions .outline-btn[data-action="save-meal-draft"] {
+  background: linear-gradient(135deg, rgba(167,139,250,0.25) 0%, rgba(96,165,250,0.15) 100%);
+  color: var(--purple); border-color: rgba(167,139,250,0.4);
+  font-weight: 700;
+}
+
+/* Meal item list */
+.nutrition-photo-analysis ul {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 360px; overflow-y: auto;
+  padding-right: 2px;
+}
+.nutrition-photo-analysis ul::-webkit-scrollbar { width: 4px; }
+.nutrition-photo-analysis ul::-webkit-scrollbar-track { background: transparent; }
+.nutrition-photo-analysis ul::-webkit-scrollbar-thumb { background: rgba(167,139,250,0.3); border-radius: 2px; }
+
+/* Individual meal item */
+.nutrition-photo-meal-item {
+  background: rgba(8,15,24,0.4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple);
+  border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.nutrition-photo-meal-item:nth-child(2) { border-left-color: var(--teal); }
+.nutrition-photo-meal-item:nth-child(3) { border-left-color: var(--amber); }
+.nutrition-photo-meal-item:nth-child(4) { border-left-color: var(--blue); }
+.nutrition-photo-meal-item:nth-child(5) { border-left-color: var(--green); }
+
+/* Item header row */
+.meal-item-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.meal-item-name {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  flex: 1;
+}
+.meal-item-name input[type="text"] {
+  width: 100%; font-size: 13px; font-weight: 700;
+  background: rgba(12,25,52,0.5);
+  border: 1px solid rgba(167,139,250,0.3);
+  border-radius: 6px; padding: 4px 8px; color: var(--text);
+}
+.meal-item-name input[type="text"]:focus {
+  outline: none; border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(167,139,250,0.15);
+}
+.meal-item-confidence {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: 20px;
+  background: rgba(167,139,250,0.15); color: var(--purple);
+}
+.meal-item-remove {
+  font-size: 11px; color: var(--red); opacity: 0.4;
+  background: none; border: none; cursor: pointer; padding: 2px 5px;
+  transition: opacity .15s;
+}
+.meal-item-remove:hover { opacity: 1; }
+
+/* Editable macro fields grid */
+.meal-item-macros {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
+}
+.meal-item-macro-field {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.meal-item-macro-label {
+  font-size: 9px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.meal-item-macro-label.cal  { color: var(--amber); }
+.meal-item-macro-label.pro  { color: var(--teal); }
+.meal-item-macro-label.carb { color: var(--blue); }
+.meal-item-macro-label.fat  { color: var(--purple); }
+.meal-item-macro-label.fib  { color: var(--green); }
+
+.meal-item-macro-field input[type="number"] {
+  width: 100%; font-size: 13px; font-weight: 700;
+  background: rgba(12,25,52,0.5);
+  border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 6px; color: var(--text);
+  text-align: center; font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+.meal-item-macro-field input[type="number"]::-webkit-inner-spin-button,
+.meal-item-macro-field input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+.meal-item-macro-field input[type="number"]:focus {
+  outline: none; border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(167,139,250,0.12);
+}
+
+/* ─── JS-generated meal editor (app.js class names) ──────────────────────── */
+.nutrition-photo-analysis-list {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 400px; overflow-y: auto; list-style: none;
+  padding: 2px 2px 2px 0;
+}
+.nutrition-photo-analysis-list::-webkit-scrollbar { width: 4px; }
+.nutrition-photo-analysis-list::-webkit-scrollbar-thumb { background: rgba(167,139,250,0.3); border-radius: 2px; }
+
+/* Each detected food row */
+.nutrition-meal-editor-row {
+  background: rgba(8,15,24,0.45);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple);
+  border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.nutrition-meal-editor-row:nth-child(2n)   { border-left-color: var(--teal); }
+.nutrition-meal-editor-row:nth-child(3n)   { border-left-color: var(--amber); }
+.nutrition-meal-editor-row:nth-child(4n)   { border-left-color: var(--blue); }
+.nutrition-meal-editor-row:nth-child(5n)   { border-left-color: var(--green); }
+
+/* Header — name input + controls */
+.nutrition-meal-editor-head {
+  display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap;
+}
+.nutrition-meal-editor-name {
+  flex: 1; min-width: 160px;
+  font-size: 10px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.nutrition-meal-editor-name input[type="text"] {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  background: rgba(12,25,52,0.55);
+  border: 1px solid rgba(167,139,250,0.25);
+  border-radius: 7px; padding: 6px 10px;
+  width: 100%;
+}
+.nutrition-meal-editor-name input[type="text"]:focus {
+  outline: none; border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(167,139,250,0.12);
+}
+
+/* Controls — tags + action buttons */
+.nutrition-meal-editor-controls {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-top: 2px;
+}
+.nutrition-meal-editor-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 20px;
+  background: rgba(167,139,250,0.13); color: var(--purple);
+}
+.nutrition-meal-editor-remove {
+  font-size: 11px; font-weight: 600; color: var(--label);
+  opacity: 0.5; cursor: pointer; transition: opacity .15s, color .15s;
+  background: none; border: none; padding: 0;
+}
+.nutrition-meal-editor-remove:hover { opacity: 1; color: var(--teal); }
+
+/* Summary text */
+.nutrition-meal-editor-summary {
+  font-size: 11px; color: var(--label);
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}
+
+/* Editable macro grid */
+.nutrition-meal-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 6px; margin-top: 4px;
+}
+.nutrition-meal-editor-field {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 9px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.nutrition-meal-editor-field input[type="number"],
+.nutrition-meal-editor-field select {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  background: rgba(12,25,52,0.55);
+  border: 1px solid var(--border);
+  border-radius: 7px; padding: 5px 8px;
+  width: 100%; text-align: center;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+.nutrition-meal-editor-field input[type="number"]::-webkit-inner-spin-button,
+.nutrition-meal-editor-field input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+.nutrition-meal-editor-field input[type="number"]:focus,
+.nutrition-meal-editor-field select:focus {
+  outline: none; border-color: var(--purple);
+  box-shadow: 0 0 0 2px rgba(167,139,250,0.12);
+}
+.nutrition-meal-editor-field select { text-align: left; }
+
+/* Colour-code the macro label text */
+.nutrition-meal-editor-field:nth-child(4) { color: var(--amber); } /* calories */
+.nutrition-meal-editor-field:nth-child(5) { color: var(--teal); }  /* protein   */
+.nutrition-meal-editor-field:nth-child(6) { color: var(--blue); }  /* carbs     */
+.nutrition-meal-editor-field:nth-child(7) { color: var(--purple); }/* fats      */
+.nutrition-meal-editor-field:nth-child(8) { color: var(--green); } /* fiber     */
+
+/* ═══════════════════════════════════════════════════════════════════════
+   NUTRITION PAGE VISUAL REFRESH — v10
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Goal signal strip — 4-column stat cards ── */
+.nutrition-goal-list {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 14px !important;
+  margin-bottom: 16px !important;
+}
+.nutrition-goal {
+  background: rgba(10,22,40,0.9) !important;
+  border: 1px solid rgba(255,255,255,0.06) !important;
+  border-top: 3px solid var(--teal) !important;
+  border-radius: 18px !important;
+  padding: 18px 16px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  transition: transform .15s, box-shadow .15s !important;
+}
+.nutrition-goal:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.5) !important;
+}
+.nutrition-goal:nth-child(1) { border-top-color: var(--teal) !important; }
+.nutrition-goal:nth-child(2) { border-top-color: var(--amber) !important; }
+.nutrition-goal:nth-child(3) { border-top-color: #a78bfa !important; }
+.nutrition-goal:nth-child(4) { border-top-color: var(--blue) !important; }
+.nutrition-goal .small-text {
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: .09em !important;
+  text-transform: uppercase !important;
+}
+.nutrition-goal:nth-child(1) .small-text { color: var(--teal) !important; }
+.nutrition-goal:nth-child(2) .small-text { color: var(--amber) !important; }
+.nutrition-goal:nth-child(3) .small-text { color: #a78bfa !important; }
+.nutrition-goal:nth-child(4) .small-text { color: var(--blue) !important; }
+.nutrition-goal h4 {
+  font-size: 26px !important;
+  font-weight: 800 !important;
+  color: var(--text) !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: -.025em !important;
+  line-height: 1.05 !important;
+}
+.nutrition-goal > div:first-child > span:last-child {
+  font-size: 11px !important;
+  color: var(--muted) !important;
+  margin-top: 2px !important;
+}
+.nutrition-goal .progress-track {
+  height: 6px !important;
+  background: rgba(255,255,255,0.07) !important;
+  border-radius: 4px !important;
+  margin-top: auto !important;
+  overflow: hidden !important;
+}
+.nutrition-goal:nth-child(1) .progress-track span {
+  background: linear-gradient(90deg, var(--teal), #60efdf) !important;
+}
+.nutrition-goal:nth-child(2) .progress-track span {
+  background: linear-gradient(90deg, var(--amber), #fcd34d) !important;
+}
+.nutrition-goal:nth-child(3) .progress-track span {
+  background: linear-gradient(90deg, #a78bfa, #c4b5fd) !important;
+}
+.nutrition-goal:nth-child(4) .progress-track span {
+  background: linear-gradient(90deg, var(--blue), #93c5fd) !important;
+}
+
+/* ── Food log list item polish ── */
+.nutrition-log-list { max-height: 380px !important; }
+.nutrition-log-list li {
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+  border: 1px solid transparent !important;
+  margin-bottom: 2px !important;
+  transition: background .12s, border-color .12s !important;
+}
+.nutrition-log-list li:hover {
+  background: rgba(255,255,255,0.035) !important;
+  border-color: rgba(255,255,255,0.08) !important;
+}
+.nutrition-log-row-head {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  margin-bottom: 6px !important;
+}
+.nutrition-log-row-head h4 {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: var(--text) !important;
+}
+.nutrition-log-meta .badge {
+  background: rgba(45,212,191,0.14) !important;
+  color: var(--teal) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  padding: 3px 10px !important;
+  border-radius: 20px !important;
+  letter-spacing: .02em !important;
+  white-space: nowrap !important;
+}
+.nutrition-delete-btn {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--muted) !important;
+  background: none !important;
+  border: none !important;
+  cursor: pointer !important;
+  padding: 2px 6px !important;
+  border-radius: 6px !important;
+  transition: color .12s, background .12s !important;
+}
+.nutrition-delete-btn:hover {
+  color: #ff6b81 !important;
+  background: rgba(255,107,129,0.1) !important;
+}
+
+/* ── Color-coded macro pills in food log items ── */
+.nutrition-log-metrics {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 5px !important;
+}
+.nutrition-log-metrics span {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  padding: 2px 9px !important;
+  border-radius: 20px !important;
+  background: rgba(255,255,255,0.06) !important;
+  color: var(--label) !important;
+}
+/* Amount (first span, if present) */
+.nutrition-log-metrics span:first-child {
+  background: rgba(255,255,255,0.09) !important;
+  color: var(--text) !important;
+}
+/* Protein — teal (4th from end) */
+.nutrition-log-metrics span:nth-last-child(4) {
+  background: rgba(45,212,191,0.13) !important;
+  color: var(--teal) !important;
+}
+/* Carbs — amber (3rd from end) */
+.nutrition-log-metrics span:nth-last-child(3) {
+  background: rgba(245,158,11,0.13) !important;
+  color: var(--amber) !important;
+}
+/* Fats — purple (2nd from end) */
+.nutrition-log-metrics span:nth-last-child(2) {
+  background: rgba(167,139,250,0.13) !important;
+  color: #a78bfa !important;
+}
+/* Fiber — blue (last) */
+.nutrition-log-metrics span:last-child {
+  background: rgba(96,165,250,0.13) !important;
+  color: var(--blue) !important;
+}
+
+/* ── Macro breakdown — taller bars ── */
+.macro-row { padding: 10px 0 !important; }
+.macro-row .macro-bar {
+  height: 10px !important;
+  border-radius: 5px !important;
+}
+.macro-row .label {
+  min-width: 56px !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  letter-spacing: .08em !important;
+}
+.macro-row .macro-value {
+  min-width: 52px !important;
+  text-align: right !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+
+/* ── Photo card subtitle trim ── */
+.nutrition-photo-card .card-title {
+  font-size: 15px !important;
+  line-height: 1.3 !important;
+}
+
+/* ── Two-chart row ── */
+.nutrition-charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.nutrition-macro-trend-card {
+  border-top: 2px solid rgba(96,165,250,0.35) !important;
+  background: linear-gradient(160deg, rgba(96,165,250,0.04) 0%, rgba(15,32,53,0.95) 50%) !important;
+}
+.act-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+/* Chart legend chips */
+.chart-legend-group { display: flex; align-items: center; gap: 5px; }
+.chart-legend-chip {
+  font-size: 10px; font-weight: 700; letter-spacing: .05em;
+  padding: 2px 8px; border-radius: 20px; text-transform: uppercase;
+}
+.chart-legend-chip.protein { background: rgba(39,210,254,0.15); color: #27d2fe; }
+.chart-legend-chip.carbs   { background: rgba(95,107,255,0.15); color: #5f6bff; }
+.chart-legend-chip.fats    { background: rgba(169,93,255,0.15);  color: #a95dff; }
+.chart-legend-chip.fiber   { background: rgba(95,211,141,0.15);  color: #5fd38d; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .nutrition-charts-row { grid-template-columns: 1fr; }
+  .nutrition-goal-list  { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 520px) {
+  .nutrition-goal-list  { grid-template-columns: repeat(2, 1fr) !important; }
+  .nutrition-goal h4    { font-size: 20px !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   NUTRITION BOTTOM ROW — insights + 30-day history — v11
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Bottom two-panel row ── */
+.nutrition-bottom-row {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 16px;
+}
+
+/* ── Insights card ── */
+.nutrition-insights-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-top: 2px solid rgba(45,212,191,0.35);
+  background: linear-gradient(160deg, rgba(45,212,191,0.04) 0%, rgba(15,32,53,0.95) 50%);
+}
+.nutrition-insights-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.nutrition-insights-header .section-eyebrow { margin-bottom: 0; }
+.insight-metric-select {
+  font-size: 12px; font-weight: 700;
+  background: rgba(12,25,52,0.7);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 9px; padding: 5px 10px;
+  color: var(--text); cursor: pointer;
+  transition: border-color .15s;
+}
+.insight-metric-select:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px rgba(45,212,191,0.12);
+}
+.nutrition-insight-summary {
+  font-size: 14px; font-weight: 600;
+  color: var(--text); line-height: 1.6;
+  flex: 1;
+}
+.nutrition-insight-flag {
+  display: inline-block;
+  font-size: 12px; font-weight: 700;
+  padding: 4px 14px; border-radius: 20px;
+  letter-spacing: .03em;
+}
+.nutrition-insight-flag.positive {
+  background: rgba(45,212,191,0.15);
+  color: var(--teal);
+}
+.nutrition-insight-flag.negative {
+  background: rgba(255,107,129,0.15);
+  color: #ff6b81;
+}
+
+/* ── 30-day history card ── */
+.nutrition-history-card {
+  border-top: 2px solid rgba(167,139,250,0.35);
+  background: linear-gradient(160deg, rgba(167,139,250,0.04) 0%, rgba(15,32,53,0.95) 50%);
+  overflow: hidden;
+}
+.nutrition-month-list {
+  display: flex; flex-direction: column;
+  list-style: none; margin: 0; padding: 0;
+  max-height: 280px; overflow-y: auto;
+  /* ensure app.js enforceScrollableList doesn't conflict */
+}
+.nutrition-month-list::-webkit-scrollbar { width: 4px; }
+.nutrition-month-list::-webkit-scrollbar-thumb {
+  background: rgba(167,139,250,0.3); border-radius: 2px;
+}
+.nutrition-month-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-size: 13px;
+  animation: none !important; /* suppress any slide-in so the list is stable */
+}
+.nutrition-month-list li:last-child { border-bottom: none; }
+.nutrition-month-list li > div:first-child {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.nutrition-month-list li strong {
+  font-size: 13px; font-weight: 700; color: var(--text);
+}
+.nutrition-month-list .trend-meta {
+  font-size: 11px; color: var(--muted);
+}
+.nutrition-month-list li > div:last-child {
+  font-size: 12px; font-weight: 600;
+  color: var(--label);
+  text-align: right; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .nutrition-bottom-row { grid-template-columns: 1fr; }
+}
+
+/* ── Macro donut & surplus/deficit cards — v12 ── */
+.nutrition-donut-card {
+  border-top: 2px solid rgba(39,210,254,0.35);
+  background: linear-gradient(160deg, rgba(39,210,254,0.04) 0%, rgba(15,32,53,0.95) 50%);
+}
+.nutrition-surplus-card {
+  border-top: 2px solid rgba(255,107,129,0.35);
+  background: linear-gradient(160deg, rgba(255,107,129,0.04) 0%, rgba(15,32,53,0.95) 50%);
+}
+/* Centre the donut canvas so it doesn't stretch to full card width */
+#nutritionMacroDonutChart {
+  max-width: 280px;
+  margin: 0 auto;
+  display: block;
+}
+
+/* ── Nutrition chart canvas heights — v14 ── */
+/* Chart.js responsive mode requires position:relative on parent (same as .act-charts-row) */
+.nutrition-charts-row .chart-card { position: relative; }
+/* Line/bar charts use maintainAspectRatio:false so need explicit CSS height */
+.nutrition-charts-row canvas { width: 100% !important; height: 220px !important; }
+/* Donut uses maintainAspectRatio:true so don't override its height */
+#nutritionMacroDonutChart { height: auto !important; }
+@media (max-width: 900px) {
+  .nutrition-charts-row canvas { height: 180px !important; }
 }

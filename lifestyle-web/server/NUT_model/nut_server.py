@@ -15,11 +15,14 @@ EXPRESS MODE  (NUT_EXPRESS_MODE=true in server .env)
   USDA lookups run in parallel instead of sequentially.
 
 ── How to start ──────────────────────────────────────────────────────────────
-Run alongside Node (same machine):
+Default path:
+  Set NUT_EXPRESS_MODE=true in server/.env and start Node normally.
+  server/src/server.js now auto-starts this worker on localhost when needed.
 
+Manual fallback:
   /path/to/NUT_model/.venv/bin/python nut_server.py
 
-Or with PM2 (add to ecosystem.config.js):
+Or with PM2 (if you intentionally manage the worker separately):
   {
     name: 'nut-worker',
     script: '/path/to/NUT_model/.venv/bin/python',

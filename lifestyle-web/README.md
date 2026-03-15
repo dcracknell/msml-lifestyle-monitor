@@ -121,7 +121,7 @@ The client stores that value in `localStorage` under `msml.api.base-url` and reu
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
 | `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference | `python` |
 | `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/nut_estimator.py` |
-| `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/canet_NUT.pth` |
+| `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/checkpoint/canet_NUT.pth` |
 | `NUT_MODEL_LABELS` | Optional path to a custom FoodSeg103 label map JSON (built-in labels are used if omitted) | — |
 | `NUT_MODEL_TIMEOUT_MS` | Max server wait for meal photo inference | `15000` |
 | `NUT_MODEL_MAX_PHOTO_BASE64_LENGTH` | Max accepted base64 photo payload length for `/api/nutrition` | `12582912` |
@@ -170,6 +170,39 @@ Compose uses the same named volume to persist SQLite, rebuilds when files change
 3. Expose the chosen TCP port in your firewall/router. When fronting with HTTPS, point your reverse proxy at `http://127.0.0.1:PORT` and include the public HTTPS origin in `APP_ORIGIN`.
 4. Restart the server (`npm run start` or your process manager) and verify an external request works with `curl http://<public-host>:PORT/api/health`.
 
+### Ubuntu + nginx + Let's Encrypt
+If you are hosting the Node server directly on a Linux machine and want `https://msmls.org` and `https://www.msmls.org`, use the checked-in nginx site config at `server/nginx.conf`.
+
+1. In `server/.env`, set at least:
+   ```env
+   HOST=0.0.0.0
+   PORT=4000
+   APP_ORIGIN=https://msmls.org,https://www.msmls.org
+   REQUIRE_HTTPS=true
+   ```
+2. Start the app and keep it running with your process manager of choice so nginx has something to proxy on `127.0.0.1:4000`.
+3. Install the nginx site:
+   ```bash
+   sudo cp /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor/lifestyle-web/server/nginx.conf \
+     /etc/nginx/sites-available/msmls
+
+   sudo ln -sfn /etc/nginx/sites-available/msmls /etc/nginx/sites-enabled/msmls
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+4. Make sure both `msmls.org` and `www.msmls.org` already resolve to your home/public IP address, then request the certificate:
+   ```bash
+   sudo certbot --nginx -d msmls.org -d www.msmls.org
+   sudo systemctl reload nginx
+   ```
+5. Forward router ports `80/tcp` and `443/tcp` to the Linux machine running nginx. You can find that machine's local IP with:
+   ```bash
+   hostname -I | awk '{print $1}'
+   ```
+6. If you run a local firewall, allow nginx through it before testing from outside your network:
+   ```bash
+   sudo ufw allow 'Nginx Full'
+   ```
+
 ## Operating the Platform
 ### Resetting the Seed Database
 When you edit `database/sql/lifestyle_metrics.sql` or want a clean slate:
@@ -191,10 +224,10 @@ To run inference on a single test image (and verify the model is reading your fi
 cd lifestyle-web/server
 NUT_model/.venv/bin/python NUT_model/nut_estimator.py \
   --image /path/to/test-image.jpg \
-  --model NUT_model/canet_NUT.pth
+  --model NUT_model/checkpoint/canet_NUT.pth
 ```
 
-Keep `NUT_model/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, built-in FoodSeg103 labels are used. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
+Keep `NUT_model/checkpoint/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, built-in FoodSeg103 labels are used. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
 
 If a single photo contains multiple foods, `/api/nutrition` also accepts an `items` array so one request can log multiple entries from the same image. Example payload:
 ```json

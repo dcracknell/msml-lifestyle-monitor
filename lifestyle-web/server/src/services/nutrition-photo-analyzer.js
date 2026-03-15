@@ -22,17 +22,19 @@ function parseIntegerEnv(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEG
 // HIGH ACCURACY (default): spawns a fresh Python process per request.
 //   Slower (~30-45 s) but self-contained — no extra process needed.
 //
-// EXPRESS MODE: set NUT_EXPRESS_MODE=true in your .env and start nut_server.py
-//   alongside Node.  Model stays loaded in memory; USDA lookups run in parallel.
-//   Typical latency: ~3-8 s after the first warm-up request.
+// EXPRESS MODE: set NUT_EXPRESS_MODE=true in your .env.
+//   The Node server auto-starts a local nut_server.py worker when
+//   NUT_EXPRESS_URL points at the local worker. Model stays loaded in memory and USDA
+//   lookups run in parallel. Typical latency: ~3-8 s after the first warm-up request.
 //
-//   Start the worker:
-//     /path/to/NUT_model/.venv/bin/python NUT_model/nut_server.py
-//
-//   To revert: remove NUT_EXPRESS_MODE (or set to false) and stop nut_server.py.
+//   To revert: remove NUT_EXPRESS_MODE (or set it to false).
 // ──────────────────────────────────────────────────────────────────────────────
 const NUT_EXPRESS_MODE = process.env.NUT_EXPRESS_MODE === 'true';
-const NUT_EXPRESS_URL = (process.env.NUT_EXPRESS_URL || 'http://localhost:8001').replace(/\/$/, '');
+const NUT_EXPRESS_URL = (process.env.NUT_EXPRESS_URL || 'http://127.0.0.1:8001').replace(
+  /\/$/,
+  ''
+);
+const { ensureNutExpressWorkerRunning } = require('./nut-express-worker');
 
 const DEFAULT_TIMEOUT_MS = parseIntegerEnv(process.env.NUT_MODEL_TIMEOUT_MS, 45000, {
   min: 1000,
@@ -439,6 +441,10 @@ async function runSetupCheck({
 }
 
 async function verifyNutritionPhotoModelSetup(options = {}) {
+  if (NUT_EXPRESS_MODE) {
+    await ensureNutExpressWorkerRunning();
+  }
+
   const forceRefresh = options.forceRefresh === true;
   const now = Date.now();
 
@@ -495,6 +501,8 @@ async function analyzeNutritionPhotoExpress({
   modelPath = DEFAULT_MODEL_PATH,
   labelsPath = DEFAULT_LABELS_PATH,
 } = {}) {
+  await ensureNutExpressWorkerRunning();
+
   const normalizedPhotoData = normalizeBase64Photo(photoData);
   if (!normalizedPhotoData) {
     throw new NutritionPhotoAnalysisError('Provide a valid meal photo.', {
@@ -556,7 +564,7 @@ async function analyzeNutritionPhotoExpress({
       });
     }
     throw new NutritionPhotoAnalysisError(
-      `NUT worker unavailable at ${NUT_EXPRESS_URL} — is nut_server.py running?`,
+      `NUT worker unavailable at ${NUT_EXPRESS_URL}. Check the server startup logs for the express worker.`,
       { status: 503, code: 'NUT_WORKER_UNAVAILABLE' }
     );
   } finally {
