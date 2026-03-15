@@ -6834,6 +6834,13 @@ async function completeAuthentication(session) {
   updateAdminPanelVisibility(session.user);
   updateSubjectContext(session.user);
   prefillProfileForm(session.user);
+
+  // Show the dashboard before loading data so Chart.js can measure container
+  // dimensions correctly. The startup loading screen (z-index 9999) covers the
+  // dashboard during the fetch phase, so the user sees no flicker.
+  loginPanel.classList.add('hidden');
+  dashboard.classList.remove('hidden');
+
   await fetchRoster();
   await loadMetrics();
   await loadNutrition();
@@ -6842,8 +6849,6 @@ async function completeAuthentication(session) {
   await loadWeight();
   setWeightDateDefault();
 
-  loginPanel.classList.add('hidden');
-  dashboard.classList.remove('hidden');
   queueChartResize();
   loginForm?.reset();
   signupForm?.reset();

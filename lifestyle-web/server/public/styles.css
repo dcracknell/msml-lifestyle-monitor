@@ -554,9 +554,12 @@ form button[type="submit"]:hover { opacity: .88; }
   border-radius: 12px; padding: 18px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.3);
   transition: box-shadow .2s;
+  position: relative;
 }
 .chart-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(45,212,191,0.06); }
 .chart-card canvas { width: 100% !important; }
+/* Overview trend-board charts need explicit CSS height (Chart.js ignores HTML height attr in responsive mode) */
+.trend-boards .chart-card canvas { height: 180px !important; }
 
 /* ─── Signals table ──────────────────────────────────────────────────────── */
 .signals-table { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--gap); }
@@ -913,7 +916,8 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .stage-total-value { font-size: 14px; font-weight: 700; color: var(--text); }
 
 /* Trend card */
-.sleep-trend-card { overflow: hidden; }
+.sleep-trend-card { overflow: hidden; position: relative; }
+.sleep-trend-card canvas { width: 100% !important; height: 220px !important; }
 .sleep-log-table-wrap { max-height: 260px; overflow-y: auto; margin-top: 16px; }
 .sleep-log-table {
   width: 100%; border-collapse: collapse; font-size: 12px;
@@ -943,6 +947,8 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .vitals-mid-row {
   display: grid; grid-template-columns: 3fr 2fr; gap: var(--gap);
 }
+/* HRV chart canvas needs explicit height — it has no height attribute */
+.vitals-mid-row canvas { width: 100% !important; height: 240px !important; }
 
 /* Signal Summary table */
 .vitals-summary-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -1125,6 +1131,7 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 
 /* ─── Weight subpage ─────────────────────────────────────────────────────── */
 .weight-signals-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
+#weightTrendChart { width: 100% !important; height: 220px !important; }
 .weight-log-row { display: grid; grid-template-columns: 3fr 2fr; gap: var(--gap); }
 .weight-right-col { display: flex; flex-direction: column; gap: var(--gap); }
 .weight-bmi-badge {
