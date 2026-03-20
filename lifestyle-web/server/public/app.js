@@ -123,27 +123,52 @@ function resolveApiRequestUrl(targetUrl) {
   return targetUrl;
 }
 
-function apiFetch(input, init) {
+async function finalizeApiResponse(response) {
+  if (!response || response.ok || response.status !== 400) {
+    return response;
+  }
+
+  const responseUrl = typeof response.url === 'string' ? response.url : '';
+  if (!/\/api(?:\/|$)/i.test(responseUrl)) {
+    return response;
+  }
+
+  let bodyText = '';
+  try {
+    bodyText = await response.clone().text();
+  } catch (error) {
+    return response;
+  }
+
+  if (!/request header or cookie too large/i.test(bodyText)) {
+    return response;
+  }
+
+  resetToAuth('Session expired. Please sign in again.');
+  throw new Error('Session expired. Please sign in again.');
+}
+
+async function apiFetch(input, init) {
   if (!nativeFetch) {
     throw new Error('Fetch is unavailable in this browser.');
   }
 
   if (typeof input === 'string') {
-    return nativeFetch(resolveApiRequestUrl(input), init);
+    return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input), init));
   }
 
   if (typeof URL !== 'undefined' && input instanceof URL) {
-    return nativeFetch(resolveApiRequestUrl(input.toString()), init);
+    return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input.toString()), init));
   }
 
   if (typeof Request !== 'undefined' && input instanceof Request) {
     const resolvedUrl = resolveApiRequestUrl(input.url);
     if (resolvedUrl !== input.url) {
-      return nativeFetch(new Request(resolvedUrl, input), init);
+      return finalizeApiResponse(await nativeFetch(new Request(resolvedUrl, input), init));
     }
   }
 
-  return nativeFetch(input, init);
+  return finalizeApiResponse(await nativeFetch(input, init));
 }
 
 function destroyChartBoundToCanvas(canvas) {
@@ -462,10 +487,6 @@ function getVisibleAxisValues(chart, axisId, viewport) {
 function applySmartYScales(chart, pluginOptions, viewport) {
   const scales = chart?.options?.scales;
   if (!scales || typeof scales !== 'object') return;
-  const targetTicks = Math.max(
-    3,
-    Math.floor(Number(pluginOptions?.targetTicks) || SMART_CHART_TARGET_TICKS)
-  );
   const datasets = Array.isArray(chart?.data?.datasets) ? chart.data.datasets : [];
   const axisIds = new Set(
     datasets.map((dataset) => dataset?.yAxisID || 'y').filter((axisId) => typeof axisId === 'string')
@@ -480,24 +501,22 @@ function applySmartYScales(chart, pluginOptions, viewport) {
     if (axis !== 'y') return;
     const values = getVisibleAxisValues(chart, axisId, viewport);
     if (!values.length) return;
-    const range = computeNiceAxisRange(values, { targetTicks });
+    const range = computeNiceAxisRange(values, {
+      targetTicks: Math.max(
+        3,
+        Math.floor(Number(pluginOptions?.targetTicks) || SMART_CHART_TARGET_TICKS)
+      ),
+    });
     if (!range) return;
     axisConfig.min = range.min;
     axisConfig.max = range.max;
-    axisConfig.ticks = axisConfig.ticks || {};
-    axisConfig.ticks.autoSkip = true;
-    axisConfig.ticks.maxTicksLimit = Math.max(3, targetTicks);
-    axisConfig.ticks.stepSize = range.stepSize;
-    if (typeof axisConfig.ticks.callback !== 'function') {
-      axisConfig.ticks.callback = formatSmartAxisTick;
-    }
   });
 }
 
 const SMART_VIEWPORT_PLUGIN = {
   id: 'smartViewport',
   beforeUpdate(chart, _args, pluginOptions) {
-    if (!pluginOptions || pluginOptions.enabled === false) {
+    if (!pluginOptions || pluginOptions.enabled !== true) {
       cleanupSmartViewportListeners(chart);
       return;
     }
@@ -524,20 +543,12 @@ const SMART_VIEWPORT_PLUGIN = {
     chart.$smartViewportState = viewport;
 
     if (xScale && typeof xScale === 'object') {
-      xScale.ticks = xScale.ticks || {};
-      xScale.ticks.autoSkip = true;
-      xScale.ticks.maxTicksLimit = Math.max(
-        4,
-        Math.floor(Number(pluginOptions.targetTicks) || SMART_CHART_TARGET_TICKS) + 1
-      );
-      xScale.ticks.maxRotation = 0;
-      xScale.ticks.minRotation = 0;
       if (isCategoryScale && totalPoints > visiblePoints) {
         xScale.min = start;
         xScale.max = end;
       } else {
-        delete xScale.min;
-        delete xScale.max;
+        xScale.min = undefined;
+        xScale.max = undefined;
       }
     }
 
@@ -2343,10 +2354,7 @@ async function submitNutritionMealDraft() {
     }
 
     state.nutritionLogShouldScrollToTop = true;
-    await loadNutrition();
-    if (requestItems.some((item) => item.type === 'Liquid')) {
-      await loadMetrics(state.user?.id);
-    }
+    await refreshNutritionLinkedViews();
     return true;
   } catch (error) {
     if (nutritionFeedback) {
@@ -2489,10 +2497,13 @@ function scrubSensitiveQueryParams() {
 scrubSensitiveQueryParams();
 const activityTrainingLoad = document.getElementById('activityTrainingLoad');
 const activityVo2max = document.getElementById('activityVo2max');
+const activityPrimarySessionsList = document.getElementById('sessionsList');
 const activitySessionsList = document.getElementById('activitySessions');
 const activitySplitsList = document.getElementById('activitySplits');
 const activitySplitTitle = document.getElementById('activitySplitTitle');
 const activityBestEffortsList = document.getElementById('activityBestEfforts');
+const activityBestEffortsBadge = document.getElementById('activityBestEffortsBadge');
+const activityBestEffortsHint = document.getElementById('activityBestEffortsHint');
 const activitySessionHint = document.getElementById('activitySessionHint');
 const stravaExportButton = document.getElementById('stravaExportButton');
 const stravaPanelElement = document.getElementById('stravaPanel');
@@ -2568,6 +2579,26 @@ const formatDistance = (meters) => {
     return `${formatDecimal(meters / 1000, 1)} km`;
   }
   return `${Math.round(meters)} m`;
+};
+const formatDurationFromSeconds = (seconds) =>
+  Number.isFinite(seconds) && seconds > 0
+    ? formatDurationFromMinutes(seconds / 60)
+    : '—';
+const formatActivityDateTime = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+};
+const formatSessionSource = (value) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '—';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -2955,10 +2986,20 @@ function resetActivityState() {
   state.charts.activityPace = null;
   state.charts.activityLoad?.destroy();
   state.charts.activityLoad = null;
+  if (activityPrimarySessionsList) activityPrimarySessionsList.innerHTML = '';
   if (activitySessionsList) activitySessionsList.innerHTML = '';
   if (activitySplitsList) activitySplitsList.innerHTML = '';
   if (activityBestEffortsList) activityBestEffortsList.innerHTML = '';
-  if (activitySplitTitle) activitySplitTitle.textContent = 'Select a session';
+  if (activityBestEffortsBadge) {
+    activityBestEffortsBadge.textContent = '';
+    activityBestEffortsBadge.className = 'status-chip hidden';
+  }
+  if (activityBestEffortsHint) {
+    activityBestEffortsHint.textContent =
+      'Fastest pace and longest-distance efforts from your recent runs.';
+  }
+  if (activitySessionHint) activitySessionHint.textContent = 'Click a run to inspect details →';
+  if (activitySplitTitle) activitySplitTitle.textContent = 'Select a run';
   if (activityWeeklyDistance) activityWeeklyDistance.textContent = '—';
   if (activityWeeklyDuration) activityWeeklyDuration.textContent = '—';
   if (activityAvgPace) activityAvgPace.textContent = '—';
@@ -3042,29 +3083,6 @@ function renderNutritionGoals(goals = {}, totals = null) {
     `;
     nutritionGoalList.appendChild(card);
   });
-}
-
-function applyEntryRemoval(entryId) {
-  if (!state.nutrition || !Array.isArray(state.nutrition.entries)) {
-    return null;
-  }
-  const index = state.nutrition.entries.findIndex((entry) => entry.id === entryId);
-  if (index === -1) {
-    return null;
-  }
-  const [removed] = state.nutrition.entries.splice(index, 1);
-  if (state.nutrition.dailyTotals && removed) {
-    const totals = { ...state.nutrition.dailyTotals };
-    const clamp = (value) => Math.max(0, Math.round(value));
-    totals.calories = clamp((totals.calories || 0) - (removed.calories || 0));
-    totals.protein = clamp((totals.protein || 0) - (removed.protein || 0));
-    totals.carbs = clamp((totals.carbs || 0) - (removed.carbs || 0));
-    totals.fats = clamp((totals.fats || 0) - (removed.fats || 0));
-    totals.fiber = clamp((totals.fiber || 0) - (removed.fiber || 0));
-    totals.count = Math.max(0, (totals.count || state.nutrition.entries.length + 1) - 1);
-    state.nutrition.dailyTotals = totals;
-  }
-  return removed;
 }
 
 function normalizeEntryFilter(value) {
@@ -3303,21 +3321,23 @@ function renderNutritionTrendChart(days = []) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const sorted = getChronologicalTrend(days);
-  const DEMO_DAYS = ['Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13','Mar 14'];
-  const usingDemo = !sorted.length;
+  if (!sorted.length) {
+    state.charts.nutritionTrend?.destroy();
+    state.charts.nutritionTrend = null;
+    showChartMessage(canvasId, 'Log food in the database to build a calorie trend.');
+    return;
+  }
 
-  const labels = usingDemo ? DEMO_DAYS : sorted.map((day) => formatDate(day.date));
-  const actualCalories = usingDemo
-    ? [1850, 2100, 1920, 2250, 1780, 2050, 1980]
-    : sorted.map((day) => Number(day.calories) || 0);
-  const targetCalories = usingDemo
-    ? [2000, 2000, 2000, 2000, 2000, 2000, 2000]
-    : sorted.map((day) => (Number.isFinite(day?.targetCalories) ? Number(day.targetCalories) : null));
+  const labels = sorted.map((day) => formatDate(day.date));
+  const actualCalories = sorted.map((day) => Number(day.calories) || 0);
+  const targetCalories = sorted.map((day) =>
+    Number.isFinite(day?.targetCalories) ? Number(day.targetCalories) : null
+  );
   const hasTargetData = targetCalories.some((value) => Number.isFinite(value));
 
   const datasets = [
     {
-      label: usingDemo ? 'Calories (example)' : 'Calories',
+      label: 'Calories',
       data: actualCalories,
       borderColor: '#4df5ff',
       backgroundColor: 'rgba(77, 245, 255, 0.2)',
@@ -3328,7 +3348,7 @@ function renderNutritionTrendChart(days = []) {
   ];
   if (hasTargetData) {
     datasets.push({
-      label: usingDemo ? 'Target (example)' : 'Target',
+      label: 'Target',
       data: targetCalories,
       borderColor: '#a95dff',
       borderDash: [6, 4],
@@ -3346,6 +3366,8 @@ function renderNutritionTrendChart(days = []) {
     type: 'line',
     data: { labels, datasets },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
@@ -3371,30 +3393,10 @@ function renderMacroHistoryChart(days = [], goals = null) {
       Number(day?.fiber) > 0 ||
       Number(day?.calories) > 0
   );
-  const DEMO_MACRO_DAYS = ['Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13','Mar 14'];
-  const usingMacroDemo = !sorted.length || !hasMacros;
-  if (usingMacroDemo) {
-    const demoCtx = canvas.getContext('2d');
+  if (!sorted.length || !hasMacros) {
     state.charts.nutritionMacroTrend?.destroy();
-    state.charts.nutritionMacroTrend = createChart(demoCtx, {
-      type: 'line',
-      data: {
-        labels: DEMO_MACRO_DAYS,
-        datasets: [
-          { label: 'Protein (example)', data: [145,160,138,172,128,155,148], borderColor: '#27d2fe', backgroundColor: 'rgba(39,210,254,0.1)', tension: 0.35, fill: false, pointRadius: 0 },
-          { label: 'Carbs (example)',   data: [220,260,235,285,198,245,238], borderColor: '#5f6bff', backgroundColor: 'rgba(95,107,255,0.1)',  tension: 0.35, fill: false, pointRadius: 0 },
-          { label: 'Fats (example)',    data: [68,78,72,85,62,74,71],       borderColor: '#a95dff', backgroundColor: 'rgba(169,93,255,0.1)',   tension: 0.35, fill: false, pointRadius: 0 },
-          { label: 'Fiber (example)',   data: [24,28,22,31,19,26,25],       borderColor: '#5fd38d', backgroundColor: 'rgba(95,211,141,0.1)',   tension: 0.35, fill: false, pointRadius: 0 },
-        ],
-      },
-      options: {
-        plugins: { legend: { labels: { color: '#dfe6ff' } } },
-        scales: {
-          x: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-          y: { ticks: { color: '#9bb0d6' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        },
-      },
-    });
+    state.charts.nutritionMacroTrend = null;
+    showChartMessage(canvasId, 'Log macros in the database to reveal the trend.');
     return;
   }
 
@@ -3446,6 +3448,8 @@ function renderMacroHistoryChart(days = [], goals = null) {
       datasets,
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
@@ -3467,11 +3471,16 @@ function renderMacroDonutChart(totals = null) {
   const carbs   = Number(totals?.carbs)   || 0;
   const fats    = Number(totals?.fats)    || 0;
   const total   = protein + carbs + fats;
-  const usingDonutDemo = !total;
-  const dProtein = usingDonutDemo ? 148 : protein;
-  const dCarbs   = usingDonutDemo ? 238 : carbs;
-  const dFats    = usingDonutDemo ? 71  : fats;
-  const dTotal   = dProtein + dCarbs + dFats || 1;
+  if (!total) {
+    state.charts.nutritionMacroDonut?.destroy();
+    state.charts.nutritionMacroDonut = null;
+    showChartMessage(canvasId, 'Log macros today to see the current split.');
+    return;
+  }
+  const dProtein = protein;
+  const dCarbs = carbs;
+  const dFats = fats;
+  const dTotal = total || 1;
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   state.charts.nutritionMacroDonut?.destroy();
@@ -3479,9 +3488,9 @@ function renderMacroDonutChart(totals = null) {
     type: 'doughnut',
     data: {
       labels: [
-        `Protein — ${dProtein}g (${Math.round((dProtein / dTotal) * 100)}%)${usingDonutDemo ? ' *' : ''}`,
-        `Carbs — ${dCarbs}g (${Math.round((dCarbs / dTotal) * 100)}%)${usingDonutDemo ? ' *' : ''}`,
-        `Fats — ${dFats}g (${Math.round((dFats / dTotal) * 100)}%)${usingDonutDemo ? ' *' : ''}`,
+        `Protein — ${dProtein}g (${Math.round((dProtein / dTotal) * 100)}%)`,
+        `Carbs — ${dCarbs}g (${Math.round((dCarbs / dTotal) * 100)}%)`,
+        `Fats — ${dFats}g (${Math.round((dFats / dTotal) * 100)}%)`,
       ],
       datasets: [{
         data: [dProtein, dCarbs, dFats],
@@ -3500,7 +3509,7 @@ function renderMacroDonutChart(totals = null) {
         },
         tooltip: {
           callbacks: {
-            label: (ctx) => ` ${ctx.raw}g  (${Math.round((ctx.raw / total) * 100)}%)`,
+            label: (ctx) => ` ${ctx.raw}g  (${Math.round((ctx.raw / dTotal) * 100)}%)`,
           },
         },
       },
@@ -3519,9 +3528,16 @@ function renderSurplusChart(days = []) {
   const withTarget = sorted.filter(
     (d) => Number.isFinite(Number(d?.targetCalories)) && Number(d.targetCalories) > 0
   );
-  const usingDeficitDemo = !withTarget.length;
-  const labels    = usingDeficitDemo ? ['Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13','Mar 14'] : withTarget.map((d) => formatDate(d.date));
-  const surpluses = usingDeficitDemo ? [-150, 100, -80, 250, -220, 50, -20] : withTarget.map((d) => Math.round(Number(d.calories) - Number(d.targetCalories)));
+  if (!withTarget.length) {
+    state.charts.nutritionSurplus?.destroy();
+    state.charts.nutritionSurplus = null;
+    showChartMessage(canvasId, 'Set calorie targets and log meals to compare surplus vs deficit.');
+    return;
+  }
+  const labels = withTarget.map((d) => formatDate(d.date));
+  const surpluses = withTarget.map((d) =>
+    Math.round(Number(d.calories) - Number(d.targetCalories))
+  );
   const bgColors   = surpluses.map((v) => v >= 0 ? 'rgba(255,107,129,0.75)' : 'rgba(45,212,191,0.75)');
   const bdColors   = surpluses.map((v) => v >= 0 ? '#ff6b81' : '#2dd4bf');
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
@@ -3541,6 +3557,8 @@ function renderSurplusChart(days = []) {
       }],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -4012,6 +4030,8 @@ function renderWeightChart(timeline = [], goalCalories) {
       datasets,
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 16 }),
@@ -5369,9 +5389,7 @@ async function deleteNutritionEntry(entryId) {
     if (!response.ok) {
       throw new Error(payload?.message || 'Unable to remove that item.');
     }
-    applyEntryRemoval(entryId);
-    state.nutritionLogShouldScrollToTop = false;
-    renderNutritionDashboard(state.nutrition);
+    await refreshNutritionLinkedViews();
     if (nutritionFeedback) {
       nutritionFeedback.textContent = payload?.message || 'Entry removed.';
     }
@@ -6195,6 +6213,8 @@ forgotPasswordButton?.addEventListener('click', () => setAuthMode('forgot'));
 backToLoginButtons.forEach((button) => {
   button.addEventListener('click', () => setAuthMode(button.dataset.authBack || 'login'));
 });
+activityPrimarySessionsList?.addEventListener('click', handleActivitySessionClick);
+activityPrimarySessionsList?.addEventListener('keydown', handleActivitySessionKeydown);
 activitySessionsList?.addEventListener('click', handleActivitySessionClick);
 stravaConnectButton?.addEventListener('click', handleStravaConnect);
 stravaSyncButton?.addEventListener('click', handleStravaSync);
@@ -6576,10 +6596,7 @@ nutritionForm?.addEventListener('submit', async (event) => {
     state.nutritionLogShouldScrollToTop = true;
     setAmountReference(null);
     updateAmountFieldUnit();
-    await loadNutrition();
-    if (type === 'Liquid') {
-      await loadMetrics(state.user?.id);
-    }
+    await refreshNutritionLinkedViews();
     clearSuggestions();
   } catch (error) {
     nutritionFeedback.textContent = error.message;
@@ -7127,39 +7144,14 @@ async function loadNutrition(subjectOverrideId, options = {}) {
   }
 }
 
-function applyDemoActivityData(feedbackMessage) {
-  const demo = cloneDemoData(DEMO_ACTIVITY);
-  state.activity.summary = demo.summary || null;
-  state.activity.sessions = Array.isArray(demo.sessions) ? demo.sessions.slice() : [];
-  state.activity.splits = demo.splits || {};
-  state.activity.bestEfforts = Array.isArray(demo.bestEfforts) ? demo.bestEfforts.slice() : [];
-  state.activity.strava = {
-    ...(state.activity.strava || {}),
-    ...(demo.strava || {}),
-  };
-  state.activity.subjectId = state.viewing?.id ?? state.user?.id ?? null;
-  state.activity.selectedSessionId = state.activity.sessions[0]?.id || null;
-  renderActivitySummary(state.activity.summary);
-  renderActivitySessions(state.activity.sessions);
-  renderActivitySplits();
-  renderActivityBestEfforts(state.activity.bestEfforts);
-  renderActivityCharts(demo.charts || {});
-  renderStravaPanel(state.activity.strava || {});
-  renderSessions(state.activity.sessions);
-  if (feedbackMessage && stravaFeedback) {
-    stravaFeedback.textContent = feedbackMessage;
-  }
-}
-
-function applyDemoVitalsData(feedbackMessage) {
-  const demo = cloneDemoData(DEMO_VITALS);
-  state.vitals.latest = demo.latest || null;
-  state.vitals.timeline = Array.isArray(demo.timeline) ? demo.timeline.slice() : [];
-  state.vitals.stats = demo.stats || null;
-  renderVitalsDashboard(state.vitals);
-  if (feedbackMessage && vitalsFeedback) {
-    vitalsFeedback.textContent = feedbackMessage;
-  }
+async function refreshNutritionLinkedViews() {
+  const subjectId = state.user?.id;
+  if (!subjectId) return;
+  await Promise.all([
+    loadNutrition(subjectId, { date: getActiveNutritionDate() }),
+    loadMetrics(subjectId),
+    loadWeight(subjectId),
+  ]);
 }
 
 async function loadActivity(subjectOverrideId) {
@@ -7187,8 +7179,6 @@ async function loadActivity(subjectOverrideId) {
               ? 'Access revoked for that athlete.'
               : 'That athlete is no longer available.';
         }
-      } else if (isSelfView) {
-        applyDemoActivityData('Showing demo activity data while your tracker syncs.');
       } else if (stravaFeedback) {
         stravaFeedback.textContent = 'Unable to load activity data right now.';
       }
@@ -7216,10 +7206,6 @@ async function loadActivity(subjectOverrideId) {
       state.activity.sessions.length > 0 ||
       (Array.isArray(charts.mileageTrend) && charts.mileageTrend.length > 0) ||
       (Array.isArray(charts.heartRatePace) && charts.heartRatePace.length > 0);
-    if (!hasActivityData && isSelfView) {
-      applyDemoActivityData('Showing demo activity data while your tracker syncs.');
-      return;
-    }
     renderActivitySummary(state.activity.summary);
     renderActivitySessions(state.activity.sessions);
     renderActivitySplits();
@@ -7227,10 +7213,11 @@ async function loadActivity(subjectOverrideId) {
     renderActivityCharts(charts);
     renderStravaPanel(state.activity.strava || {});
     renderSessions(state.activity.sessions);
+    if (stravaFeedback && !hasActivityData && isSelfView) {
+      stravaFeedback.textContent = '';
+    }
   } catch (error) {
-    if (isSelfView) {
-      applyDemoActivityData('Showing demo activity data while your tracker syncs.');
-    } else if (stravaFeedback) {
+    if (stravaFeedback) {
       stravaFeedback.textContent = 'Unable to load activity data right now.';
     }
   }
@@ -7261,8 +7248,6 @@ async function loadVitals(subjectOverrideId) {
               ? 'Access revoked for that athlete.'
               : 'That athlete is no longer available.';
         }
-      } else if (isSelfView) {
-        applyDemoVitalsData('Showing demo vitals data while wearables sync.');
       } else if (vitalsFeedback) {
         vitalsFeedback.textContent = 'Unable to load vitals right now.';
       }
@@ -7273,22 +7258,12 @@ async function loadVitals(subjectOverrideId) {
     state.vitals.latest = payload.latest || null;
     state.vitals.timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
     state.vitals.stats = payload.stats || null;
-    const hasVitalsData =
-      Boolean(state.vitals.latest) ||
-      (Array.isArray(state.vitals.timeline) && state.vitals.timeline.length > 0) ||
-      Boolean(state.vitals.stats);
-    if (!hasVitalsData && isSelfView) {
-      applyDemoVitalsData('Showing demo vitals data while wearables sync.');
-      return;
-    }
     renderVitalsDashboard(state.vitals);
     if (vitalsFeedback) {
       vitalsFeedback.textContent = '';
     }
   } catch (error) {
-    if (isSelfView) {
-      applyDemoVitalsData('Showing demo vitals data while wearables sync.');
-    } else if (vitalsFeedback) {
+    if (vitalsFeedback) {
       vitalsFeedback.textContent = 'Unable to load vitals right now.';
     }
   }
@@ -7351,8 +7326,17 @@ function handleActivitySessionClick(event) {
     return;
   }
   state.activity.selectedSessionId = sessionId;
+  renderSessions(state.activity.sessions);
   renderActivitySessions(state.activity.sessions);
   renderActivitySplits();
+}
+
+function handleActivitySessionKeydown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  const target = event.target.closest('[data-session-id]');
+  if (!target) return;
+  event.preventDefault();
+  handleActivitySessionClick(event);
 }
 
 async function handleStravaConnect(event) {
@@ -8771,11 +8755,18 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
   }
   const chronological = timeline
     .slice()
-    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
+    .sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime())
+    .slice(-7);
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   const labels = chronological.map((entry) => formatDate(entry.date));
   const hours = chronological.map((entry) => Math.round(entry.sleepHours * 10) / 10);
+  const sleepAxisValues = Number.isFinite(goalSleep) ? [...hours, Number(goalSleep)] : [...hours];
+  const sleepAxisMin = Math.max(
+    0,
+    Math.floor((Math.min(...sleepAxisValues) - 0.2) * 2) / 2
+  );
+  const sleepAxisMax = Math.ceil((Math.max(...sleepAxisValues) + 0.2) * 2) / 2;
   const datasets = [
     {
       label: 'Sleep hours',
@@ -8803,11 +8794,12 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
     type: 'line',
     data: { labels, datasets },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: {
           labels: { color: '#dfe6ff' },
         },
-        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
         tooltip: {
           callbacks: {
             label(context) {
@@ -8820,14 +8812,33 @@ function renderSleepTrendChart(timeline = [], goalSleep) {
       },
       scales: {
         x: {
-          ticks: { color: '#9bb0d6' },
+          title: {
+            display: true,
+            text: 'Night',
+            color: '#9bb0d6',
+          },
+          ticks: {
+            color: '#9bb0d6',
+            autoSkip: false,
+            maxRotation: 0,
+            minRotation: 0,
+          },
           grid: { color: 'rgba(255, 255, 255, 0.05)' },
         },
         y: {
+          min: sleepAxisMin,
+          max: sleepAxisMax,
+          title: {
+            display: true,
+            text: 'Hours Slept',
+            color: '#9bb0d6',
+          },
           ticks: {
             color: '#9bb0d6',
+            stepSize: 0.5,
+            maxTicksLimit: 6,
             callback(value) {
-              return `${value}h`;
+              return `${formatDecimal(Number(value), 1)}h`;
             },
           },
           grid: { color: 'rgba(255, 255, 255, 0.05)' },
@@ -8897,6 +8908,8 @@ function renderOverviewReadinessChart(timeline = []) {
       ],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 10 }),
@@ -9061,6 +9074,8 @@ function renderActivityChart(timeline = []) {
       ],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
@@ -9098,6 +9113,8 @@ function renderMacroChart(macros) {
       ],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { position: 'bottom', labels: { color: '#dfe6ff' } },
       },
@@ -9106,7 +9123,7 @@ function renderMacroChart(macros) {
 }
 
 function renderSessions(sessions = []) {
-  const list = document.getElementById('sessionsList');
+  const list = activityPrimarySessionsList;
   const summary = document.getElementById('sessionsSummary');
   if (!list) return;
 
@@ -9118,6 +9135,9 @@ function renderSessions(sessions = []) {
     li.className = 'session-item';
     li.innerHTML = '<p class="muted">No sessions logged yet.</p>';
     list.appendChild(li);
+    if (activitySessionHint) {
+      activitySessionHint.textContent = 'Connect Strava to start streaming your runs.';
+    }
     if (summary) {
       summary.textContent = 'Sessions will populate once your tracker syncs workout data.';
     }
@@ -9132,6 +9152,9 @@ function renderSessions(sessions = []) {
         new Date(b?.startTime || 0).getTime() - new Date(a?.startTime || 0).getTime()
     );
   const rollingWindow = orderedSessions.slice(0, 5);
+  if (activitySessionHint) {
+    activitySessionHint.textContent = 'Click a run to inspect details →';
+  }
 
   const estimateSessionLoad = (entry) => {
     const explicitLoad = Number(entry?.trainingLoad);
@@ -9164,19 +9187,38 @@ function renderSessions(sessions = []) {
       ? 'Long endurance'
       : 'Steady effort';
     const li = document.createElement('li');
-    li.className = 'session-item';
-    li.innerHTML = `
-      <div>
-        <p class="session-title">${formatDate(entry.startTime)} · ${entry.sportType || 'Workout'}</p>
-        <p class="muted">${entry.name || 'Training session'} · ${effortLabel}</p>
-      </div>
-      <div class="session-metrics">
-        <span>${formatDistance(entry.distance)}</span>
-        <span>${entry.averagePace ? `${formatPace(entry.averagePace)} /km` : '—'}</span>
-        <span>${formatDurationFromMinutes(durationMinutes)}</span>
-        <span>${Number.isFinite(load) ? `${formatNumber(load)} load` : '—'}</span>
-      </div>
-    `;
+    const isActive = entry.id === state.activity.selectedSessionId;
+    li.className = `session-item${isActive ? ' active' : ''}`;
+    li.dataset.sessionId = entry.id;
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-pressed', String(isActive));
+
+    const body = document.createElement('div');
+    const title = document.createElement('p');
+    title.className = 'session-title';
+    title.textContent = `${formatDate(entry.startTime)} · ${entry.sportType || 'Workout'}`;
+    const subtitle = document.createElement('p');
+    subtitle.className = 'muted';
+    subtitle.textContent = `${entry.name || 'Training session'} · ${effortLabel}`;
+    body.appendChild(title);
+    body.appendChild(subtitle);
+
+    const metrics = document.createElement('div');
+    metrics.className = 'session-metrics';
+    [
+      formatDistance(entry.distance),
+      entry.averagePace ? `${formatPace(entry.averagePace)} /km` : '—',
+      formatDurationFromMinutes(durationMinutes),
+      Number.isFinite(load) ? `${formatNumber(load)} load` : '—',
+    ].forEach((value) => {
+      const metric = document.createElement('span');
+      metric.textContent = value;
+      metrics.appendChild(metric);
+    });
+
+    li.appendChild(body);
+    li.appendChild(metrics);
     list.appendChild(li);
   });
 
@@ -9377,58 +9419,174 @@ function renderStravaExportButton() {
 function renderActivitySplits() {
   if (!activitySplitsList) return;
   activitySplitsList.innerHTML = '';
-  const sessionId = state.activity.selectedSessionId;
-  const session = state.activity.sessions.find((item) => item.id === sessionId);
+  const session = getSelectedActivitySession();
   if (!session) {
-    if (activitySplitTitle) activitySplitTitle.textContent = 'Select a session';
+    if (activitySplitTitle) activitySplitTitle.textContent = 'Select a run';
     const empty = document.createElement('li');
     empty.className = 'empty-row';
-    empty.textContent = 'Choose a session to review splits.';
+    empty.textContent = 'Choose a run to view the session details.';
     activitySplitsList.appendChild(empty);
     renderStravaExportButton();
     enforceScrollableList(activitySplitsList);
     return;
   }
-  if (activitySplitTitle) activitySplitTitle.textContent = session.name || 'Session splits';
-  const splits = state.activity.splits?.[session.id] || [];
-  if (!splits.length) {
-    const empty = document.createElement('li');
-    empty.className = 'empty-row';
-    empty.textContent = 'Splits not available for this run.';
-    activitySplitsList.appendChild(empty);
-    renderStravaExportButton();
-    enforceScrollableList(activitySplitsList);
-    return;
-  }
-  splits.forEach((split) => {
-    const li = document.createElement('li');
-    const main = document.createElement('div');
-    main.className = 'activity-split-main';
-    const title = document.createElement('strong');
-    title.textContent = `Split ${split.splitIndex}`;
-    const detail = document.createElement('span');
-    detail.className = 'muted';
-    detail.textContent = `${formatDistance(split.distance)} • ${
-      split.pace ? `${formatPace(split.pace)} /km` : '—'
-    }`;
-    main.appendChild(title);
-    main.appendChild(detail);
+  if (activitySplitTitle) activitySplitTitle.textContent = session.name || 'Run details';
 
-    const metrics = document.createElement('div');
-    metrics.className = 'activity-session-meta';
-    const hr = document.createElement('span');
-    hr.textContent = split.heartRate ? `${Math.round(split.heartRate)} bpm` : '—';
-    const elevation = document.createElement('span');
-    elevation.textContent = Number.isFinite(split.elevation)
-      ? `${Math.round(split.elevation)} m`
-      : '—';
-    metrics.appendChild(hr);
-    metrics.appendChild(elevation);
+  const overview = document.createElement('li');
+  overview.className = 'run-detail-card';
 
-    li.appendChild(main);
-    li.appendChild(metrics);
-    activitySplitsList.appendChild(li);
+  const overviewHeader = document.createElement('div');
+  overviewHeader.className = 'run-detail-header';
+  const overviewKicker = document.createElement('p');
+  overviewKicker.className = 'run-detail-kicker';
+  overviewKicker.textContent = `${formatActivityDateTime(session.startTime)} • ${
+    session.sportType || 'Run'
+  }`;
+  const overviewCopy = document.createElement('p');
+  overviewCopy.className = 'run-detail-copy';
+  overviewCopy.textContent = `Source: ${formatSessionSource(session.source)}`;
+  overviewHeader.appendChild(overviewKicker);
+  overviewHeader.appendChild(overviewCopy);
+
+  const detailGrid = document.createElement('div');
+  detailGrid.className = 'run-detail-grid';
+  const detailFields = [
+    ['Distance', formatDistance(session.distance)],
+    [
+      'Moving time',
+      formatDurationFromSeconds(Number(session.movingTime) || Number(session.elapsedTime)),
+    ],
+    ['Elapsed time', formatDurationFromSeconds(Number(session.elapsedTime))],
+    ['Average pace', session.averagePace ? `${formatPace(session.averagePace)} /km` : '—'],
+    ['Average HR', session.averageHr ? `${Math.round(session.averageHr)} bpm` : '—'],
+    ['Max HR', session.maxHr ? `${Math.round(session.maxHr)} bpm` : '—'],
+    [
+      'Elevation gain',
+      Number.isFinite(Number(session.elevationGain))
+        ? `${Math.round(Number(session.elevationGain))} m`
+        : '—',
+    ],
+    [
+      'Cadence',
+      Number.isFinite(Number(session.averageCadence))
+        ? `${formatDecimal(Number(session.averageCadence), 0)} spm`
+        : '—',
+    ],
+    [
+      'Average power',
+      Number.isFinite(Number(session.averagePower))
+        ? `${Math.round(Number(session.averagePower))} w`
+        : '—',
+    ],
+    [
+      'Calories',
+      Number.isFinite(Number(session.calories))
+        ? `${formatNumber(Math.round(Number(session.calories)))} kcal`
+        : '—',
+    ],
+    [
+      'Training load',
+      Number.isFinite(Number(session.trainingLoad))
+        ? formatNumber(Math.round(Number(session.trainingLoad)))
+        : '—',
+    ],
+    [
+      'VO2 max',
+      Number.isFinite(Number(session.vo2maxEstimate))
+        ? formatDecimal(Number(session.vo2maxEstimate), 1)
+        : '—',
+    ],
+    [
+      'Perceived effort',
+      Number.isFinite(Number(session.perceivedEffort))
+        ? `${Math.round(Number(session.perceivedEffort))}/10`
+        : '—',
+    ],
+  ];
+
+  detailFields.forEach(([label, value]) => {
+    const metric = document.createElement('div');
+    metric.className = 'run-detail-metric';
+    const metricLabel = document.createElement('span');
+    metricLabel.className = 'run-detail-label';
+    metricLabel.textContent = label;
+    const metricValue = document.createElement('span');
+    metricValue.className = 'run-detail-value';
+    metricValue.textContent = value;
+    metric.appendChild(metricLabel);
+    metric.appendChild(metricValue);
+    detailGrid.appendChild(metric);
   });
+
+  overview.appendChild(overviewHeader);
+  overview.appendChild(detailGrid);
+  activitySplitsList.appendChild(overview);
+
+  const splitCard = document.createElement('li');
+  splitCard.className = 'run-split-card';
+  const splitHeader = document.createElement('div');
+  splitHeader.className = 'run-detail-section-header';
+  const splitTitle = document.createElement('span');
+  splitTitle.className = 'run-detail-section-title';
+  splitTitle.textContent = 'Splits';
+  const splitCopy = document.createElement('span');
+  splitCopy.className = 'run-detail-section-copy';
+  const splits = state.activity.splits?.[session.id] || [];
+  splitCopy.textContent = splits.length
+    ? `${splits.length} recorded segment${splits.length === 1 ? '' : 's'}`
+    : 'No split data on this activity';
+  splitHeader.appendChild(splitTitle);
+  splitHeader.appendChild(splitCopy);
+  splitCard.appendChild(splitHeader);
+
+  if (!splits.length) {
+    const empty = document.createElement('p');
+    empty.className = 'run-split-empty';
+    empty.textContent = 'Split-by-split data is not available for this run.';
+    splitCard.appendChild(empty);
+    activitySplitsList.appendChild(splitCard);
+    renderStravaExportButton();
+    enforceScrollableList(activitySplitsList);
+    return;
+  }
+
+  const splitTable = document.createElement('div');
+  splitTable.className = 'run-split-table';
+  splits.forEach((split) => {
+    const row = document.createElement('div');
+    row.className = 'run-split-row';
+
+    const index = document.createElement('span');
+    index.className = 'run-split-index';
+    index.textContent = `Split ${split.splitIndex}`;
+
+    const distance = document.createElement('span');
+    distance.className = 'run-split-distance';
+    distance.textContent = formatDistance(split.distance);
+
+    const pace = document.createElement('span');
+    pace.className = 'run-split-pace';
+    pace.textContent = split.pace ? `${formatPace(split.pace)} /km` : '—';
+
+    const meta = document.createElement('span');
+    meta.className = 'run-split-meta';
+    meta.textContent =
+      [
+        split.heartRate ? `${Math.round(split.heartRate)} bpm` : null,
+        Number.isFinite(split.elevation) ? `${Math.round(split.elevation)} m` : null,
+      ]
+        .filter(Boolean)
+        .join(' • ') || '—';
+
+    row.appendChild(index);
+    row.appendChild(distance);
+    row.appendChild(pace);
+    row.appendChild(meta);
+    splitTable.appendChild(row);
+  });
+
+  splitCard.appendChild(splitTable);
+  activitySplitsList.appendChild(splitCard);
   renderStravaExportButton();
   enforceScrollableList(activitySplitsList);
 }
@@ -9436,6 +9594,16 @@ function renderActivitySplits() {
 function renderActivityBestEfforts(efforts = []) {
   if (!activityBestEffortsList) return;
   activityBestEffortsList.innerHTML = '';
+  if (activityBestEffortsHint) {
+    activityBestEffortsHint.textContent = efforts.length
+      ? 'Fastest pace and longest-distance efforts from your recent runs.'
+      : 'Log more qualifying runs to surface pace and distance markers.';
+  }
+  if (activityBestEffortsBadge) {
+    activityBestEffortsBadge.className = efforts.length ? 'status-chip ok' : 'status-chip';
+    activityBestEffortsBadge.textContent = efforts.length ? `${efforts.length} tracked` : 'Waiting';
+    activityBestEffortsBadge.classList.remove('hidden');
+  }
   if (!efforts.length) {
     const empty = document.createElement('li');
     empty.className = 'empty-row';
@@ -9446,25 +9614,87 @@ function renderActivityBestEfforts(efforts = []) {
   }
   efforts.forEach((effort) => {
     const li = document.createElement('li');
-    const main = document.createElement('div');
-    main.className = 'activity-split-main';
+    const badge = document.createElement('span');
+    badge.className = 'eff-badge';
+    badge.dataset.tone = getBestEffortTone(effort.label);
+    badge.textContent = getBestEffortBadgeText(effort.label);
+
+    const card = document.createElement('div');
+    card.className = 'eff-card';
+
+    const head = document.createElement('div');
+    head.className = 'eff-card-head';
     const title = document.createElement('strong');
-    title.textContent = effort.label;
-    const detail = document.createElement('span');
-    detail.className = 'muted';
-    const distance = formatDistance(effort.distance);
-    const pace = effort.paceSeconds ? `${formatPace(effort.paceSeconds)} /km` : '—';
-    detail.textContent = `${distance} • ${pace}`;
-    main.appendChild(title);
-    main.appendChild(detail);
+    title.className = 'eff-name';
+    title.textContent = effort.label || 'Best effort';
     const date = document.createElement('span');
-    date.className = 'muted';
-    date.textContent = effort.startTime ? formatDate(effort.startTime) : '';
-    li.appendChild(main);
-    li.appendChild(date);
+    date.className = 'eff-date';
+    date.textContent = effort.startTime ? formatDate(effort.startTime) : 'No date';
+    head.appendChild(title);
+    head.appendChild(date);
+
+    const metrics = document.createElement('div');
+    metrics.className = 'eff-card-metrics';
+    const value = document.createElement('span');
+    value.className = 'eff-value';
+    value.textContent = getBestEffortPrimaryValue(effort);
+    const pill = document.createElement('span');
+    pill.className = 'eff-pill';
+    pill.textContent = getBestEffortSecondaryValue(effort);
+    metrics.appendChild(value);
+    metrics.appendChild(pill);
+
+    card.appendChild(head);
+    card.appendChild(metrics);
+    li.appendChild(badge);
+    li.appendChild(card);
     activityBestEffortsList.appendChild(li);
   });
   enforceScrollableList(activityBestEffortsList);
+}
+
+function getBestEffortTone(label = '') {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('load')) return 'amber';
+  if (normalized.includes('longest')) return 'blue';
+  return 'teal';
+}
+
+function getBestEffortBadgeText(label = '') {
+  const normalized = String(label || '').toLowerCase();
+  if (normalized.includes('5k')) return '5K';
+  if (normalized.includes('10k')) return '10K';
+  if (normalized.includes('load')) return 'LOAD';
+  if (normalized.includes('longest')) return 'LONG';
+  if (normalized.includes('pace')) return 'PACE';
+  return 'PB';
+}
+
+function getBestEffortPrimaryValue(effort = {}) {
+  const normalized = String(effort?.label || '').toLowerCase();
+  if (normalized.includes('fastest') || normalized.includes('pace')) {
+    return Number.isFinite(Number(effort?.paceSeconds)) && Number(effort.paceSeconds) > 0
+      ? `${formatPace(Number(effort.paceSeconds))} /km`
+      : 'Pace unavailable';
+  }
+  return formatDistance(Number(effort?.distance));
+}
+
+function getBestEffortSecondaryValue(effort = {}) {
+  const normalized = String(effort?.label || '').toLowerCase();
+  const distance = formatDistance(Number(effort?.distance));
+  const pace =
+    Number.isFinite(Number(effort?.paceSeconds)) && Number(effort.paceSeconds) > 0
+      ? `${formatPace(Number(effort.paceSeconds))} /km`
+      : null;
+
+  if (normalized.includes('fastest') || normalized.includes('pace')) {
+    return distance !== '—' ? `${distance} session` : 'Qualifying run';
+  }
+  if (normalized.includes('load')) {
+    return '7-day peak';
+  }
+  return pace || 'Endurance marker';
 }
 
 function renderActivityCharts(charts = {}) {
@@ -9519,6 +9749,8 @@ function renderActivityLoadChart(sessions = [], mileageTrend = []) {
         ],
       },
       options: {
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
           smartViewport: getSmartViewportOptions({ maxVisiblePoints: 20 }),
@@ -9561,6 +9793,8 @@ function renderActivityLoadChart(sessions = [], mileageTrend = []) {
       ],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 20 }),
@@ -9618,6 +9852,8 @@ function renderActivityMileageChart(trend = []) {
       ],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { labels: { color: '#dfe6ff' } },
         smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
@@ -9671,6 +9907,8 @@ function renderActivityPaceChart(points = [], mileageTrend = []) {
         ],
       },
       options: {
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
           smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
@@ -9719,6 +9957,8 @@ function renderActivityPaceChart(points = [], mileageTrend = []) {
       ],
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         smartViewport: getSmartViewportOptions({ panX: false }),

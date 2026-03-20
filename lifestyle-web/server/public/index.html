@@ -10,7 +10,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=18" />
+  <link rel="stylesheet" href="/styles.css?v=19" />
   <script src="/vendor/chart.umd.js" defer></script>
 </head>
 
@@ -345,15 +345,21 @@
           <section class="trend-boards">
             <article class="chart-card">
               <p class="section-eyebrow">Steps · 7-Day</p>
-              <canvas id="activityChart" height="180"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-180">
+                <canvas id="activityChart" height="180"></canvas>
+              </div>
             </article>
             <article class="chart-card">
               <p class="section-eyebrow">Macro Split</p>
-              <canvas id="macroChart" height="180"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-square-180">
+                <canvas id="macroChart" height="180"></canvas>
+              </div>
             </article>
             <article class="chart-card">
               <p class="section-eyebrow">Readiness Trend</p>
-              <canvas id="overviewReadinessChart" height="180"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-180">
+                <canvas id="overviewReadinessChart" height="180"></canvas>
+              </div>
             </article>
           </section>
 
@@ -421,7 +427,7 @@
             <article class="card sessions-card">
               <div class="sessions-header">
                 <p class="section-eyebrow">Recent Sessions</p>
-                <p class="card-meta" id="activitySessionHint">Select a row to inspect splits →</p>
+                <p class="card-meta" id="activitySessionHint">Click a run to inspect details →</p>
               </div>
               <!-- app.js populates both lists; sessionsList is the primary feed -->
               <ul class="act-session-list" id="sessionsList"></ul>
@@ -431,8 +437,8 @@
             <article class="card splits-card">
               <div class="card-header split">
                 <div>
-                  <p class="section-eyebrow">Splits</p>
-                  <h3 class="card-title" id="activitySplitTitle">Select a session</h3>
+                  <p class="section-eyebrow">Run Details</p>
+                  <h3 class="card-title" id="activitySplitTitle">Select a run</h3>
                 </div>
                 <button type="button" class="outline-btn secondary hidden" id="stravaExportButton">Export ↗</button>
               </div>
@@ -449,14 +455,18 @@
                 <p class="section-eyebrow">Pace vs Heart Rate</p>
                 <span class="chart-legend-dot teal"></span>
               </div>
-              <canvas id="activityPaceChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="activityPaceChart"></canvas>
+              </div>
             </article>
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">Load Trend · Last 7 Sessions</p>
                 <span class="chart-legend-dot amber"></span>
               </div>
-              <canvas id="activityLoadChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="activityLoadChart"></canvas>
+              </div>
             </article>
           </div>
 
@@ -466,9 +476,18 @@
           <!-- 4 · Best Efforts + Strava Sync -->
           <div class="act-bottom-row">
             <article class="card efforts-card">
-              <p class="section-eyebrow">Best Efforts</p>
+              <div class="card-header split efforts-header">
+                <div>
+                  <p class="section-eyebrow">Best Efforts</p>
+                  <h3 class="card-title">Personal markers</h3>
+                </div>
+                <span class="status-chip hidden" id="activityBestEffortsBadge"></span>
+              </div>
+              <p class="field-hint" id="activityBestEffortsHint">
+                Fastest pace and longest-distance efforts from your recent runs.
+              </p>
               <ul class="act-efforts-list" id="activityBestEfforts">
-                <li class="split-empty">No effort data yet.</li>
+                <li class="empty-row">No effort data yet.</li>
               </ul>
             </article>
 
@@ -605,7 +624,9 @@
             <div class="act-chart-header">
               <p class="section-eyebrow">Sleep Duration · Last 7 Nights</p>
             </div>
-            <canvas id="sleepTrendChart" height="220"></canvas>
+            <div class="chart-canvas-frame chart-canvas-frame-220">
+              <canvas id="sleepTrendChart" height="220"></canvas>
+            </div>
             <div class="sleep-log-table-wrap"><table class="sleep-log-table">
               <thead>
                 <tr>
@@ -676,7 +697,9 @@
                 <p class="section-eyebrow">HRV Trend · 14 Days</p>
                 <span class="chart-legend-dot teal"></span>
               </div>
-              <canvas id="vitalsHrvChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="vitalsHrvChart"></canvas>
+              </div>
             </article>
             <article class="card">
               <p class="section-eyebrow">Signal Summary</p>
@@ -700,14 +723,18 @@
                 <p class="section-eyebrow">Resting HR · 14 Days</p>
                 <span class="chart-legend-dot" style="background:var(--red)"></span>
               </div>
-              <canvas id="vitalsHrChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="vitalsHrChart"></canvas>
+              </div>
             </article>
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">Blood Glucose · 14 Days</p>
                 <span class="chart-legend-dot" style="background:#a78bfa"></span>
               </div>
-              <canvas id="vitalsGlucoseChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="vitalsGlucoseChart"></canvas>
+              </div>
             </article>
           </div>
 
@@ -895,7 +922,9 @@
                 <p class="section-eyebrow">Calories vs Target · Last 7 Days</p>
                 <span class="chart-legend-dot teal"></span>
               </div>
-              <canvas id="nutritionTrendChart" height="200"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-220">
+                <canvas id="nutritionTrendChart" height="200"></canvas>
+              </div>
             </article>
 
             <article class="card chart-card nutrition-macro-trend-card">
@@ -908,7 +937,9 @@
                   <span class="chart-legend-chip fiber">Fib</span>
                 </div>
               </div>
-              <canvas id="nutritionMacroTrendChart" height="200"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-220">
+                <canvas id="nutritionMacroTrendChart" height="200"></canvas>
+              </div>
             </article>
 
           </div>
@@ -926,7 +957,9 @@
                   <span class="chart-legend-chip fats">F</span>
                 </div>
               </div>
-              <canvas id="nutritionMacroDonutChart" height="240"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-square-280">
+                <canvas id="nutritionMacroDonutChart" height="240"></canvas>
+              </div>
             </article>
 
             <!-- Daily calorie surplus / deficit -->
@@ -938,7 +971,9 @@
                   <span class="chart-legend-chip" style="background:rgba(45,212,191,0.15);color:#2dd4bf">Under</span>
                 </div>
               </div>
-              <canvas id="nutritionSurplusChart" height="200"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-220">
+                <canvas id="nutritionSurplusChart" height="200"></canvas>
+              </div>
             </article>
 
           </div>
@@ -1009,7 +1044,9 @@
               <p class="section-eyebrow">Trend</p>
               <h3 class="card-title">Weight vs calories — 4 weeks</h3>
             </div>
-            <canvas id="weightTrendChart" height="220"></canvas>
+            <div class="chart-canvas-frame chart-canvas-frame-220">
+              <canvas id="weightTrendChart" height="220"></canvas>
+            </div>
           </article>
 
           <!-- Two-column: logs left, form + metrics right -->
@@ -1185,6 +1222,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=7" type="module"></script>
+  <script src="/app.js?v=11" type="module"></script>
 </body>
 </html>

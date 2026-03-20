@@ -1,6 +1,6 @@
 /* ─── Reset ──────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { -webkit-text-size-adjust: 100%; zoom: 1.25; }
+html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: var(--font-sans);
   font-size: 19px;
@@ -557,9 +557,27 @@ form button[type="submit"]:hover { opacity: .88; }
   position: relative;
 }
 .chart-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 20px rgba(45,212,191,0.06); }
-.chart-card canvas { width: 100% !important; }
-/* Overview trend-board charts need explicit CSS height (Chart.js ignores HTML height attr in responsive mode) */
-.trend-boards .chart-card canvas { height: 180px !important; }
+.chart-canvas-frame {
+  position: relative;
+  width: 100%;
+}
+.chart-canvas-frame canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+.chart-canvas-frame-180 { height: 180px; }
+.chart-canvas-frame-220 { height: 220px; }
+.chart-canvas-frame-240 { height: 240px; }
+.chart-canvas-frame-square-180 {
+  width: min(100%, 180px);
+  height: 180px;
+  margin: 0 auto;
+}
+.chart-canvas-frame-square-280 {
+  width: min(100%, 280px);
+  height: 280px;
+  margin: 0 auto;
+}
 
 /* ─── Signals table ──────────────────────────────────────────────────────── */
 .signals-table { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--gap); }
@@ -753,21 +771,139 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 }
 .session-list li:last-child { border-bottom: none; }
 
-/* Splits */
-.act-split-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
-.act-split-list li {
-  display: grid; grid-template-columns: 28px 1fr 56px 52px 44px;
-  align-items: center; gap: 8px;
-  padding: 6px 0; border-bottom: 1px solid var(--border);
-  font-size: 12px; color: var(--label);
+/* Run details */
+.act-split-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
-.act-split-list li:last-child { border-bottom: none; }
-.act-split-list .sp-num { color: var(--muted); font-size: 10px; text-align: center; }
-.act-split-list .sp-dist { color: var(--text); }
-.act-split-list .sp-pace { color: var(--label); }
-.act-split-list .sp-hr   { color: var(--red); font-weight: 600; }
-.act-split-list .sp-elev { color: var(--muted); font-size: 11px; text-align: right; }
-.split-empty { color: var(--muted); font-size: 12px; padding: 12px 0; }
+.act-split-list li { list-style: none; }
+.act-split-list li.empty-row,
+.act-split-list li.split-empty {
+  display: block;
+  padding: 16px;
+  border: 1px dashed var(--border-2);
+  border-radius: 16px;
+  background: rgba(8,15,24,0.45);
+  color: var(--muted);
+}
+.run-detail-card,
+.run-split-card {
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.08), transparent 42%),
+    linear-gradient(135deg, rgba(17, 30, 46, 0.96), rgba(13, 21, 32, 0.95));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.run-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.run-detail-kicker {
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.run-detail-copy { color: var(--muted); font-size: 12px; }
+.run-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.run-detail-metric {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+  background: rgba(8,15,24,0.55);
+}
+.run-detail-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.run-detail-value {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.run-detail-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.run-detail-section-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.run-detail-section-copy {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+.run-split-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.run-split-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.run-split-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+  background: rgba(8,15,24,0.55);
+  color: var(--label);
+  font-size: 12px;
+}
+.run-split-index {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.run-split-distance {
+  color: var(--text);
+  font-weight: 600;
+}
+.run-split-pace {
+  color: var(--teal);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.run-split-meta {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* Fallback for app.js-injected split items */
 .activity-split-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
 .activity-split-list li {
@@ -781,8 +917,6 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .act-charts-row {
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap);
 }
-.act-charts-row .chart-card { position: relative; }
-.act-charts-row canvas { width: 100% !important; height: 240px !important; }
 .act-chart-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 12px;
@@ -799,21 +933,148 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap);
 }
 .efforts-card, .strava-card { overflow: hidden; }
+.efforts-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.efforts-header {
+  margin-bottom: 0;
+}
 
 /* Best efforts list */
-.act-efforts-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
-.act-efforts-list li {
-  display: flex; align-items: baseline; justify-content: space-between;
-  padding: 6px 0; border-bottom: 1px solid var(--border);
-  gap: 12px;
+.act-efforts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
-.act-efforts-list li:last-child { border-bottom: none; }
-.act-efforts-list .eff-name { font-size: 13px; font-weight: 500; color: var(--text); }
-.act-efforts-list .eff-value { font-size: 15px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
-.act-efforts-list .eff-date  { font-size: 11px; color: var(--muted); }
+.act-efforts-list li {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.08), transparent 42%),
+    linear-gradient(135deg, rgba(17, 30, 46, 0.96), rgba(13, 21, 32, 0.95));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.act-efforts-list li.empty-row,
+.act-efforts-list li.split-empty {
+  display: block;
+  padding: 16px;
+  border: 1px dashed var(--border-2);
+  background: rgba(8, 15, 24, 0.45);
+  color: var(--muted);
+  border-radius: 16px;
+}
+.eff-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  background: linear-gradient(135deg, rgba(45, 212, 191, 0.18), rgba(45, 212, 191, 0.06));
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.eff-badge[data-tone="amber"] {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(245, 158, 11, 0.05));
+  color: var(--amber);
+}
+.eff-badge[data-tone="blue"] {
+  border-color: rgba(96, 165, 250, 0.22);
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.18), rgba(96, 165, 250, 0.05));
+  color: var(--blue);
+}
+.act-efforts-list .eff-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.act-efforts-list .eff-card-head,
+.act-efforts-list .eff-card-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.act-efforts-list .eff-name {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.act-efforts-list .eff-date {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.act-efforts-list .eff-value {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.act-efforts-list .eff-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  background: rgba(8, 15, 24, 0.55);
+  color: var(--label);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 /* Fallback for app.js injected items */
 .activity-efforts { display: flex; flex-direction: column; gap: 8px; }
 .activity-efforts li { font-size: 12px; color: var(--label); }
+
+@media (max-width: 720px) {
+  .act-efforts-list li {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px;
+  }
+  .eff-badge {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    font-size: 10px;
+  }
+  .act-efforts-list .eff-card-head,
+  .act-efforts-list .eff-card-metrics {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .act-efforts-list .eff-value {
+    font-size: 22px;
+  }
+}
 
 /* Strava sync card */
 .strava-cred-block {
@@ -917,7 +1178,6 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 
 /* Trend card */
 .sleep-trend-card { overflow: hidden; position: relative; }
-.sleep-trend-card canvas { width: 100% !important; height: 220px !important; }
 .sleep-log-table-wrap { max-height: 260px; overflow-y: auto; margin-top: 16px; }
 .sleep-log-table {
   width: 100%; border-collapse: collapse; font-size: 12px;
@@ -947,8 +1207,6 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .vitals-mid-row {
   display: grid; grid-template-columns: 3fr 2fr; gap: var(--gap);
 }
-/* HRV chart canvas needs explicit height — it has no height attribute */
-.vitals-mid-row canvas { width: 100% !important; height: 240px !important; }
 
 /* Signal Summary table */
 .vitals-summary-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -1131,7 +1389,6 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 
 /* ─── Weight subpage ─────────────────────────────────────────────────────── */
 .weight-signals-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
-#weightTrendChart { width: 100% !important; height: 220px !important; }
 .weight-log-row { display: grid; grid-template-columns: 3fr 2fr; gap: var(--gap); }
 .weight-right-col { display: flex; flex-direction: column; gap: var(--gap); }
 .weight-bmi-badge {
@@ -1242,7 +1499,13 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   .act-sessions-row { grid-template-columns: 1fr; }
   .act-charts-row { grid-template-columns: 1fr; }
   .act-bottom-row { grid-template-columns: 1fr; }
-  .act-charts-row canvas { height: 200px !important; }
+  .run-detail-grid { grid-template-columns: 1fr; }
+  .run-detail-section-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .run-detail-section-copy { text-align: left; }
+  .run-split-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sleep-signals-row { grid-template-columns: repeat(2, 1fr); }
   .sleep-main-row { grid-template-columns: 1fr; }
   .vitals-signals-row { grid-template-columns: repeat(2, 1fr); }
@@ -1528,6 +1791,16 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .session-item:last-child  { border-radius: 0 0 8px 8px; border-bottom: 1px solid var(--border); }
 .session-item:only-child  { border-radius: 8px; border-bottom: 1px solid var(--border); }
 .session-item:hover { background: rgba(45,212,191,0.05); border-color: rgba(45,212,191,0.2); }
+.session-item.active {
+  background: rgba(45,212,191,0.08);
+  border-color: rgba(45,212,191,0.32);
+  box-shadow: inset 0 0 0 1px rgba(45,212,191,0.08);
+}
+.session-item:focus-visible {
+  outline: 2px solid rgba(45,212,191,0.45);
+  outline-offset: 2px;
+}
+.session-item.active .session-title { color: var(--teal); }
 .session-title {
   font-size: 13px; font-weight: 600; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -2394,20 +2667,8 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   border-top: 2px solid rgba(255,107,129,0.35);
   background: linear-gradient(160deg, rgba(255,107,129,0.04) 0%, rgba(15,32,53,0.95) 50%);
 }
-/* Centre the donut canvas so it doesn't stretch to full card width */
-#nutritionMacroDonutChart {
-  max-width: 280px;
-  margin: 0 auto;
-  display: block;
-}
-
-/* ── Nutrition chart canvas heights — v14 ── */
-/* Chart.js responsive mode requires position:relative on parent (same as .act-charts-row) */
-.nutrition-charts-row .chart-card { position: relative; }
-/* Line/bar charts use maintainAspectRatio:false so need explicit CSS height */
-.nutrition-charts-row canvas { width: 100% !important; height: 220px !important; }
-/* Donut uses maintainAspectRatio:true so don't override its height */
-#nutritionMacroDonutChart { height: auto !important; }
+/* ── Nutrition chart wrappers ───────────────────────────────────────────── */
 @media (max-width: 900px) {
-  .nutrition-charts-row canvas { height: 180px !important; }
+  .chart-canvas-frame-220 { height: 180px; }
+  .chart-canvas-frame-240 { height: 200px; }
 }

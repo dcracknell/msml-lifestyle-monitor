@@ -30,16 +30,25 @@ const accessStatement = db.prepare(
 );
 
 const timelineStatement = db.prepare(
-  `SELECT wl.id,
-          wl.date,
-          wl.weight_kg AS weightKg,
-          dm.calories    AS calories
-     FROM weight_logs wl
-LEFT JOIN daily_metrics dm
-       ON dm.user_id = wl.user_id
-      AND dm.date = wl.date
-    WHERE wl.user_id = ?
-    ORDER BY wl.date ASC, wl.id ASC`
+  `WITH nutrition_totals AS (
+      SELECT date,
+             SUM(calories) AS calories
+        FROM nutrition_entries
+       WHERE user_id = @subjectId
+       GROUP BY date
+    )
+    SELECT wl.id,
+           wl.date,
+           wl.weight_kg AS weightKg,
+           COALESCE(nt.calories, dm.calories) AS calories
+      FROM weight_logs wl
+ LEFT JOIN daily_metrics dm
+        ON dm.user_id = wl.user_id
+       AND dm.date = wl.date
+ LEFT JOIN nutrition_totals nt
+        ON nt.date = wl.date
+     WHERE wl.user_id = @subjectId
+     ORDER BY wl.date ASC, wl.id ASC`
 );
 
 const entryByDateStatement = db.prepare(
@@ -157,7 +166,7 @@ router.get('/', authenticate, (req, res) => {
   }
   subject.role = coerceRole(subject.role);
 
-  const records = timelineStatement.all(subjectId);
+  const records = timelineStatement.all({ subjectId });
   const timeline = records.map((row) => ({
     id: row.id,
     date: row.date,

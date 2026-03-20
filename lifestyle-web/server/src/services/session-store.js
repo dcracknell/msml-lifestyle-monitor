@@ -7,11 +7,13 @@ const TTL_MS = HOURS * 60 * 60 * 1000;
 const revokedTokens = new Map();
 const CLEANUP_INTERVAL_MS = Math.max(15 * 60 * 1000, Math.min(TTL_MS, 60 * 60 * 1000)); // between 15min and 1h
 
-function sanitizeSessionPayload(user = {}) {
+function sanitizeSessionUser(user = {}) {
   if (!user || typeof user !== 'object') {
     return {};
   }
   const {
+    password_hash, // eslint-disable-line camelcase
+    passwordHash,
     avatar_photo, // eslint-disable-line camelcase
     avatarPhoto,
     strava_client_id, // eslint-disable-line camelcase
@@ -23,15 +25,28 @@ function sanitizeSessionPayload(user = {}) {
     ...rest
   } = user;
 
-  const sanitized = { ...rest };
-  const normalizedAvatarPhoto =
-    avatar_photo !== undefined ? avatar_photo : avatarPhoto;
+  return {
+    ...rest,
+    ...(avatar_photo !== undefined
+      ? { avatar_photo }
+      : avatarPhoto !== undefined
+      ? { avatar_photo: avatarPhoto }
+      : {}),
+  };
+}
 
-  if (normalizedAvatarPhoto !== undefined) {
-    sanitized.avatar_photo = normalizedAvatarPhoto;
+function createTokenUser(user = {}) {
+  if (!user || typeof user !== 'object') {
+    return {};
   }
 
-  return sanitized;
+  const {
+    avatar_photo, // eslint-disable-line camelcase
+    avatarPhoto,
+    ...rest
+  } = user;
+
+  return rest;
 }
 
 function hashToken(token) {
@@ -54,8 +69,9 @@ if (typeof cleanupTimer.unref === 'function') {
 
 function createSession(user) {
   const expiresAt = Date.now() + TTL_MS;
-  const sanitizedUser = sanitizeSessionPayload(user);
-  const token = encryptPayload({ user: sanitizedUser, expiresAt });
+  const sanitizedUser = sanitizeSessionUser(user);
+  const tokenUser = createTokenUser(sanitizedUser);
+  const token = encryptPayload({ user: tokenUser, expiresAt });
 
   return { token, user: sanitizedUser };
 }

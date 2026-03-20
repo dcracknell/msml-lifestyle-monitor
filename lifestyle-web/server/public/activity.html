@@ -9,7 +9,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=15" />
+  <link rel="stylesheet" href="/styles.css?v=19" />
   <script src="/vendor/chart.umd.js" defer></script>
   <script src="/activity-demo-charts.js" defer></script>
   <style>
@@ -483,46 +483,81 @@
 
         <!-- Best Efforts -->
         <article class="card efforts-card">
-          <p class="section-eyebrow">Best Efforts</p>
-          <div class="table-scroll"><table class="efforts-table">
-            <tbody>
-              <tr>
-                <td>
-                  <p class="eff-label">Fastest 5K</p>
-                  <p class="eff-val">24:18</p>
-                </td>
-                <td class="eff-date">5 Mar 2026</td>
-              </tr>
-              <tr>
-                <td>
-                  <p class="eff-label">Fastest 10K</p>
-                  <p class="eff-val">51:04</p>
-                </td>
-                <td class="eff-date">1 Mar 2026</td>
-              </tr>
-              <tr>
-                <td>
-                  <p class="eff-label">Longest Run</p>
-                  <p class="eff-val">18.4 km</p>
-                </td>
-                <td class="eff-date">7 Mar 2026</td>
-              </tr>
-              <tr>
-                <td>
-                  <p class="eff-label">Peak Weekly Load</p>
-                  <p class="eff-val">312 pts</p>
-                </td>
-                <td class="eff-date">week of 7 Mar</td>
-              </tr>
-              <tr>
-                <td>
-                  <p class="eff-label">Best Average Pace (10K+)</p>
-                  <p class="eff-val">4:42 /km</p>
-                </td>
-                <td class="eff-date">11 Mar 2026</td>
-              </tr>
-            </tbody>
-          </table></div>
+          <div class="card-header split efforts-header">
+            <div>
+              <p class="section-eyebrow">Best Efforts</p>
+              <h3 class="card-title">Personal markers</h3>
+            </div>
+            <span class="status-chip ok">5 tracked</span>
+          </div>
+          <p class="field-hint">Fastest pace and longest-distance sessions from the current training block.</p>
+          <ul class="act-efforts-list" aria-label="Best efforts">
+            <li>
+              <span class="eff-badge" data-tone="teal">5K</span>
+              <div class="eff-card">
+                <div class="eff-card-head">
+                  <strong class="eff-name">Fastest 5K</strong>
+                  <span class="eff-date">5 Mar 2026</span>
+                </div>
+                <div class="eff-card-metrics">
+                  <span class="eff-value">4:52 /km</span>
+                  <span class="eff-pill">24:18 total</span>
+                </div>
+              </div>
+            </li>
+            <li>
+              <span class="eff-badge" data-tone="teal">10K</span>
+              <div class="eff-card">
+                <div class="eff-card-head">
+                  <strong class="eff-name">Fastest 10K</strong>
+                  <span class="eff-date">1 Mar 2026</span>
+                </div>
+                <div class="eff-card-metrics">
+                  <span class="eff-value">5:06 /km</span>
+                  <span class="eff-pill">51:04 total</span>
+                </div>
+              </div>
+            </li>
+            <li>
+              <span class="eff-badge" data-tone="blue">LONG</span>
+              <div class="eff-card">
+                <div class="eff-card-head">
+                  <strong class="eff-name">Longest Run</strong>
+                  <span class="eff-date">7 Mar 2026</span>
+                </div>
+                <div class="eff-card-metrics">
+                  <span class="eff-value">18.4 km</span>
+                  <span class="eff-pill">5:24 /km avg</span>
+                </div>
+              </div>
+            </li>
+            <li>
+              <span class="eff-badge" data-tone="amber">LOAD</span>
+              <div class="eff-card">
+                <div class="eff-card-head">
+                  <strong class="eff-name">Peak Weekly Load</strong>
+                  <span class="eff-date">Week of 7 Mar</span>
+                </div>
+                <div class="eff-card-metrics">
+                  <span class="eff-value">312 pts</span>
+                  <span class="eff-pill">7-day peak</span>
+                </div>
+              </div>
+            </li>
+            <li>
+              <span class="eff-badge" data-tone="teal">PACE</span>
+              <div class="eff-card">
+                <div class="eff-card-head">
+                  <strong class="eff-name">Best Average Pace (10K+)</strong>
+                  <span class="eff-date">11 Mar 2026</span>
+                </div>
+                <div class="eff-card-metrics">
+                  <span class="eff-value">4:42 /km</span>
+                  <span class="eff-pill">10K+ session</span>
+                </div>
+              </div>
+            </li>
+          </ul>
         </article>
 
         <!-- Strava Sync -->
