@@ -164,6 +164,67 @@ docker compose up --build -d
 ```
 Compose uses the same named volume to persist SQLite, rebuilds when files change, and watches `server/.env` for configuration overrides. Inspect logs with `docker compose logs -f lifestyle-web`.
 
+### Kubernetes
+The repository now includes a ready-to-apply Kubernetes package in [`k8s/`](k8s). It deploys the existing Docker image, mounts a persistent volume for SQLite, and wires in health probes for `/api/health`.
+
+Important constraints before you deploy:
+- SQLite means this service should stay at **one replica**. The checked-in Deployment uses `replicas: 1` and `strategy: Recreate` for that reason.
+- You must push the Docker image to a registry your cluster can pull from, then replace the placeholder image in [`deployment.yaml`](k8s/deployment.yaml).
+- Create the Kubernetes Secret from [`secrets.env.example`](k8s/secrets.env.example) rather than committing secrets into git.
+
+Suggested flow:
+```bash
+# 1. Build and push the image
+docker build -t ghcr.io/<your-user>/msml-lifestyle-web:<tag> -f lifestyle-web/Dockerfile lifestyle-web
+docker push ghcr.io/<your-user>/msml-lifestyle-web:<tag>
+
+# 2. Copy the secret template and fill in real values
+cp lifestyle-web/k8s/secrets.env.example lifestyle-web/k8s/secrets.env
+
+# 3. Create the namespace + secret
+kubectl apply -f lifestyle-web/k8s/namespace.yaml
+kubectl -n lifestyle-web create secret generic lifestyle-web-secrets \
+  --from-env-file=lifestyle-web/k8s/secrets.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 4. Edit lifestyle-web/k8s/deployment.yaml to use your pushed image, then deploy
+kubectl apply -k lifestyle-web/k8s
+
+# 5. Quick smoke test without ingress
+kubectl -n lifestyle-web port-forward svc/lifestyle-web 4000:4000
+```
+
+What to customize:
+- [`configmap.yaml`](k8s/configmap.yaml): non-secret runtime settings such as `REQUIRE_HTTPS`, body size, or NUT paths.
+- [`pvc.yaml`](k8s/pvc.yaml): requested SQLite storage size and storage class details for your cluster.
+- [`ingress.example.yaml`](k8s/ingress.example.yaml): example nginx/cert-manager ingress. Edit the hostname/TLS secret, then apply it separately if you want a public URL.
+
+If you expose the app through an HTTPS ingress, set `REQUIRE_HTTPS=true` in [`configmap.yaml`](k8s/configmap.yaml). Add `APP_ORIGIN` only when a browser or mobile client will call the API from a different origin; the bundled web UI works through the ingress host without that override because the server accepts same-origin requests automatically.
+
+### Local k3s on Raspberry Pi / ARM
+For a single-machine local cluster, use the checked-in local overlay at [`k8s/overlays/local`](k8s/overlays/local). It switches the Service to `NodePort` and expects a locally imported image called `lifestyle-web:local`.
+
+Suggested flow after `k3s` is installed and the host has been rebooted with memory cgroups enabled:
+```bash
+# Build the image for the local cluster
+docker build -t lifestyle-web:local -f lifestyle-web/Dockerfile lifestyle-web
+
+# Import it into k3s' containerd
+docker save lifestyle-web:local | sudo k3s ctr images import -
+
+# Create the secret once
+cp lifestyle-web/k8s/secrets.env.example lifestyle-web/k8s/secrets.env
+kubectl apply -f lifestyle-web/k8s/namespace.yaml
+kubectl -n lifestyle-web create secret generic lifestyle-web-secrets \
+  --from-env-file=lifestyle-web/k8s/secrets.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Deploy the local overlay
+kubectl apply -k lifestyle-web/k8s/overlays/local
+```
+
+The app will then be reachable on `http://<pi-ip>:30040`.
+
 ### Serving Beyond Localhost
 1. Copy `.env.example` to `.env` and set `HOST=0.0.0.0` plus your preferred `PORT`.
 2. Update `APP_ORIGIN` with every public URL you expect browsers to load from (include both apex and `www` domains if relevant). Set `APP_ORIGIN=*` only if you explicitly want any origin.

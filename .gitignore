@@ -20,6 +20,7 @@ lifestyle-mobile/dist/
 .env.local
 .env.*.local
 lifestyle-mobile/.env
+lifestyle-web/k8s/secrets.env
 
 # Expo / React Native generated files
 lifestyle-mobile/.expo/
