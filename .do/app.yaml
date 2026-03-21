@@ -1,0 +1,48 @@
+name: msml-lifestyle-monitor
+region: lon  # London — change to: nyc, sfo, ams, sgp, blr, syd, tor, fra
+
+services:
+  - name: web
+    dockerfile_path: lifestyle-web/Dockerfile
+    source_dir: lifestyle-web
+    http_port: 4000
+    instance_count: 1
+    instance_size_slug: basic-xxs   # cheapest tier (~$5/mo); upgrade as needed
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 120
+      period_seconds: 30
+      failure_threshold: 5
+    envs:
+      - key: PORT
+        value: "4000"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        type: SECRET
+      - key: PASSWORD_ENCRYPTION_KEY
+        type: SECRET
+      - key: APP_ORIGIN
+        value: "https://${APP_URL}"   # DigitalOcean injects APP_URL automatically
+      - key: SESSION_TTL_HOURS
+        value: "12"
+      - key: DB_STORAGE_DIR
+        value: ./database/storage
+      - key: DB_SQL_DIR
+        value: ./database/sql
+      - key: HEAD_COACH_SEED_PASSWORD
+        type: SECRET
+      - key: COACH_SEED_PASSWORD
+        type: SECRET
+      - key: ATHLETE_SEED_PASSWORD
+        type: SECRET
+      - key: NUT_MODEL_PYTHON_BIN
+        value: /opt/nut-venv/bin/python
+      - key: NUT_MODEL_TIMEOUT_MS
+        value: "45000"
+      - key: NUT_EXPRESS_MODE
+        value: "true"
+      - key: NUT_EXPRESS_PORT
+        value: "8001"

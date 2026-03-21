@@ -20,7 +20,9 @@ A final-year MEng group project focused on developing an integrated, low-cost pr
 - [About](#about)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
-- [Installation](#installation)
+- [Deployment](#deployment)
+- [Deploy to the Cloud](#deploy-to-the-cloud)
+- [Development Setup](#development-setup)
 - [Mobile App](#mobile-app)
 - [Contributing](#contributing)
 - [Contributors](#contributors)
@@ -99,9 +101,137 @@ This is a project by a team of MEng Electronic & Electrical Engineering students
 
 ---
 
-## Installation
+## Deployment
 
-Follow these steps to set up the project locally and start development:
+The web dashboard ships as a self-contained Docker image.
+
+### Prerequisites (all options)
+
+- [Docker](https://docs.docker.com/get-docker/) installed on the machine
+- On Linux/Raspberry Pi, also install Docker Compose:
+  ```bash
+  sudo apt-get install -y docker-compose
+  ```
+- [Git](https://git-scm.com/)
+
+### Step 1 — Clone the repository
+
+```bash
+git clone https://github.com/amaanmujawar/msml-lifestyle-monitor.git
+cd msml-lifestyle-monitor/lifestyle-web
+```
+
+### Step 2 — Configure & deploy
+
+Pick whichever option suits you:
+
+---
+
+#### Option A — Desktop GUI (recommended for non-coders)
+
+A graphical window with a form for every setting and a single Deploy button. No terminal needed after this step.
+
+```bash
+bash install-shortcut.sh
+```
+
+This places an **MSML Setup** icon on your Desktop. Double-click it to open the wizard, fill in your settings, and click **Deploy**.
+
+To launch the GUI without the shortcut:
+```bash
+python3 setup_gui.py
+```
+
+---
+
+#### Option B — Terminal wizard
+
+An interactive prompt that asks each question in turn and launches Docker automatically.
+
+```bash
+bash setup.sh
+```
+
+---
+
+#### Option C — Manual
+
+```bash
+cp server/.env.example server/.env
+```
+
+Open `server/.env` and set at minimum:
+
+| Variable | What to set |
+|---|---|
+| `SESSION_SECRET` | Any long random string |
+| `PASSWORD_ENCRYPTION_KEY` | A second long random string |
+| `APP_ORIGIN` | The URL(s) you'll open the dashboard from, comma-separated |
+| `HEAD_COACH_SEED_PASSWORD` | Password for the Head Coach demo account |
+| `COACH_SEED_PASSWORD` | Password for the Coach demo account |
+| `ATHLETE_SEED_PASSWORD` | Password for the Athlete demo account |
+
+Then start the containers:
+```bash
+docker-compose up -d --build
+```
+
+---
+
+### Accessing the services
+
+Once running, open these in a browser:
+
+| Service | URL |
+|---|---|
+| **Dashboard** | http://localhost:4000 |
+| **Portainer** (container management) | http://localhost:9000 |
+
+Portainer lets you view logs, restart containers, and manage the deployment from a browser — no terminal needed.
+
+Data is persisted in a Docker volume so it survives restarts and upgrades.
+
+### Upgrading
+
+```bash
+git pull
+docker-compose up -d --build
+```
+
+### Stopping
+
+```bash
+docker-compose down        # stop, keep data
+docker-compose down -v     # stop and wipe all data
+```
+
+---
+
+## Deploy to the Cloud
+
+One-click deploy options — no local Docker required:
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/amaanmujawar/msml-lifestyle-monitor)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/amaanmujawar/msml-lifestyle-monitor)
+
+[![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/amaanmujawar/msml-lifestyle-monitor/tree/main)
+
+After deploying on any platform you will need to set the environment variables listed above (`SESSION_SECRET`, `PASSWORD_ENCRYPTION_KEY`, `APP_ORIGIN`, and the three seed passwords) in the platform's dashboard.
+
+Config files used by each platform:
+
+| Platform | Config file |
+|---|---|
+| Railway | [`railway.json`](railway.json) |
+| Render | [`render.yaml`](render.yaml) |
+| DigitalOcean App Platform | [`.do/app.yaml`](.do/app.yaml) |
+
+---
+
+## Development Setup
+
+Follow these steps to set up the project locally for development:
 
 ### 1. Fork the repository and clone your fork
 

@@ -1,4 +1,14 @@
 services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer-data:/data
+
   lifestyle-web:
     image: ${LIFESTYLE_WEB_IMAGE:-lifestyle-web:local}
     build:
@@ -27,3 +37,4 @@ services:
 
 volumes:
   lifestyle-web-db:
+  portainer-data:

@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: msml-lifestyle-monitor
+    runtime: docker
+    dockerfilePath: ./lifestyle-web/Dockerfile
+    dockerContext: ./lifestyle-web
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 4000
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PASSWORD_ENCRYPTION_KEY
+        generateValue: true
+      - key: APP_ORIGIN
+        sync: false   # set to your Render URL after first deploy
+      - key: SESSION_TTL_HOURS
+        value: 12
+      - key: DB_STORAGE_DIR
+        value: ./database/storage
+      - key: DB_SQL_DIR
+        value: ./database/sql
+      - key: HEAD_COACH_SEED_PASSWORD
+        sync: false
+      - key: COACH_SEED_PASSWORD
+        sync: false
+      - key: ATHLETE_SEED_PASSWORD
+        sync: false
+      - key: NUT_MODEL_PYTHON_BIN
+        value: /opt/nut-venv/bin/python
+      - key: NUT_MODEL_TIMEOUT_MS
+        value: 45000
+      - key: NUT_EXPRESS_MODE
+        value: "true"
+      - key: NUT_EXPRESS_PORT
+        value: 8001
+    disk:
+      name: lifestyle-db
+      mountPath: /app/lifestyle-web/database/storage
+      sizeGB: 1
