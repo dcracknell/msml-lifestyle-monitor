@@ -117,37 +117,17 @@ jobs:
 
   rollout:
     name: Auto Rollout
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: publish-image
-    # Required secrets:
-    # DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH, GHCR_USERNAME, GHCR_TOKEN
-    # Optional secret:
-    # DEPLOY_PORT (defaults to 22)
     environment: production
     steps:
-      - name: Roll out on server over SSH
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          IMAGE_SHA: ${{ needs.publish-image.outputs.image_sha }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || '22' }}
-          envs: IMAGE_SHA,GHCR_USERNAME,GHCR_TOKEN,DEPLOY_PATH
-          script: |
-            set -euo pipefail
-            test -n "${DEPLOY_PATH:-}" || (echo "Missing DEPLOY_PATH secret" && exit 1)
-            test -n "${GHCR_USERNAME:-}" || (echo "Missing GHCR_USERNAME secret" && exit 1)
-            test -n "${GHCR_TOKEN:-}" || (echo "Missing GHCR_TOKEN secret" && exit 1)
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
 
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
-
-            cd "$DEPLOY_PATH"
-            export LIFESTYLE_WEB_IMAGE="$IMAGE_SHA"
-            docker compose pull lifestyle-web
-            docker compose up -d --no-build lifestyle-web
-            docker image prune -f
+      - name: Pull and restart
+        run: |
+          cd /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor/lifestyle-web
+          export LIFESTYLE_WEB_IMAGE="${{ needs.publish-image.outputs.image_sha }}"
+          docker-compose pull lifestyle-web
+          docker-compose up -d --no-build lifestyle-web
+          docker image prune -f
