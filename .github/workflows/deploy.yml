@@ -126,5 +126,6 @@ jobs:
           cd /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor
           git pull
           cd lifestyle-web
-          docker-compose up -d --build lifestyle-web
+          docker-compose down
+          docker-compose up -d --build
           docker image prune -f
