@@ -126,7 +126,8 @@ jobs:
           cd /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor
           git pull
           cd lifestyle-web
-          docker-compose down
-          fuser -k 4000/tcp || true
+          docker-compose down --remove-orphans --timeout 30
+          fuser -k 4000/tcp 2>/dev/null || true
+          timeout 15 bash -c 'until ! fuser 4000/tcp 2>/dev/null; do sleep 1; done' || true
           docker-compose up -d --build
           docker image prune -f
