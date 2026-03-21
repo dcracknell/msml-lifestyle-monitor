@@ -118,16 +118,13 @@ jobs:
   rollout:
     name: Auto Rollout
     runs-on: self-hosted
-    needs: publish-image
+    needs: [web-tests, mobile-tests]
     environment: production
     steps:
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
-
-      - name: Pull and restart
+      - name: Pull latest code and rebuild
         run: |
-          cd /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor/lifestyle-web
-          export LIFESTYLE_WEB_IMAGE="${{ needs.publish-image.outputs.image_sha }}"
-          docker-compose pull lifestyle-web
-          docker-compose up -d --no-build lifestyle-web
+          cd /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor
+          git pull
+          cd lifestyle-web
+          docker-compose up -d --build lifestyle-web
           docker image prune -f
