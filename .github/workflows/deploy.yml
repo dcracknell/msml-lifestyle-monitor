@@ -123,7 +123,6 @@ jobs:
     # DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PATH, GHCR_USERNAME, GHCR_TOKEN
     # Optional secret:
     # DEPLOY_PORT (defaults to 22)
-    if: ${{ secrets.DEPLOY_HOST != '' && secrets.DEPLOY_USER != '' && secrets.DEPLOY_SSH_KEY != '' }}
     environment: production
     steps:
       - name: Roll out on server over SSH
