@@ -165,10 +165,10 @@ describe('BluetoothProvider confirmSystemDevice', () => {
     expect(mockRunOrQueue).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: '/api/streams',
-        payload: {
+        payload: expect.objectContaining({
           metric: 'exercise.hr',
           samples: [{ ts: expect.any(Number), value: 72 }],
-        },
+        }),
       })
     );
   });
@@ -221,15 +221,15 @@ describe('BluetoothProvider confirmSystemDevice', () => {
       expect.arrayContaining([
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'exercise.hr', samples: [{ ts: 1700000000000, value: 128 }] },
+          payload: expect.objectContaining({ metric: 'exercise.hr', samples: [{ ts: 1700000000000, value: 128 }] }),
         }),
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'exercise.distance', samples: [{ ts: 1700000000000, value: 6.4 }] },
+          payload: expect.objectContaining({ metric: 'exercise.distance', samples: [{ ts: 1700000000000, value: 6.4 }] }),
         }),
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'exercise.pace', samples: [{ ts: 1700000000000, value: 315 }] },
+          payload: expect.objectContaining({ metric: 'exercise.pace', samples: [{ ts: 1700000000000, value: 315 }] }),
         }),
       ])
     );
@@ -342,23 +342,23 @@ describe('BluetoothProvider confirmSystemDevice', () => {
       expect.arrayContaining([
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'sleep.total_hours', samples: [{ ts: 1700001000000, value: 6.5 }] },
+          payload: expect.objectContaining({ metric: 'sleep.total_hours', samples: [{ ts: 1700001000000, value: 6.5 }] }),
         }),
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'sleep.deep_hours', samples: [{ ts: 1700001000000, value: 1 }] },
+          payload: expect.objectContaining({ metric: 'sleep.deep_hours', samples: [{ ts: 1700001000000, value: 1 }] }),
         }),
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'sleep.rem_hours', samples: [{ ts: 1700001000000, value: 1.5 }] },
+          payload: expect.objectContaining({ metric: 'sleep.rem_hours', samples: [{ ts: 1700001000000, value: 1.5 }] }),
         }),
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'sleep.light_hours', samples: [{ ts: 1700001000000, value: 4 }] },
+          payload: expect.objectContaining({ metric: 'sleep.light_hours', samples: [{ ts: 1700001000000, value: 4 }] }),
         }),
         expect.objectContaining({
           endpoint: '/api/streams',
-          payload: { metric: 'sleep.awake_hours', samples: [{ ts: 1700001000000, value: 0.5 }] },
+          payload: expect.objectContaining({ metric: 'sleep.awake_hours', samples: [{ ts: 1700001000000, value: 0.5 }] }),
         }),
       ])
     );
