@@ -6,6 +6,9 @@ on:
     branches-ignore:
       - main
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   web-tests:
     name: Web Tests
