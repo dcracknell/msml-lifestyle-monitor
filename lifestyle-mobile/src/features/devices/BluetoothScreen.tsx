@@ -267,7 +267,7 @@ export function BluetoothDevicesSection() {
 
             {/* Device list */}
             {devices.length > 0 ? (
-              <ScrollView style={styles.deviceList} scrollEnabled={false}>
+              <ScrollView style={styles.deviceList}>
                 {[...devices]
                   .sort((a, b) => (b.rssi ?? -100) - (a.rssi ?? -100))
                   .map((device) => (
