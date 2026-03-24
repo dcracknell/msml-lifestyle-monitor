@@ -23,6 +23,27 @@ async function loginAsCoach() {
   return response.body;
 }
 
+async function createAthleteAccount() {
+  const email = `athlete-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
+  const password = 'Password123';
+  const response = await request(app).post('/api/signup').send({
+    name: 'Metrics Athlete',
+    email,
+    password,
+  });
+
+  expect(response.status).toBe(201);
+  expect(response.body).toHaveProperty('token');
+  expect(response.body).toHaveProperty('user');
+
+  return {
+    email,
+    password,
+    token: response.body.token,
+    user: response.body.user,
+  };
+}
+
 describe('Health check', () => {
   it('returns an ok payload with timestamp', async () => {
     const response = await request(app).get('/api/health');
@@ -43,6 +64,50 @@ describe('Authentication flow', () => {
       email: 'coach@example.com',
       name: 'Casey Coach',
       role: 'Coach',
+    });
+  });
+
+  it('keeps bearer tokens small enough for photo accounts', async () => {
+    const avatarPhoto = 'a'.repeat(12000);
+    const email = `photo-user-${Date.now()}@example.com`;
+    const password = 'Password123';
+
+    const signup = await request(app).post('/api/signup').send({
+      name: 'Photo User',
+      email,
+      password,
+      avatarPhoto,
+    });
+
+    expect(signup.status).toBe(201);
+    expect(signup.body.user).toMatchObject({
+      email,
+      name: 'Photo User',
+      role: 'Athlete',
+      avatar_photo: avatarPhoto,
+    });
+    expect(signup.body.token.length).toBeLessThan(4096);
+
+    const login = await request(app).post('/api/login').send({
+      email,
+      password,
+    });
+
+    expect(login.status).toBe(200);
+    expect(login.body.user).toMatchObject({
+      email,
+      avatar_photo: avatarPhoto,
+    });
+    expect(login.body.token.length).toBeLessThan(4096);
+
+    const metrics = await request(app)
+      .get('/api/metrics')
+      .set('Authorization', `Bearer ${login.body.token}`);
+
+    expect(metrics.status).toBe(200);
+    expect(metrics.body.subject).toMatchObject({
+      email,
+      name: 'Photo User',
     });
   });
 });
@@ -97,6 +162,89 @@ describe('Metrics endpoint', () => {
     expect(Array.isArray(response.body.timeline)).toBe(true);
     expect(Array.isArray(response.body.readiness)).toBe(true);
     expect(response.body.readiness.length).toBeGreaterThan(0);
+  });
+
+  it('derives daily calories from logged nutrition entries', async () => {
+    const { token } = await createAthleteAccount();
+    const targetDate = formatLocalDate(new Date());
+
+    const breakfast = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Breakfast oats',
+        calories: 320,
+        protein: 20,
+        carbs: 45,
+        fats: 8,
+        date: targetDate,
+      });
+    expect(breakfast.status).toBe(200);
+
+    const snack = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Greek yogurt',
+        calories: 180,
+        protein: 17,
+        carbs: 12,
+        fats: 5,
+        date: targetDate,
+      });
+    expect(snack.status).toBe(200);
+
+    const metrics = await request(app)
+      .get('/api/metrics?include=summary,timeline')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(metrics.status).toBe(200);
+    expect(metrics.body.summary).toMatchObject({
+      calories: 500,
+    });
+
+    const day = metrics.body.timeline.find((entry) => entry.date === targetDate);
+    expect(day).toBeTruthy();
+    expect(day.calories).toBe(500);
+  });
+});
+
+describe('Weight endpoint', () => {
+  it('uses logged nutrition totals for weight timeline calories', async () => {
+    const { token } = await createAthleteAccount();
+    const targetDate = formatLocalDate(new Date());
+
+    const nutrition = await request(app)
+      .post('/api/nutrition')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Lunch bowl',
+        calories: 640,
+        protein: 38,
+        carbs: 72,
+        fats: 18,
+        date: targetDate,
+      });
+    expect(nutrition.status).toBe(200);
+
+    const weight = await request(app)
+      .post('/api/weight')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        weight: 182,
+        unit: 'lb',
+        date: targetDate,
+      });
+    expect(weight.status).toBe(201);
+
+    const response = await request(app)
+      .get('/api/weight')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    const day = response.body.timeline.find((entry) => entry.date === targetDate);
+    expect(day).toBeTruthy();
+    expect(day.calories).toBe(640);
   });
 });
 

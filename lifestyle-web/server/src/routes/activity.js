@@ -1082,8 +1082,13 @@ router.get('/strava/callback', async (req, res) => {
         <head>
           <meta charset="utf-8" />
           <title>Strava linked</title>
+          <link rel="preconnect" href="https://fonts.googleapis.com" />
+          <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+          <link
+            href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+            rel="stylesheet" />
           <style>
-            body { font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 2rem; text-align: center; background: #060b23; color: #f2f4ff; }
+            body { font-family: Manrope, system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 2rem; text-align: center; background: #060b23; color: #f2f4ff; }
             .card { max-width: 460px; margin: 0 auto; padding: 2rem; background: rgba(255,255,255,0.04); border-radius: 16px; }
             button { margin-top: 1.5rem; padding: 0.75rem 1.5rem; border-radius: 999px; border: none; background: #27d2fe; color: #040815; font-weight: 600; cursor: pointer; }
           </style>

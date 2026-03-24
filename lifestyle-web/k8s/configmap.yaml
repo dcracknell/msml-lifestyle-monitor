@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lifestyle-web-config
+  labels:
+    app.kubernetes.io/name: lifestyle-web
+    app.kubernetes.io/part-of: msml-lifestyle-monitor
+data:
+  PORT: "4000"
+  HOST: "0.0.0.0"
+  API_BODY_LIMIT: "20mb"
+  REQUIRE_HTTPS: "false"
+  DB_STORAGE_DIR: "./database/storage"
+  DB_SQL_DIR: "./database/sql"
+  NUT_MODEL_PYTHON_BIN: "/opt/nut-venv/bin/python"
+  NUT_MODEL_SCRIPT: "/app/lifestyle-web/server/NUT_model/nut_estimator.py"
+  NUT_MODEL_WEIGHTS: "/app/lifestyle-web/server/NUT_model/checkpoint/canet_NUT.pth"
+  NUT_MODEL_LABELS: "/app/lifestyle-web/server/data/FoodSeg103/category_id.txt"
+  NUT_MODEL_TIMEOUT_MS: "45000"

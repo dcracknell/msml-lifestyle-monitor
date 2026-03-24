@@ -66,27 +66,67 @@ const liquidHydrationStatement = db.prepare(
 );
 
 const summaryStatement = db.prepare(
-  `SELECT steps,
-          calories,
-          sleep_hours    AS sleepHours,
-          readiness_score AS readiness
-     FROM daily_metrics
-    WHERE user_id = ?
-      AND date <= DATE('now', 'localtime')
-    ORDER BY date DESC
-    LIMIT 1`
+  `WITH nutrition_totals AS (
+      SELECT date,
+             SUM(calories) AS calories
+        FROM nutrition_entries
+       WHERE user_id = @subjectId
+       GROUP BY date
+    ),
+    daily_dates AS (
+      SELECT date
+        FROM daily_metrics
+       WHERE user_id = @subjectId
+      UNION
+      SELECT date
+        FROM nutrition_entries
+       WHERE user_id = @subjectId
+    )
+    SELECT dm.steps,
+           COALESCE(nt.calories, dm.calories) AS calories,
+           dm.sleep_hours AS sleepHours,
+           dm.readiness_score AS readiness
+      FROM daily_dates dd
+      LEFT JOIN daily_metrics dm
+        ON dm.user_id = @subjectId
+       AND dm.date = dd.date
+      LEFT JOIN nutrition_totals nt
+        ON nt.date = dd.date
+     WHERE dd.date <= DATE('now', 'localtime')
+     ORDER BY dd.date DESC
+     LIMIT 1`
 );
 
 const timelineStatement = db.prepare(
-  `SELECT date,
-          steps,
-          calories,
-          sleep_hours     AS sleepHours,
-          readiness_score AS readiness
-     FROM daily_metrics
-    WHERE user_id = ?
-      AND date <= DATE('now', 'localtime')
-    ORDER BY date ASC`
+  `WITH nutrition_totals AS (
+      SELECT date,
+             SUM(calories) AS calories
+        FROM nutrition_entries
+       WHERE user_id = @subjectId
+       GROUP BY date
+    ),
+    daily_dates AS (
+      SELECT date
+        FROM daily_metrics
+       WHERE user_id = @subjectId
+      UNION
+      SELECT date
+        FROM nutrition_entries
+       WHERE user_id = @subjectId
+    )
+    SELECT dd.date AS date,
+           dm.steps,
+           COALESCE(nt.calories, dm.calories) AS calories,
+           dm.sleep_hours AS sleepHours,
+           dm.readiness_score AS readiness
+      FROM daily_dates dd
+      LEFT JOIN daily_metrics dm
+        ON dm.user_id = @subjectId
+       AND dm.date = dd.date
+      LEFT JOIN nutrition_totals nt
+        ON nt.date = dd.date
+     WHERE dd.date <= DATE('now', 'localtime')
+     ORDER BY dd.date ASC`
 );
 
 const macrosStatement = db.prepare(
@@ -211,10 +251,10 @@ router.get('/', authenticate, (req, res) => {
   };
 
   if (include('summary')) {
-    payload.summary = summaryStatement.get(subjectId) || null;
+    payload.summary = summaryStatement.get({ subjectId }) || null;
   }
   if (include('timeline')) {
-    payload.timeline = timelineStatement.all(subjectId);
+    payload.timeline = timelineStatement.all({ subjectId });
   }
   if (include('macros')) {
     payload.macros = macrosStatement.get(subjectId) || null;

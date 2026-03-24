@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=15" />
 </head>
 
 <body class="device-body">
@@ -80,6 +80,7 @@
         <label>
           Data parser
           <select id="parser">
+            <option value="jsontext">JSON text (Arduino / HM-10)</option>
             <option value="uint8">Unsigned 8-bit</option>
             <option value="uint16">Unsigned 16-bit (little-endian)</option>
             <option value="int16">Signed 16-bit (little-endian)</option>

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lifestyle-web-db
+  labels:
+    app.kubernetes.io/name: lifestyle-web
+    app.kubernetes.io/part-of: msml-lifestyle-monitor
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

@@ -121,7 +121,7 @@ The client stores that value in `localStorage` under `msml.api.base-url` and reu
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
 | `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference | `python` |
 | `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/nut_estimator.py` |
-| `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/canet_NUT.pth` |
+| `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/checkpoint/canet_NUT.pth` |
 | `NUT_MODEL_LABELS` | Optional path to a custom FoodSeg103 label map JSON (built-in labels are used if omitted) | — |
 | `NUT_MODEL_TIMEOUT_MS` | Max server wait for meal photo inference | `15000` |
 | `NUT_MODEL_MAX_PHOTO_BASE64_LENGTH` | Max accepted base64 photo payload length for `/api/nutrition` | `12582912` |
@@ -164,11 +164,105 @@ docker compose up --build -d
 ```
 Compose uses the same named volume to persist SQLite, rebuilds when files change, and watches `server/.env` for configuration overrides. Inspect logs with `docker compose logs -f lifestyle-web`.
 
+### Kubernetes
+The repository now includes a ready-to-apply Kubernetes package in [`k8s/`](k8s). It deploys the existing Docker image, mounts a persistent volume for SQLite, and wires in health probes for `/api/health`.
+
+Important constraints before you deploy:
+- SQLite means this service should stay at **one replica**. The checked-in Deployment uses `replicas: 1` and `strategy: Recreate` for that reason.
+- You must push the Docker image to a registry your cluster can pull from, then replace the placeholder image in [`deployment.yaml`](k8s/deployment.yaml).
+- Create the Kubernetes Secret from [`secrets.env.example`](k8s/secrets.env.example) rather than committing secrets into git.
+
+Suggested flow:
+```bash
+# 1. Build and push the image
+docker build -t ghcr.io/<your-user>/msml-lifestyle-web:<tag> -f lifestyle-web/Dockerfile lifestyle-web
+docker push ghcr.io/<your-user>/msml-lifestyle-web:<tag>
+
+# 2. Copy the secret template and fill in real values
+cp lifestyle-web/k8s/secrets.env.example lifestyle-web/k8s/secrets.env
+
+# 3. Create the namespace + secret
+kubectl apply -f lifestyle-web/k8s/namespace.yaml
+kubectl -n lifestyle-web create secret generic lifestyle-web-secrets \
+  --from-env-file=lifestyle-web/k8s/secrets.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 4. Edit lifestyle-web/k8s/deployment.yaml to use your pushed image, then deploy
+kubectl apply -k lifestyle-web/k8s
+
+# 5. Quick smoke test without ingress
+kubectl -n lifestyle-web port-forward svc/lifestyle-web 4000:4000
+```
+
+What to customize:
+- [`configmap.yaml`](k8s/configmap.yaml): non-secret runtime settings such as `REQUIRE_HTTPS`, body size, or NUT paths.
+- [`pvc.yaml`](k8s/pvc.yaml): requested SQLite storage size and storage class details for your cluster.
+- [`ingress.example.yaml`](k8s/ingress.example.yaml): example nginx/cert-manager ingress. Edit the hostname/TLS secret, then apply it separately if you want a public URL.
+
+If you expose the app through an HTTPS ingress, set `REQUIRE_HTTPS=true` in [`configmap.yaml`](k8s/configmap.yaml). Add `APP_ORIGIN` only when a browser or mobile client will call the API from a different origin; the bundled web UI works through the ingress host without that override because the server accepts same-origin requests automatically.
+
+### Local k3s on Raspberry Pi / ARM
+For a single-machine local cluster, use the checked-in local overlay at [`k8s/overlays/local`](k8s/overlays/local). It switches the Service to `NodePort` and expects a locally imported image called `lifestyle-web:local`.
+
+Suggested flow after `k3s` is installed and the host has been rebooted with memory cgroups enabled:
+```bash
+# Build the image for the local cluster
+docker build -t lifestyle-web:local -f lifestyle-web/Dockerfile lifestyle-web
+
+# Import it into k3s' containerd
+docker save lifestyle-web:local | sudo k3s ctr images import -
+
+# Create the secret once
+cp lifestyle-web/k8s/secrets.env.example lifestyle-web/k8s/secrets.env
+kubectl apply -f lifestyle-web/k8s/namespace.yaml
+kubectl -n lifestyle-web create secret generic lifestyle-web-secrets \
+  --from-env-file=lifestyle-web/k8s/secrets.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Deploy the local overlay
+kubectl apply -k lifestyle-web/k8s/overlays/local
+```
+
+The app will then be reachable on `http://<pi-ip>:30040`.
+
 ### Serving Beyond Localhost
 1. Copy `.env.example` to `.env` and set `HOST=0.0.0.0` plus your preferred `PORT`.
 2. Update `APP_ORIGIN` with every public URL you expect browsers to load from (include both apex and `www` domains if relevant). Set `APP_ORIGIN=*` only if you explicitly want any origin.
 3. Expose the chosen TCP port in your firewall/router. When fronting with HTTPS, point your reverse proxy at `http://127.0.0.1:PORT` and include the public HTTPS origin in `APP_ORIGIN`.
 4. Restart the server (`npm run start` or your process manager) and verify an external request works with `curl http://<public-host>:PORT/api/health`.
+
+### Ubuntu + nginx + Let's Encrypt
+If you are hosting the Node server directly on a Linux machine and want `https://msmls.org` and `https://www.msmls.org`, use the checked-in nginx site config at `server/nginx.conf`.
+
+1. In `server/.env`, set at least:
+   ```env
+   HOST=0.0.0.0
+   PORT=4000
+   APP_ORIGIN=https://msmls.org,https://www.msmls.org
+   REQUIRE_HTTPS=true
+   ```
+2. Start the app and keep it running with your process manager of choice so nginx has something to proxy on `127.0.0.1:4000`.
+3. Install the nginx site:
+   ```bash
+   sudo cp /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor/lifestyle-web/server/nginx.conf \
+     /etc/nginx/sites-available/msmls
+
+   sudo ln -sfn /etc/nginx/sites-available/msmls /etc/nginx/sites-enabled/msmls
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+4. Make sure both `msmls.org` and `www.msmls.org` already resolve to your home/public IP address, then request the certificate:
+   ```bash
+   sudo certbot --nginx -d msmls.org -d www.msmls.org
+   sudo systemctl reload nginx
+   ```
+5. Forward router ports `80/tcp` and `443/tcp` to the Linux machine running nginx. You can find that machine's local IP with:
+   ```bash
+   hostname -I | awk '{print $1}'
+   ```
+6. If you run a local firewall, allow nginx through it before testing from outside your network:
+   ```bash
+   sudo ufw allow 'Nginx Full'
+   ```
 
 ## Operating the Platform
 ### Resetting the Seed Database
@@ -191,10 +285,10 @@ To run inference on a single test image (and verify the model is reading your fi
 cd lifestyle-web/server
 NUT_model/.venv/bin/python NUT_model/nut_estimator.py \
   --image /path/to/test-image.jpg \
-  --model NUT_model/canet_NUT.pth
+  --model NUT_model/checkpoint/canet_NUT.pth
 ```
 
-Keep `NUT_model/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, built-in FoodSeg103 labels are used. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
+Keep `NUT_model/checkpoint/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, built-in FoodSeg103 labels are used. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
 
 If a single photo contains multiple foods, `/api/nutrition` also accepts an `items` array so one request can log multiple entries from the same image. Example payload:
 ```json

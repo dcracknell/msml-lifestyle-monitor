@@ -8,7 +8,7 @@ import { useSyncQueue } from './SyncProvider';
 const CONFIG_KEY = 'msml.bluetooth.config';
 const MAX_RECENT_SAMPLES = 120;
 
-export type BluetoothProfileId = 'custom' | 'ble_hrm' | 'apple_watch_companion';
+export type BluetoothProfileId = 'custom' | 'ble_hrm' | 'apple_watch_companion' | 'arduino_hm10';
 
 export interface BluetoothProfileOption {
   id: BluetoothProfileId;
@@ -50,6 +50,17 @@ export const BLUETOOTH_PROFILE_OPTIONS: BluetoothProfileOption[] = [
       serviceUUID: 'FFF0',
       characteristicUUID: 'FFF1',
       metric: 'exercise.hr',
+    },
+  },
+  {
+    id: 'arduino_hm10',
+    label: 'Arduino + HM-10',
+    shortLabel: 'Arduino',
+    description: 'Arduino Uno with HM-10 BLE module sending JSON metric packets (see mock bluetooth/README.md).',
+    defaults: {
+      serviceUUID: 'FFE0',
+      characteristicUUID: 'FFE1',
+      metric: 'vitals.heart_rate',
     },
   },
 ];
@@ -580,6 +591,39 @@ function parsePayloadBatches({
   return mergeBatches([...inferredWatchBatches, ...standardBatches]);
 }
 
+// ---------------------------------------------------------------------------
+// Physiological range validation
+// Returns null (drops the sample) when a known metric carries an impossible
+// value, preventing corrupt readings from polluting the database.
+// ---------------------------------------------------------------------------
+
+const METRIC_RANGES: Record<string, [number, number]> = {
+  'vitals.heart_rate':  [20,  300],
+  'vitals.resting_hr':  [20,  300],
+  'exercise.hr':        [20,  300],
+  'exercise.max_hr':    [20,  300],
+  'vitals.spo2':        [50,  100],
+  'vitals.hrv':         [1,   300],
+  'vitals.glucose':     [1,    60],
+  'body.weight_kg':     [10,  500],
+  'phone.steps':        [0,  200000],
+  'vitals.systolic_bp': [40,  300],
+  'vitals.diastolic_bp':[20,  200],
+};
+
+function validateMetricValue(metric: string, value: number): number | null {
+  const range = METRIC_RANGES[metric];
+  if (!range) return value;
+  const [min, max] = range;
+  if (value < min || value > max) {
+    console.warn(
+      `[BLE] ${metric} value ${value} outside physiological range [${min}, ${max}] – dropped.`
+    );
+    return null;
+  }
+  return value;
+}
+
 export function BluetoothProvider({ children }: { children: ReactNode }) {
   const unsupportedMessage =
     Platform.OS === 'web'
@@ -591,6 +635,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const disconnectRef = useRef<Subscription | null>(null);
   const connectedDeviceIdRef = useRef<string | null>(null);
   const devicesRef = useRef<Map<string, BluetoothDeviceSummary>>(new Map());
+  // Accumulates BLE notification chunks for UART-based sensors (Arduino + HM-10)
+  // until a newline is received, at which point the complete JSON line is parsed.
+  const lineBufferRef = useRef<string>('');
   const { runOrQueue } = useSyncQueue();
 
   const [config, setConfig] = useState<BluetoothConfig>(DEFAULT_CONFIG);
@@ -711,88 +758,120 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     async (value: string | null) => {
       if (!value) return;
       const { text, binary } = decodePayload(value);
-      const parsedBatches = parsePayloadBatches({
-        rawText: text,
-        binary,
-        fallbackMetric: config.metric,
-        profile: config.profile,
-        characteristicUUID: config.characteristicUUID,
-      });
-      if (!parsedBatches.length) {
-        return;
-      }
-      const appendedSamples: BluetoothSample[] = parsedBatches
-        .map((batch) => {
-          const sanitized = batch.samples
-            .map((sample) => ({
-              ts: Number.isFinite(sample.ts) ? Math.round(sample.ts) : Date.now(),
-              value: Number.isFinite(sample.value as number) ? (sample.value as number) : null,
-            }))
-            .filter((sample) => Number.isFinite(sample.ts));
-          if (!sanitized.length) {
-            return null;
-          }
-          const latest = sanitized[sanitized.length - 1];
-          return {
-            ts: latest.ts,
-            value: latest.value,
-            raw: text || '[binary]',
-            metric: batch.metric,
-          } as BluetoothSample;
-        })
-        .filter((sample): sample is BluetoothSample => Boolean(sample));
 
-      if (!appendedSamples.length) {
-        return;
-      }
+      // Inner helper: process a fully-assembled payload string.
+      async function processBatches(rawText: string, rawBinary: string) {
+        const parsedBatches = parsePayloadBatches({
+          rawText,
+          binary: rawBinary,
+          fallbackMetric: config.metric,
+          profile: config.profile,
+          characteristicUUID: config.characteristicUUID,
+        });
+        if (!parsedBatches.length) return;
 
-      const latestSample = appendedSamples.reduce((latest, sample) => (sample.ts >= latest.ts ? sample : latest));
-      setLastSample(latestSample);
-      setRecentSamples((prev) => {
-        const next = [...prev, ...appendedSamples];
-        if (next.length > MAX_RECENT_SAMPLES) {
-          return next.slice(next.length - MAX_RECENT_SAMPLES);
-        }
-        return next;
-      });
-      if (!config.autoUpload) {
-        return;
-      }
-      try {
-        const uploadResults = await Promise.all(
-          parsedBatches.map((batch) => {
-            const sanitizedSamples = batch.samples
+        const appendedSamples: BluetoothSample[] = parsedBatches
+          .map((batch) => {
+            const sanitized = batch.samples
               .map((sample) => ({
                 ts: Number.isFinite(sample.ts) ? Math.round(sample.ts) : Date.now(),
                 value: Number.isFinite(sample.value as number) ? (sample.value as number) : null,
               }))
               .filter((sample) => Number.isFinite(sample.ts));
-            if (!sanitizedSamples.length) {
-              return Promise.resolve({ status: 'sent' as const });
-            }
-            return runOrQueue({
-              endpoint: '/api/streams',
-              payload: {
-                metric: batch.metric,
-                skipWorkoutMirror: shouldSkipWorkoutMirror(batch.metric),
-                samples: sanitizedSamples,
-              },
-              description: `Sensor sample (${batch.metric})`,
-            });
+            if (!sanitized.length) return null;
+            const latest = sanitized[sanitized.length - 1];
+            return {
+              ts: latest.ts,
+              value: latest.value,
+              raw: rawText || '[binary]',
+              metric: batch.metric,
+            } as BluetoothSample;
           })
+          .filter((sample): sample is BluetoothSample => Boolean(sample));
+
+        if (!appendedSamples.length) return;
+
+        const latestSample = appendedSamples.reduce((latest, sample) =>
+          sample.ts >= latest.ts ? sample : latest
         );
-        const queuedCount = uploadResults.filter((result) => result.status === 'queued').length;
-        const sentCount = uploadResults.length - queuedCount;
-        setLastUploadStatus({
-          status: queuedCount > 0 ? 'queued' : 'sent',
-          timestamp: Date.now(),
-          message:
-            queuedCount > 0
-              ? `Uploaded ${sentCount} metric${sentCount === 1 ? '' : 's'}, queued ${queuedCount}.`
-              : `Uploaded ${sentCount} metric${sentCount === 1 ? '' : 's'}.`,
+        setLastSample(latestSample);
+        setRecentSamples((prev) => {
+          const next = [...prev, ...appendedSamples];
+          return next.length > MAX_RECENT_SAMPLES ? next.slice(next.length - MAX_RECENT_SAMPLES) : next;
         });
-      } catch (uploadError) {
-        setError(uploadError instanceof Error ? uploadError.message : 'Unable to upload sample.');
+
+        if (!config.autoUpload) return;
+        try {
+          const uploadResults = await Promise.all(
+            parsedBatches.map((batch) => {
+              const sanitizedSamples = batch.samples
+                .map((sample) => ({
+                  ts: Number.isFinite(sample.ts) ? Math.round(sample.ts) : Date.now(),
+                  value: Number.isFinite(sample.value as number)
+                    ? validateMetricValue(batch.metric, sample.value as number)
+                    : null,
+                }))
+                .filter((sample) => Number.isFinite(sample.ts));
+              if (!sanitizedSamples.length) return Promise.resolve({ status: 'sent' as const });
+              return runOrQueue({
+                endpoint: '/api/streams',
+                payload: {
+                  metric: batch.metric,
+                  skipWorkoutMirror: shouldSkipWorkoutMirror(batch.metric),
+                  samples: sanitizedSamples,
+                },
+                description: `Sensor sample (${batch.metric})`,
+              });
+            })
+          );
+          const queuedCount = uploadResults.filter((r) => r.status === 'queued').length;
+          const sentCount = uploadResults.length - queuedCount;
+          setLastUploadStatus({
+            status: queuedCount > 0 ? 'queued' : 'sent',
+            timestamp: Date.now(),
+            message:
+              queuedCount > 0
+                ? `Uploaded ${sentCount} metric${sentCount === 1 ? '' : 's'}, queued ${queuedCount}.`
+                : `Uploaded ${sentCount} metric${sentCount === 1 ? '' : 's'}.`,
+          });
+        } catch (uploadError) {
+          setError(uploadError instanceof Error ? uploadError.message : 'Unable to upload sample.');
+        }
+      }
+
+      // BLE Heart Rate Monitor uses a binary protocol where each notification
+      // is self-contained – parse immediately without line buffering.
+      if (config.profile === 'ble_hrm') {
+        await processBatches(text, binary);
+        return;
+      }
+
+      // For UART-based sensors (Arduino + HM-10) and watch companions, the
+      // JSON payload may be fragmented across multiple 20-byte BLE packets.
+      // Accumulate text chunks in a line buffer and parse only complete lines
+      // (terminated by '\n') to avoid partial-JSON parse errors.
+      lineBufferRef.current += text;
+
+      // Overflow guard: a valid JSON line from the Arduino is at most ~56 bytes.
+      // If the buffer grows beyond 512 chars without a newline, the HM-10 is
+      // sending garbled data (noise, baud mismatch). Discard and log.
+      if (lineBufferRef.current.length > 512) {
+        console.warn(
+          '[BLE] Line buffer overflow (' + lineBufferRef.current.length + ' chars) – discarding. ' +
+          'Check HM-10 baud rate and UUID configuration.'
+        );
+        lineBufferRef.current = '';
+        return;
+      }
+
+      const lines = lineBufferRef.current.split('\n');
+      // Everything after the last '\n' is an incomplete line – keep it buffered.
+      lineBufferRef.current = lines.pop() ?? '';
+
+      for (const rawLine of lines) {
+        const trimmedLine = rawLine.replace(/\r$/, '').trim();
+        if (!trimmedLine) continue;
+        await processBatches(trimmedLine, '');
       }
     },
     [
@@ -857,6 +936,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     monitorRef.current = null;
     disconnectRef.current?.remove();
     disconnectRef.current = null;
+    lineBufferRef.current = '';
     const deviceId = connectedDeviceIdRef.current;
     connectedDeviceIdRef.current = null;
     setConnectedDevice(null);

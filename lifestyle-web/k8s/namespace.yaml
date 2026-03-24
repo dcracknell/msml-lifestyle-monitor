@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lifestyle-web
+  labels:
+    app.kubernetes.io/name: lifestyle-web
+    app.kubernetes.io/part-of: msml-lifestyle-monitor

@@ -1,0 +1,15 @@
+[Unit]
+Description=Bootstrap local MSML lifestyle-web deployment on k3s
+After=network-online.target docker.service k3s.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/msml-local-k3s-setup.done
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor/lifestyle-web/scripts/bootstrap-local-k3s.sh
+TimeoutStartSec=0
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

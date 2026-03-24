@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lifestyle-web
+  namespace: lifestyle-web
+  labels:
+    app.kubernetes.io/name: lifestyle-web
+    app.kubernetes.io/part-of: msml-lifestyle-monitor
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - change-me.example.com
+      secretName: lifestyle-web-tls
+  rules:
+    - host: change-me.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lifestyle-web
+                port:
+                  number: 4000

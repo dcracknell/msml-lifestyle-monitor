@@ -5,7 +5,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MSML Lifestyle Monitor</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css?v=19" />
   <script src="/vendor/chart.umd.js" defer></script>
 </head>
 
@@ -340,15 +345,21 @@
           <section class="trend-boards">
             <article class="chart-card">
               <p class="section-eyebrow">Steps · 7-Day</p>
-              <canvas id="activityChart" height="180"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-180">
+                <canvas id="activityChart" height="180"></canvas>
+              </div>
             </article>
             <article class="chart-card">
               <p class="section-eyebrow">Macro Split</p>
-              <canvas id="macroChart" height="180"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-square-180">
+                <canvas id="macroChart" height="180"></canvas>
+              </div>
             </article>
             <article class="chart-card">
               <p class="section-eyebrow">Readiness Trend</p>
-              <canvas id="overviewReadinessChart" height="180"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-180">
+                <canvas id="overviewReadinessChart" height="180"></canvas>
+              </div>
             </article>
           </section>
 
@@ -416,7 +427,7 @@
             <article class="card sessions-card">
               <div class="sessions-header">
                 <p class="section-eyebrow">Recent Sessions</p>
-                <p class="card-meta" id="activitySessionHint">Select a row to inspect splits →</p>
+                <p class="card-meta" id="activitySessionHint">Click a run to inspect details →</p>
               </div>
               <!-- app.js populates both lists; sessionsList is the primary feed -->
               <ul class="act-session-list" id="sessionsList"></ul>
@@ -426,8 +437,8 @@
             <article class="card splits-card">
               <div class="card-header split">
                 <div>
-                  <p class="section-eyebrow">Splits</p>
-                  <h3 class="card-title" id="activitySplitTitle">Select a session</h3>
+                  <p class="section-eyebrow">Run Details</p>
+                  <h3 class="card-title" id="activitySplitTitle">Select a run</h3>
                 </div>
                 <button type="button" class="outline-btn secondary hidden" id="stravaExportButton">Export ↗</button>
               </div>
@@ -444,14 +455,18 @@
                 <p class="section-eyebrow">Pace vs Heart Rate</p>
                 <span class="chart-legend-dot teal"></span>
               </div>
-              <canvas id="activityPaceChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="activityPaceChart"></canvas>
+              </div>
             </article>
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">Load Trend · Last 7 Sessions</p>
                 <span class="chart-legend-dot amber"></span>
               </div>
-              <canvas id="activityLoadChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="activityLoadChart"></canvas>
+              </div>
             </article>
           </div>
 
@@ -461,9 +476,18 @@
           <!-- 4 · Best Efforts + Strava Sync -->
           <div class="act-bottom-row">
             <article class="card efforts-card">
-              <p class="section-eyebrow">Best Efforts</p>
+              <div class="card-header split efforts-header">
+                <div>
+                  <p class="section-eyebrow">Best Efforts</p>
+                  <h3 class="card-title">Personal markers</h3>
+                </div>
+                <span class="status-chip hidden" id="activityBestEffortsBadge"></span>
+              </div>
+              <p class="field-hint" id="activityBestEffortsHint">
+                Fastest pace and longest-distance efforts from your recent runs.
+              </p>
               <ul class="act-efforts-list" id="activityBestEfforts">
-                <li class="split-empty">No effort data yet.</li>
+                <li class="empty-row">No effort data yet.</li>
               </ul>
             </article>
 
@@ -600,8 +624,10 @@
             <div class="act-chart-header">
               <p class="section-eyebrow">Sleep Duration · Last 7 Nights</p>
             </div>
-            <canvas id="sleepTrendChart" height="220"></canvas>
-            <table class="sleep-log-table">
+            <div class="chart-canvas-frame chart-canvas-frame-220">
+              <canvas id="sleepTrendChart" height="220"></canvas>
+            </div>
+            <div class="sleep-log-table-wrap"><table class="sleep-log-table">
               <thead>
                 <tr>
                   <th>Date</th><th>Total</th><th>Deep</th><th>REM</th><th>Light</th>
@@ -616,7 +642,7 @@
                 <tr><td>Dec 15</td><td>7h 18m</td><td><span class="stage-tag deep">23%</span></td><td><span class="stage-tag rem">28%</span></td><td><span class="stage-tag light">49%</span></td></tr>
                 <tr class="log-highlight"><td>Dec 16 ★</td><td>6h 55m</td><td><span class="stage-tag deep">23%</span></td><td><span class="stage-tag rem">29%</span></td><td><span class="stage-tag light">48%</span></td></tr>
               </tbody>
-            </table>
+            </table></div>
           </article>
 
         </div><!-- /sleep subpage -->
@@ -671,7 +697,9 @@
                 <p class="section-eyebrow">HRV Trend · 14 Days</p>
                 <span class="chart-legend-dot teal"></span>
               </div>
-              <canvas id="vitalsHrvChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="vitalsHrvChart"></canvas>
+              </div>
             </article>
             <article class="card">
               <p class="section-eyebrow">Signal Summary</p>
@@ -695,14 +723,18 @@
                 <p class="section-eyebrow">Resting HR · 14 Days</p>
                 <span class="chart-legend-dot" style="background:var(--red)"></span>
               </div>
-              <canvas id="vitalsHrChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="vitalsHrChart"></canvas>
+              </div>
             </article>
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">Blood Glucose · 14 Days</p>
                 <span class="chart-legend-dot" style="background:#a78bfa"></span>
               </div>
-              <canvas id="vitalsGlucoseChart"></canvas>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="vitalsGlucoseChart"></canvas>
+              </div>
             </article>
           </div>
 
@@ -732,6 +764,51 @@
 
           <!-- 1 · Goal Signal Cards — app.js renders .nutrition-goal divs here -->
           <div class="nutrition-goal-list" id="nutritionGoalList"></div>
+
+          <!-- ── AI Meal Photo Analysis — top of page so it's always visible ── -->
+          <article class="card nutrition-photo-card">
+            <div class="card-header split">
+              <div>
+                <p class="section-eyebrow">AI Meal Analysis · NUT Model</p>
+                <h3 class="card-title">📷 Take or upload a photo to auto-detect food &amp; macros</h3>
+              </div>
+              <button type="button" id="nutritionPhotoClearButton" class="photo-clear-btn hidden">✕ Remove</button>
+            </div>
+
+            <!-- Hidden file input — triggered by drop zone click -->
+            <input type="file" id="nutritionPhotoInput" accept="image/*" class="hidden" />
+
+            <!-- Upload area: drop zone + preview side-by-side once a photo is chosen -->
+            <div class="photo-upload-area">
+
+              <!-- Drop zone — always visible; shrinks to a compact strip once photo is loaded -->
+              <label id="nutritionPhotoDropZone" for="nutritionPhotoInput" class="photo-drop-zone">
+                <div class="photo-drop-inner">
+                  <svg class="photo-drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM18.75 10.5h.008v.008h-.008V10.5Z" />
+                  </svg>
+                  <span class="photo-drop-label">Click to upload a meal photo</span>
+                  <span class="photo-drop-hint">or drag &amp; drop · JPG / PNG · max 12 MB</span>
+                </div>
+              </label>
+
+              <!-- Photo preview thumbnail (shown by app.js after selection) -->
+              <div id="nutritionPhotoPreviewWrapper" class="nutrition-photo-preview-wrapper hidden">
+                <img id="nutritionPhotoPreview" class="nutrition-photo-img" alt="Meal photo preview" />
+              </div>
+
+            </div>
+
+            <!-- Status line -->
+            <p id="nutritionPhotoStatus" class="nutrition-photo-status"></p>
+
+            <!-- Analysis results panel (populated by app.js) -->
+            <div id="nutritionPhotoAnalysis" class="nutrition-photo-analysis"></div>
+
+            <!-- Hidden compat button kept for app.js click handler -->
+            <button type="button" id="nutritionPhotoButton" class="hidden" aria-hidden="true"></button>
+          </article>
 
           <!-- 2 · Macro Targets full-width card -->
           <article class="card nutrition-macro-card">
@@ -837,37 +914,103 @@
             </article>
           </div>
 
-          <!-- 4 · Calories vs Target chart (populated by app.js) -->
-          <article class="card chart-card nutrition-chart-card">
-            <div class="act-chart-header">
-              <p class="section-eyebrow">Calories vs Target · Last 7 Days</p>
-              <span class="chart-legend-dot teal"></span>
-            </div>
-            <canvas id="nutritionTrendChart" height="220"></canvas>
-          </article>
+          <!-- 4 · Chart row — calories trend + macro trend side by side -->
+          <div class="nutrition-charts-row">
 
-          <!-- Hidden for app.js compat -->
-          <ul id="nutritionMonthList" class="hidden" aria-hidden="true"></ul>
-          <canvas id="nutritionMacroTrendChart" class="hidden" height="1" aria-hidden="true"></canvas>
-          <span id="nutritionInsightSelect" class="hidden" aria-hidden="true"></span>
-          <span id="nutritionInsightSummary" class="hidden" aria-hidden="true"></span>
-          <span id="nutritionInsightFlag" class="hidden" aria-hidden="true"></span>
-          <!-- Barcode scan (JS compat) -->
+            <article class="card chart-card nutrition-chart-card">
+              <div class="act-chart-header">
+                <p class="section-eyebrow">Calories vs Target · Last 7 Days</p>
+                <span class="chart-legend-dot teal"></span>
+              </div>
+              <div class="chart-canvas-frame chart-canvas-frame-220">
+                <canvas id="nutritionTrendChart" height="200"></canvas>
+              </div>
+            </article>
+
+            <article class="card chart-card nutrition-macro-trend-card">
+              <div class="act-chart-header">
+                <p class="section-eyebrow">Macro Trends · Last 30 Days</p>
+                <div class="chart-legend-group">
+                  <span class="chart-legend-chip protein">P</span>
+                  <span class="chart-legend-chip carbs">C</span>
+                  <span class="chart-legend-chip fats">F</span>
+                  <span class="chart-legend-chip fiber">Fib</span>
+                </div>
+              </div>
+              <div class="chart-canvas-frame chart-canvas-frame-220">
+                <canvas id="nutritionMacroTrendChart" height="200"></canvas>
+              </div>
+            </article>
+
+          </div>
+
+          <!-- 5 · Bottom chart row — donut + surplus/deficit -->
+          <div class="nutrition-charts-row">
+
+            <!-- Today's macro split doughnut -->
+            <article class="card chart-card nutrition-donut-card">
+              <div class="act-chart-header">
+                <p class="section-eyebrow">Today's Macro Split</p>
+                <div class="chart-legend-group">
+                  <span class="chart-legend-chip protein">P</span>
+                  <span class="chart-legend-chip carbs">C</span>
+                  <span class="chart-legend-chip fats">F</span>
+                </div>
+              </div>
+              <div class="chart-canvas-frame chart-canvas-frame-square-280">
+                <canvas id="nutritionMacroDonutChart" height="240"></canvas>
+              </div>
+            </article>
+
+            <!-- Daily calorie surplus / deficit -->
+            <article class="card chart-card nutrition-surplus-card">
+              <div class="act-chart-header">
+                <p class="section-eyebrow">Calorie Surplus / Deficit · Last 14 Days</p>
+                <div class="chart-legend-group">
+                  <span class="chart-legend-chip" style="background:rgba(255,107,129,0.15);color:#ff6b81">Over</span>
+                  <span class="chart-legend-chip" style="background:rgba(45,212,191,0.15);color:#2dd4bf">Under</span>
+                </div>
+              </div>
+              <div class="chart-canvas-frame chart-canvas-frame-220">
+                <canvas id="nutritionSurplusChart" height="200"></canvas>
+              </div>
+            </article>
+
+          </div>
+
+          <!-- 6 · Insights + 30-day history -->
+          <div class="nutrition-bottom-row">
+
+            <!-- Insights panel — populated by app.js -->
+            <article class="card nutrition-insights-card">
+              <div class="nutrition-insights-header">
+                <p class="section-eyebrow">Nutrition Insights</p>
+                <select id="nutritionInsightSelect" class="insight-metric-select" aria-label="Choose metric">
+                  <option value="calories">Calories</option>
+                  <option value="protein">Protein</option>
+                  <option value="carbs">Carbs</option>
+                  <option value="fats">Fats</option>
+                  <option value="fiber">Fiber</option>
+                </select>
+              </div>
+              <p id="nutritionInsightSummary" class="nutrition-insight-summary">Log a week of data to unlock insights.</p>
+              <span id="nutritionInsightFlag" class="nutrition-insight-flag hidden"></span>
+            </article>
+
+            <!-- 30-day calorie history — populated by app.js -->
+            <article class="card nutrition-history-card">
+              <p class="section-eyebrow">30-Day Calorie History</p>
+              <ul id="nutritionMonthList" class="nutrition-month-list"></ul>
+            </article>
+
+          </div>
+
+          <!-- Barcode scan (JS compat — hidden triggers) -->
           <button type="button" id="nutritionScanButton" class="hidden" aria-hidden="true"></button>
           <p id="nutritionScanStatus" class="hidden" aria-hidden="true"></p>
           <div id="nutritionScanPreviewWrapper" class="hidden" aria-hidden="true">
             <video id="nutritionScanPreview" class="barcode-preview" autoplay muted playsinline></video>
           </div>
-          <!-- Photo upload (JS compat) -->
-          <input type="file" id="nutritionPhotoInput" accept="image/*" class="hidden" aria-hidden="true" />
-          <button type="button" id="nutritionPhotoButton" class="hidden" aria-hidden="true"></button>
-          <button type="button" id="nutritionPhotoClearButton" class="hidden" aria-hidden="true"></button>
-          <p id="nutritionPhotoStatus" class="hidden" aria-hidden="true"></p>
-          <div id="nutritionPhotoPreviewWrapper" class="hidden" aria-hidden="true">
-            <img id="nutritionPhotoPreview" class="photo-preview" alt="" />
-          </div>
-          <div id="nutritionPhotoAnalysis" class="hidden" aria-hidden="true"></div>
-          <label id="nutritionPhotoDropZone" for="nutritionPhotoInput" class="hidden" aria-hidden="true"></label>
 
         </div><!-- /nutrition subpage -->
 
@@ -901,7 +1044,9 @@
               <p class="section-eyebrow">Trend</p>
               <h3 class="card-title">Weight vs calories — 4 weeks</h3>
             </div>
-            <canvas id="weightTrendChart" height="220"></canvas>
+            <div class="chart-canvas-frame chart-canvas-frame-220">
+              <canvas id="weightTrendChart" height="220"></canvas>
+            </div>
           </article>
 
           <!-- Two-column: logs left, form + metrics right -->
@@ -1077,307 +1222,6 @@
     </main>
   </div>
 
-  <script src="/app.js" type="module"></script>
-
-  <!-- Activity chart demo data — renders on load if app.js hasn't populated the canvases -->
-  <script>
-  window.addEventListener('load', function () {
-    if (typeof Chart === 'undefined') return;
-
-    var TEAL   = '#2dd4bf';
-    var AMBER  = '#f59e0b';
-    var GRID   = '#1a2535';
-    var TICK   = '#64748b';
-    var FONT   = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-
-    var baseOpts = {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { bodyFont: { family: FONT }, titleFont: { family: FONT } } },
-      scales: {
-        x: { grid: { color: GRID }, ticks: { color: TICK, font: { family: FONT, size: 11 } } },
-        y: { grid: { color: GRID }, ticks: { color: TICK, font: { family: FONT, size: 11 } } }
-      }
-    };
-
-    /* ── Pace vs Heart Rate scatter ── */
-    var paceEl = document.getElementById('activityPaceChart');
-    if (paceEl && !Chart.getChart(paceEl)) {
-      new Chart(paceEl, {
-        type: 'scatter',
-        data: {
-          datasets: [{
-            label: 'Pace (min/km) vs HR (bpm)',
-            data: [
-              {x:142,y:5.83},{x:148,y:5.55},{x:153,y:5.30},{x:158,y:5.12},
-              {x:161,y:4.98},{x:165,y:4.83},{x:169,y:4.70},{x:172,y:4.58},
-              {x:155,y:5.40},{x:163,y:4.92},{x:167,y:4.75},{x:174,y:4.50},
-              {x:145,y:5.68},{x:170,y:4.63},{x:176,y:4.42}
-            ],
-            backgroundColor: TEAL + 'cc',
-            pointRadius: 5,
-            pointHoverRadius: 7
-          }]
-        },
-        options: Object.assign({}, baseOpts, {
-          scales: {
-            x: Object.assign({}, baseOpts.scales.x, {
-              title: { display: true, text: 'Heart Rate (bpm)', color: TICK, font: { family: FONT, size: 11 } }
-            }),
-            y: Object.assign({}, baseOpts.scales.y, {
-              reverse: true,
-              title: { display: true, text: 'Pace (min/km)', color: TICK, font: { family: FONT, size: 11 } },
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v.toFixed(2); } }
-            })
-          }
-        })
-      });
-    }
-
-    /* ── Load Trend bar ── */
-    var loadEl = document.getElementById('activityLoadChart');
-    if (loadEl && !Chart.getChart(loadEl)) {
-      var days  = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-      var loads = [38, 0, 72, 55, 0, 118, 44];
-      new Chart(loadEl, {
-        type: 'bar',
-        data: {
-          labels: days,
-          datasets: [{
-            label: 'Training Load',
-            data: loads,
-            backgroundColor: loads.map(function(v){ return v > 0 ? AMBER + 'cc' : GRID; }),
-            borderColor:     loads.map(function(v){ return v > 0 ? AMBER : GRID; }),
-            borderWidth: 1,
-            borderRadius: 2
-          }]
-        },
-        options: baseOpts
-      });
-    }
-
-    /* ── Vitals charts ── */
-    var vDays = ['Mar 1','Mar 2','Mar 3','Mar 4','Mar 5','Mar 6','Mar 7','Mar 8','Mar 9','Mar 10','Mar 11','Mar 12','Mar 13'];
-    var RED    = '#f87171';
-    var PURPLE = '#a78bfa';
-
-    var vHrvEl = document.getElementById('vitalsHrvChart');
-    if (vHrvEl && !Chart.getChart(vHrvEl)) {
-      var hrvData = [95, 102, 108, 118, 112, 106, 94, 98, 104, 108, 110, 107, 113];
-      new Chart(vHrvEl, {
-        type: 'line',
-        data: {
-          labels: vDays,
-          datasets: [{
-            label: 'HRV (ms)',
-            data: hrvData,
-            borderColor: TEAL, backgroundColor: TEAL + '18',
-            borderWidth: 2, fill: true, tension: 0.35,
-            pointRadius: 3, pointBackgroundColor: TEAL
-          }]
-        },
-        options: Object.assign({}, baseOpts, {
-          scales: {
-            x: Object.assign({}, baseOpts.scales.x),
-            y: Object.assign({}, baseOpts.scales.y, {
-              min: 80, max: 130,
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v + ' ms'; } }
-            })
-          }
-        })
-      });
-    }
-
-    var vHrEl = document.getElementById('vitalsHrChart');
-    if (vHrEl && !Chart.getChart(vHrEl)) {
-      var hrData = [54, 52, 51, 49, 50, 53, 54, 52, 51, 51, 50, 49, 48];
-      new Chart(vHrEl, {
-        type: 'line',
-        data: {
-          labels: vDays,
-          datasets: [
-            {
-              label: 'Resting HR (bpm)',
-              data: hrData,
-              borderColor: RED, backgroundColor: 'transparent',
-              borderWidth: 2, tension: 0.35,
-              pointRadius: 3, pointBackgroundColor: RED
-            },
-            {
-              label: 'Threshold',
-              data: vDays.map(function(){ return 60; }),
-              borderColor: '#64748b', backgroundColor: 'transparent',
-              borderWidth: 1, borderDash: [5, 4], pointRadius: 0, tension: 0
-            }
-          ]
-        },
-        options: Object.assign({}, baseOpts, {
-          scales: {
-            x: Object.assign({}, baseOpts.scales.x),
-            y: Object.assign({}, baseOpts.scales.y, {
-              min: 40, max: 70,
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v + ' bpm'; } }
-            })
-          }
-        })
-      });
-    }
-
-    var vGlEl = document.getElementById('vitalsGlucoseChart');
-    if (vGlEl && !Chart.getChart(vGlEl)) {
-      var glData = [94, 90, 88, 90, 92, 96, 94, 91, 89, 88, 91, 93, 92];
-      new Chart(vGlEl, {
-        type: 'line',
-        data: {
-          labels: vDays,
-          datasets: [
-            {
-              label: 'Glucose (mg/dL)',
-              data: glData,
-              borderColor: PURPLE, backgroundColor: 'transparent',
-              borderWidth: 2, tension: 0.35,
-              pointRadius: 3, pointBackgroundColor: PURPLE
-            },
-            {
-              label: 'Ref',
-              data: vDays.map(function(){ return 100; }),
-              borderColor: '#64748b', backgroundColor: 'transparent',
-              borderWidth: 1, borderDash: [5, 4], pointRadius: 0, tension: 0
-            }
-          ]
-        },
-        options: Object.assign({}, baseOpts, {
-          scales: {
-            x: Object.assign({}, baseOpts.scales.x),
-            y: Object.assign({}, baseOpts.scales.y, {
-              min: 75, max: 115,
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v + ''; } }
-            })
-          }
-        })
-      });
-    }
-
-    /* ── Weight vs Calories dual-axis chart ── */
-    var wEl = document.getElementById('weightTrendChart');
-    if (wEl && !Chart.getChart(wEl)) {
-      var BLUE   = '#60a5fa';
-      var wDays  = ['Feb 13','Feb 15','Feb 17','Feb 18','Feb 20','Feb 22','Feb 23','Feb 25','Feb 27','Feb 28','Mar 2','Mar 4','Mar 5','Mar 7'];
-      var wKg    = [76.4, 76.2, 75.9, 76.1, 75.8, 75.6, 75.7, 75.3, 75.1, 75.0, 74.8, 74.6, 74.7, 74.5];
-      var wCals  = [2210, 2050, 1980, 2140, 2100, 1920, 2080, 2030, 1960, 2150, 2010, 1880, 2200, 1950];
-      new Chart(wEl, {
-        data: {
-          labels: wDays,
-          datasets: [
-            {
-              type: 'bar',
-              label: 'Calories',
-              data: wCals,
-              backgroundColor: AMBER + '38',
-              borderColor: AMBER,
-              borderWidth: 1,
-              borderRadius: 2,
-              yAxisID: 'yCal',
-              order: 2
-            },
-            {
-              type: 'line',
-              label: 'Weight (kg)',
-              data: wKg,
-              borderColor: BLUE,
-              backgroundColor: 'transparent',
-              borderWidth: 2, tension: 0.35,
-              pointRadius: 3, pointBackgroundColor: BLUE,
-              yAxisID: 'yWt',
-              order: 1
-            },
-            {
-              type: 'line',
-              label: 'Target',
-              data: wDays.map(function(){ return 74.0; }),
-              borderColor: '#64748b',
-              backgroundColor: 'transparent',
-              borderWidth: 1, borderDash: [5, 4],
-              pointRadius: 0, tension: 0,
-              yAxisID: 'yWt',
-              order: 0
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: 'index', intersect: false },
-          plugins: {
-            legend: { display: false },
-            tooltip: { bodyFont: { family: FONT }, titleFont: { family: FONT } }
-          },
-          scales: {
-            x: { grid: { color: GRID }, ticks: { color: TICK, font: { family: FONT, size: 11 } } },
-            yWt: {
-              type: 'linear', position: 'left',
-              min: 72, max: 78,
-              grid: { color: GRID },
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v + ' kg'; } }
-            },
-            yCal: {
-              type: 'linear', position: 'right',
-              min: 1500, max: 2600,
-              grid: { drawOnChartArea: false },
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v + ' kcal'; } }
-            }
-          }
-        }
-      });
-    }
-
-    /* ── Sleep Duration trend line ── */
-    var sleepEl = document.getElementById('sleepTrendChart');
-    if (sleepEl && !Chart.getChart(sleepEl)) {
-      var sleepDays   = ['Dec 10','Dec 11','Dec 12','Dec 13','Dec 14','Dec 15','Dec 16'];
-      var sleepHours  = [7.20, 6.80, 7.58, 7.13, 7.37, 7.30, 6.92];
-      var pointColors = sleepHours.map(function(v, i) { return i === sleepHours.length - 1 ? AMBER : TEAL; });
-      var pointRadii  = sleepHours.map(function(v, i) { return i === sleepHours.length - 1 ? 6 : 4; });
-      new Chart(sleepEl, {
-        type: 'line',
-        data: {
-          labels: sleepDays,
-          datasets: [
-            {
-              label: 'Sleep (hrs)',
-              data: sleepHours,
-              borderColor: TEAL,
-              backgroundColor: 'transparent',
-              borderWidth: 2,
-              pointBackgroundColor: pointColors,
-              pointRadius: pointRadii,
-              pointHoverRadius: 7,
-              tension: 0.35
-            },
-            {
-              label: 'Goal',
-              data: sleepDays.map(function(){ return 7.2; }),
-              borderColor: '#64748b',
-              backgroundColor: 'transparent',
-              borderWidth: 1,
-              borderDash: [5, 4],
-              pointRadius: 0,
-              tension: 0
-            }
-          ]
-        },
-        options: Object.assign({}, baseOpts, {
-          scales: {
-            x: Object.assign({}, baseOpts.scales.x),
-            y: Object.assign({}, baseOpts.scales.y, {
-              min: 5.5, max: 9,
-              ticks: { color: TICK, font: { family: FONT, size: 11 }, callback: function(v){ return v.toFixed(1) + 'h'; } }
-            })
-          }
-        })
-      });
-    }
-  });
-  </script>
+  <script src="/app.js?v=11" type="module"></script>
 </body>
 </html>
