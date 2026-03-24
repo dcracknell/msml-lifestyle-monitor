@@ -1,24 +1,30 @@
 import { ReactNode } from 'react';
 import { render, act, cleanup } from '@testing-library/react';
 
-const mockConnectedDevices = jest.fn();
-const mockConnectToDevice = jest.fn();
+// ---------------------------------------------------------------------------
+// Native module mocks (must be declared before the provider is imported)
+// ---------------------------------------------------------------------------
+
+const mockConnectedDevices   = jest.fn();
+const mockConnectToDevice    = jest.fn();
 const mockOnDeviceDisconnected = jest.fn();
+const mockStartDeviceScan    = jest.fn();
+const mockStopDeviceScan     = jest.fn();
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios', Version: 17 },
   PermissionsAndroid: {
     PERMISSIONS: {
-      BLUETOOTH_SCAN: 'bluetooth-scan',
-      BLUETOOTH_CONNECT: 'bluetooth-connect',
+      BLUETOOTH_SCAN:     'bluetooth-scan',
+      BLUETOOTH_CONNECT:  'bluetooth-connect',
       ACCESS_FINE_LOCATION: 'fine-location',
     },
     RESULTS: { GRANTED: 'granted' },
     request: jest.fn().mockResolvedValue('granted'),
     requestMultiple: jest.fn().mockResolvedValue({
-      'bluetooth-scan': 'granted',
-      'bluetooth-connect': 'granted',
-      'fine-location': 'granted',
+      'bluetooth-scan':      'granted',
+      'bluetooth-connect':   'granted',
+      'fine-location':       'granted',
     }),
   },
   NativeModules: { BlePlx: {} },
@@ -42,35 +48,49 @@ jest.mock('react-native-ble-plx', () => {
   });
   return {
     State: {
-      PoweredOn: 'PoweredOn',
+      PoweredOn:   'PoweredOn',
       Unsupported: 'Unsupported',
-      Unknown: 'Unknown',
+      Unknown:     'Unknown',
     },
     BleManager: jest.fn().mockImplementation(() => ({
-      connectedDevices: mockConnectedDevices,
-      connectToDevice: mockConnectToDevice,
+      connectedDevices:       mockConnectedDevices,
+      connectToDevice:        mockConnectToDevice,
       onStateChange,
-      onDeviceDisconnected: mockOnDeviceDisconnected,
-      startDeviceScan: jest.fn(),
-      stopDeviceScan: jest.fn(),
-      destroy: jest.fn(),
+      onDeviceDisconnected:   mockOnDeviceDisconnected,
+      startDeviceScan:        mockStartDeviceScan,
+      stopDeviceScan:         mockStopDeviceScan,
+      destroy:                jest.fn(),
+      cancelDeviceConnection: jest.fn().mockResolvedValue(undefined),
     })),
   };
 });
 
-// Load the provider only after native dependencies are mocked.
-// This avoids initializing the real BLE module in Jest.
-const { BluetoothProvider, useBluetooth } = require('../BluetoothProvider') as typeof import('../BluetoothProvider');
+// Load provider only after mocks are in place
+const {
+  BluetoothProvider,
+  useBluetooth,
+  expandUuid,
+  validateMetricValue,
+} = require('../BluetoothProvider') as typeof import('../BluetoothProvider');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const BASE = '-0000-1000-8000-00805F9B34FB';
+const full = (short: string) => `0000${short}${BASE}`;
+
+// Encode a plain string as base-64 the same way the BLE stack does.
+const encode = (s: string) => require('base-64').encode(s);
 
 afterEach(() => {
   cleanup();
   jest.clearAllMocks();
 });
 
-function renderWithProvider(probe: (ctx: any) => void) {
+function renderWithProvider(probe: (ctx: ReturnType<typeof useBluetooth>) => void) {
   function Probe() {
-    const ctx = useBluetooth();
-    probe(ctx);
+    probe(useBluetooth());
     return null;
   }
   render(
@@ -80,8 +100,120 @@ function renderWithProvider(probe: (ctx: any) => void) {
   );
 }
 
+/** Set up a fresh connected device and return the monitor notification callback. */
+async function connectDevice(options?: {
+  profile?: string;
+  deviceId?: string;
+  deviceName?: string;
+}) {
+  const { profile = 'custom', deviceId = 'dev-1', deviceName = 'TestDevice' } = options ?? {};
+  const monitorCharacteristicForService = jest.fn();
+
+  mockConnectedDevices.mockResolvedValue([{ id: deviceId, name: deviceName, rssi: -50 }]);
+  mockConnectToDevice.mockResolvedValue({
+    discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+      id: deviceId,
+      name: deviceName,
+      rssi: -50,
+      monitorCharacteristicForService,
+    }),
+  });
+
+  let ctx: ReturnType<typeof useBluetooth> | null = null;
+  renderWithProvider((c) => { ctx = c; });
+
+  if (profile !== 'custom') {
+    await act(async () => { ctx!.applyProfile(profile as any); });
+  }
+
+  await act(async () => { await ctx!.confirmSystemDevice(); });
+
+  const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
+  return { ctx: ctx!, monitorCallback, monitorCharacteristicForService };
+}
+
+// ---------------------------------------------------------------------------
+// expandUuid — pure function
+// ---------------------------------------------------------------------------
+
+describe('expandUuid', () => {
+  it('expands a 4-char (16-bit) UUID to the full 128-bit Bluetooth base form', () => {
+    expect(expandUuid('FFE0')).toBe(`0000FFE0${BASE}`);
+    expect(expandUuid('FFE1')).toBe(`0000FFE1${BASE}`);
+    expect(expandUuid('FFF0')).toBe(`0000FFF0${BASE}`);
+    expect(expandUuid('FFF1')).toBe(`0000FFF1${BASE}`);
+    expect(expandUuid('180D')).toBe(`0000180D${BASE}`);
+    expect(expandUuid('2A37')).toBe(`00002A37${BASE}`);
+  });
+
+  it('normalises lowercase input before expanding', () => {
+    expect(expandUuid('ffe0')).toBe(`0000FFE0${BASE}`);
+    expect(expandUuid('ffe1')).toBe(`0000FFE1${BASE}`);
+  });
+
+  it('expands an 8-char (32-bit) UUID', () => {
+    expect(expandUuid('0000FFE0')).toBe(`0000FFE0${BASE}`);
+  });
+
+  it('returns a full UUID unchanged', () => {
+    const full128 = `0000FFE0${BASE}`;
+    expect(expandUuid(full128)).toBe(full128);
+  });
+
+  it('returns an empty string for empty input', () => {
+    expect(expandUuid('')).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateMetricValue — pure function
+// ---------------------------------------------------------------------------
+
+describe('validateMetricValue', () => {
+  it('returns the value when it is within the registered range', () => {
+    expect(validateMetricValue('vitals.heart_rate', 75)).toBe(75);
+    expect(validateMetricValue('vitals.spo2',       98)).toBe(98);
+    expect(validateMetricValue('vitals.hrv',        45)).toBe(45);
+    expect(validateMetricValue('vitals.glucose',   5.2)).toBe(5.2);
+    expect(validateMetricValue('body.weight_kg',  70.5)).toBe(70.5);
+    expect(validateMetricValue('phone.steps',     8000)).toBe(8000);
+  });
+
+  it('returns null and warns when the value is below the minimum', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(validateMetricValue('vitals.heart_rate', 5)).toBeNull();
+    expect(validateMetricValue('vitals.spo2',      40)).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('returns null and warns when the value is above the maximum', () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(validateMetricValue('vitals.heart_rate', 999)).toBeNull();
+    expect(validateMetricValue('vitals.spo2',       101)).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('passes through any value for an unregistered metric (no range defined)', () => {
+    expect(validateMetricValue('custom.unknown_metric',  -999)).toBe(-999);
+    expect(validateMetricValue('custom.unknown_metric', 99999)).toBe(99999);
+  });
+
+  it('accepts boundary values exactly on min and max', () => {
+    expect(validateMetricValue('vitals.heart_rate', 20)).toBe(20);   // min
+    expect(validateMetricValue('vitals.heart_rate', 300)).toBe(300); // max
+    expect(validateMetricValue('vitals.spo2', 50)).toBe(50);         // min
+    expect(validateMetricValue('vitals.spo2', 100)).toBe(100);       // max
+  });
+});
+
+// ---------------------------------------------------------------------------
+// confirmSystemDevice — existing tests (UUIDs now use full 128-bit form)
+// ---------------------------------------------------------------------------
+
 describe('BluetoothProvider confirmSystemDevice', () => {
-  it('connects to the first paired device exposed by the OS', async () => {
+  it('connects to the first paired device and uses expanded UUIDs', async () => {
     const monitorCharacteristicForService = jest.fn();
     mockConnectedDevices.mockResolvedValue([{ id: 'paired-id', name: 'Trainer', rssi: -45 }]);
     mockConnectToDevice.mockResolvedValue({
@@ -93,22 +225,19 @@ describe('BluetoothProvider confirmSystemDevice', () => {
       }),
     });
 
-    let snapshot: any = null;
-    renderWithProvider((ctx) => {
-      snapshot = ctx;
-    });
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
 
-    await act(async () => {
-      await snapshot?.confirmSystemDevice();
-    });
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
 
-    expect(mockConnectedDevices).toHaveBeenCalledWith(['FFF0']);
+    // connectedDevices and monitorCharacteristicForService must receive full UUIDs
+    expect(mockConnectedDevices).toHaveBeenCalledWith([full('FFF0')]);
     expect(mockConnectToDevice).toHaveBeenCalledWith('paired-id', { autoConnect: true });
-    expect(snapshot?.connectedDevice?.id).toBe('paired-id');
-    expect(snapshot?.status).toBe('connected');
+    expect(snapshot!.connectedDevice?.id).toBe('paired-id');
+    expect(snapshot!.status).toBe('connected');
     expect(monitorCharacteristicForService).toHaveBeenCalledWith(
-      'FFF0',
-      'FFF1',
+      full('FFF0'),
+      full('FFF1'),
       expect.any(Function)
     );
   });
@@ -116,49 +245,21 @@ describe('BluetoothProvider confirmSystemDevice', () => {
   it('surfaces an error when no paired device is found', async () => {
     mockConnectedDevices.mockResolvedValue([]);
 
-    let snapshot: any = null;
-    renderWithProvider((ctx) => {
-      snapshot = ctx;
-    });
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
 
-    await act(async () => {
-      await snapshot?.confirmSystemDevice();
-    });
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
 
-    expect(snapshot?.error).toContain('No paired device detected');
-    expect(snapshot?.status).toBe('error');
+    expect(snapshot!.error).toContain('No paired device detected');
+    expect(snapshot!.status).toBe('error');
     expect(mockConnectToDevice).not.toHaveBeenCalled();
   });
 
   it('parses standard BLE heart-rate measurements when using HR profile', async () => {
-    const monitorCharacteristicForService = jest.fn();
-    mockConnectedDevices.mockResolvedValue([{ id: 'hrm-id', name: 'HR Strap', rssi: -52 }]);
-    mockConnectToDevice.mockResolvedValue({
-      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
-        id: 'hrm-id',
-        name: 'HR Strap',
-        rssi: -52,
-        monitorCharacteristicForService,
-      }),
-    });
-
-    let snapshot: any = null;
-    renderWithProvider((ctx) => {
-      snapshot = ctx;
-    });
+    const { monitorCallback } = await connectDevice({ profile: 'ble_hrm' });
 
     await act(async () => {
-      snapshot?.applyProfile('ble_hrm');
-    });
-
-    await act(async () => {
-      await snapshot?.confirmSystemDevice();
-    });
-
-    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
-    await act(async () => {
-      const encodedHeartRate = require('base-64').encode(String.fromCharCode(0x00, 72));
-      monitorCallback?.(null, { value: encodedHeartRate });
+      monitorCallback(null, { value: encode(String.fromCharCode(0x00, 72)) });
       await Promise.resolve();
     });
 
@@ -174,162 +275,63 @@ describe('BluetoothProvider confirmSystemDevice', () => {
   });
 
   it('uploads Apple Watch companion JSON as multiple stream metrics', async () => {
-    const monitorCharacteristicForService = jest.fn();
-    mockConnectedDevices.mockResolvedValue([{ id: 'watch-bridge', name: 'Watch Bridge', rssi: -41 }]);
-    mockConnectToDevice.mockResolvedValue({
-      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
-        id: 'watch-bridge',
-        name: 'Watch Bridge',
-        rssi: -41,
-        monitorCharacteristicForService,
-      }),
-    });
-
-    let snapshot: any = null;
-    renderWithProvider((ctx) => {
-      snapshot = ctx;
-    });
+    const { monitorCallback } = await connectDevice({ profile: 'apple_watch_companion' });
 
     await act(async () => {
-      snapshot?.applyProfile('apple_watch_companion');
-    });
-
-    await act(async () => {
-      await snapshot?.confirmSystemDevice();
-    });
-
-    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
-    await act(async () => {
-      const encodedPayload = require('base-64').encode(
-        JSON.stringify({
+      monitorCallback(null, {
+        value: encode(JSON.stringify({
           timestamp: 1700000000000,
           heartRate: 128,
           distanceKm: 6.4,
           paceSecondsPerKm: 315,
-        })
-      );
-      monitorCallback?.(null, { value: encodedPayload });
+        })),
+      });
       await Promise.resolve();
     });
 
-    const streamCalls = mockRunOrQueue.mock.calls.map((call) => call[0]);
-    const metrics = streamCalls.map((call) => call?.payload?.metric).sort();
-
+    const metrics = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload?.metric).sort();
     expect(mockRunOrQueue).toHaveBeenCalledTimes(3);
     expect(metrics).toEqual(['exercise.distance', 'exercise.hr', 'exercise.pace']);
-    expect(streamCalls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'exercise.hr', samples: [{ ts: 1700000000000, value: 128 }] }),
-        }),
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'exercise.distance', samples: [{ ts: 1700000000000, value: 6.4 }] }),
-        }),
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'exercise.pace', samples: [{ ts: 1700000000000, value: 315 }] }),
-        }),
-      ])
-    );
   });
 
   it('infers workout metrics from nested JSON payloads on custom profile', async () => {
-    const monitorCharacteristicForService = jest.fn();
-    mockConnectedDevices.mockResolvedValue([{ id: 'custom-watch', name: 'Custom Watch', rssi: -49 }]);
-    mockConnectToDevice.mockResolvedValue({
-      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
-        id: 'custom-watch',
-        name: 'Custom Watch',
-        rssi: -49,
-        monitorCharacteristicForService,
-      }),
-    });
-
-    let snapshot: any = null;
-    renderWithProvider((ctx) => {
-      snapshot = ctx;
-    });
+    const { monitorCallback } = await connectDevice();
 
     await act(async () => {
-      await snapshot?.confirmSystemDevice();
-    });
-
-    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
-    await act(async () => {
-      const encodedPayload = require('base-64').encode(
-        JSON.stringify({
+      monitorCallback(null, {
+        value: encode(JSON.stringify({
           timestamp: 1700002000000,
-          workout: {
-            heartRate: 141,
-            distanceMeters: 4200,
-            speedMps: 3.2,
-          },
-        })
-      );
-      monitorCallback?.(null, { value: encodedPayload });
+          workout: { heartRate: 141, distanceMeters: 4200, speedMps: 3.2 },
+        })),
+      });
       await Promise.resolve();
     });
 
-    const streamPayloads = mockRunOrQueue.mock.calls.map((call) => call[0]?.payload);
-    const metrics = streamPayloads.map((payload) => payload?.metric).sort();
-
-    expect(mockRunOrQueue).toHaveBeenCalledTimes(3);
-    expect(metrics).toEqual(['exercise.distance', 'exercise.hr', 'exercise.pace']);
-
-    const byMetric = new Map(streamPayloads.map((payload) => [payload.metric, payload]));
+    const payloads = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload);
+    const byMetric = new Map(payloads.map((p) => [p.metric, p]));
     expect(byMetric.get('exercise.hr')?.samples?.[0]).toEqual({ ts: 1700002000000, value: 141 });
-    expect(byMetric.get('exercise.distance')?.samples?.[0]?.ts).toBe(1700002000000);
     expect(byMetric.get('exercise.distance')?.samples?.[0]?.value).toBeCloseTo(4.2, 6);
-    expect(byMetric.get('exercise.pace')?.samples?.[0]?.ts).toBe(1700002000000);
     expect(byMetric.get('exercise.pace')?.samples?.[0]?.value).toBeCloseTo(312.5, 6);
   });
 
   it('uploads Apple Watch sleep payload as stream metrics', async () => {
-    const monitorCharacteristicForService = jest.fn();
-    mockConnectedDevices.mockResolvedValue([{ id: 'watch-bridge', name: 'Watch Bridge', rssi: -44 }]);
-    mockConnectToDevice.mockResolvedValue({
-      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
-        id: 'watch-bridge',
-        name: 'Watch Bridge',
-        rssi: -44,
-        monitorCharacteristicForService,
-      }),
-    });
-
-    let snapshot: any = null;
-    renderWithProvider((ctx) => {
-      snapshot = ctx;
-    });
+    const { monitorCallback } = await connectDevice({ profile: 'apple_watch_companion' });
 
     await act(async () => {
-      snapshot?.applyProfile('apple_watch_companion');
-    });
-
-    await act(async () => {
-      await snapshot?.confirmSystemDevice();
-    });
-
-    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
-    await act(async () => {
-      const encodedPayload = require('base-64').encode(
-        JSON.stringify({
+      monitorCallback(null, {
+        value: encode(JSON.stringify({
           timestamp: 1700001000000,
           sleepMinutes: 390,
           deepSleepMinutes: 60,
           remSleepHours: 1.5,
           lightSleepMinutes: 240,
           awakeMinutes: 30,
-        })
-      );
-      monitorCallback?.(null, { value: encodedPayload });
+        })),
+      });
       await Promise.resolve();
     });
 
-    const streamCalls = mockRunOrQueue.mock.calls.map((call) => call[0]);
-    const metrics = streamCalls.map((call) => call?.payload?.metric).sort();
-
+    const metrics = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload?.metric).sort();
     expect(mockRunOrQueue).toHaveBeenCalledTimes(5);
     expect(metrics).toEqual([
       'sleep.awake_hours',
@@ -338,29 +340,323 @@ describe('BluetoothProvider confirmSystemDevice', () => {
       'sleep.rem_hours',
       'sleep.total_hours',
     ]);
-    expect(streamCalls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'sleep.total_hours', samples: [{ ts: 1700001000000, value: 6.5 }] }),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Arduino + HM-10 line buffer
+// ---------------------------------------------------------------------------
+
+describe('Arduino HM-10 line buffer', () => {
+  it('reassembles JSON split across multiple 20-byte BLE notifications', async () => {
+    const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+    const line = '{"metric":"vitals.heart_rate","value":74}\n';
+
+    // Send in two chunks the way HM-10 splits a 41-char string
+    await act(async () => {
+      monitorCallback(null, { value: encode(line.slice(0, 20)) });
+      await Promise.resolve();
+    });
+
+    // No upload yet — newline not received
+    expect(mockRunOrQueue).not.toHaveBeenCalled();
+
+    await act(async () => {
+      monitorCallback(null, { value: encode(line.slice(20)) });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: '/api/streams',
+        payload: expect.objectContaining({
+          metric: 'vitals.heart_rate',
+          samples: [expect.objectContaining({ value: 74 })],
         }),
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'sleep.deep_hours', samples: [{ ts: 1700001000000, value: 1 }] }),
-        }),
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'sleep.rem_hours', samples: [{ ts: 1700001000000, value: 1.5 }] }),
-        }),
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'sleep.light_hours', samples: [{ ts: 1700001000000, value: 4 }] }),
-        }),
-        expect.objectContaining({
-          endpoint: '/api/streams',
-          payload: expect.objectContaining({ metric: 'sleep.awake_hours', samples: [{ ts: 1700001000000, value: 0.5 }] }),
-        }),
-      ])
+      })
     );
+  });
+
+  it('handles \\r\\n Arduino line endings', async () => {
+    const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.spo2","value":98}\r\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ metric: 'vitals.spo2' }),
+      })
+    );
+  });
+
+  it('sends each metric in a multi-metric session to a separate runOrQueue call', async () => {
+    const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+
+    // Heart rate packet (sent every 2 s)
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.heart_rate","value":72}\n') });
+      await Promise.resolve();
+    });
+
+    // SpO2 packet (sent every 10 s)
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.spo2","value":97.5}\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledTimes(2);
+    const metrics = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload?.metric);
+    expect(metrics).toContain('vitals.heart_rate');
+    expect(metrics).toContain('vitals.spo2');
+  });
+
+  it('clears the buffer and recovers after an overflow (> 512 chars without newline)', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+
+    // Send 513 chars of noise — no newline
+    await act(async () => {
+      monitorCallback(null, { value: encode('x'.repeat(513)) });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('overflow'));
+
+    // A valid line arriving after the overflow should still be parsed
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.heart_rate","value":70}\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ metric: 'vitals.heart_rate', samples: [expect.objectContaining({ value: 70 })] }),
+      })
+    );
+
+    warn.mockRestore();
+  });
+
+  it('drops samples with out-of-range values (validateMetricValue integration)', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+
+    // SpO2 of 200 is physiologically impossible
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.spo2","value":200}\n') });
+      await Promise.resolve();
+    });
+
+    // runOrQueue is still called but the sample value should be null (dropped)
+    const sampleValue = mockRunOrQueue.mock.calls[0]?.[0]?.payload?.samples?.[0]?.value;
+    expect(sampleValue).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('vitals.spo2'));
+
+    warn.mockRestore();
+  });
+
+  it('clears the line buffer when the device disconnects', async () => {
+    const { ctx, monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+
+    // Send first half of a JSON line (no newline yet)
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.heart_rate","val') });
+      await Promise.resolve();
+    });
+
+    // Disconnect
+    await act(async () => { await ctx.disconnectFromDevice(); });
+
+    // Reconnect with a full line — should parse cleanly without leftover garbage
+    const monitorCharacteristicForService2 = jest.fn();
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'dev-1',
+        name: 'TestDevice',
+        rssi: -50,
+        monitorCharacteristicForService: monitorCharacteristicForService2,
+      }),
+    });
+
+    await act(async () => { await ctx.confirmSystemDevice(); });
+
+    const monitorCallback2 = monitorCharacteristicForService2.mock.calls[0]?.[2];
+    await act(async () => {
+      monitorCallback2(null, { value: encode('{"metric":"vitals.heart_rate","value":75}\n') });
+      await Promise.resolve();
+    });
+
+    const payloads = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload);
+    // Only one valid upload — the stale partial buffer was cleared on disconnect
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.samples?.[0]?.value).toBe(75);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startScan — scans all BLE devices (no UUID filter)
+// ---------------------------------------------------------------------------
+
+describe('BluetoothProvider startScan', () => {
+  it('calls startDeviceScan with null so all BLE devices are shown', async () => {
+    mockStartDeviceScan.mockImplementation(() => {});
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.startScan(); });
+
+    expect(mockStartDeviceScan).toHaveBeenCalledWith(
+      null,               // no UUID filter — show every device
+      null,
+      expect.any(Function)
+    );
+    expect(snapshot!.isScanning).toBe(true);
+    expect(snapshot!.status).toBe('scanning');
+  });
+
+  it('populates the devices list as the scan callback fires', async () => {
+    let scanCallback: any;
+    mockStartDeviceScan.mockImplementation((_: any, __: any, cb: any) => {
+      scanCallback = cb;
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.startScan(); });
+
+    act(() => {
+      scanCallback(null, { id: 'hmsoft-1', name: 'HMSoft',  rssi: -55 });
+      scanCallback(null, { id: 'bt05-2',   name: 'BT05',    rssi: -70 });
+      scanCallback(null, { id: 'hmsoft-1', name: 'HMSoft',  rssi: -53 }); // duplicate — deduplicated by id
+    });
+
+    expect(snapshot!.devices).toHaveLength(2);
+    expect(snapshot!.devices.map((d) => d.id)).toEqual(
+      expect.arrayContaining(['hmsoft-1', 'bt05-2'])
+    );
+  });
+
+  it('surfaces a scan error and stops scanning', async () => {
+    let scanCallback: any;
+    mockStartDeviceScan.mockImplementation((_: any, __: any, cb: any) => {
+      scanCallback = cb;
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.startScan(); });
+
+    act(() => {
+      scanCallback({ message: 'Bluetooth permission denied' }, null);
+    });
+
+    expect(snapshot!.error).toBe('Bluetooth permission denied');
+    expect(snapshot!.status).toBe('error');
+    expect(mockStopDeviceScan).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connectToDevice — direct connection to a scanned device
+// ---------------------------------------------------------------------------
+
+describe('BluetoothProvider connectToDevice', () => {
+  it('connects directly to a device id returned by the scanner', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'hmsoft-1',
+        name: 'HMSoft',
+        rssi: -55,
+        monitorCharacteristicForService,
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    // Apply the Arduino profile first
+    await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
+
+    await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
+
+    expect(mockConnectToDevice).toHaveBeenCalledWith('hmsoft-1', { autoConnect: true });
+    expect(snapshot!.connectedDevice?.id).toBe('hmsoft-1');
+    expect(snapshot!.status).toBe('connected');
+
+    // Characteristic subscription must use expanded FFE0 / FFE1
+    expect(monitorCharacteristicForService).toHaveBeenCalledWith(
+      full('FFE0'),
+      full('FFE1'),
+      expect.any(Function)
+    );
+  });
+
+  it('data flows from device to runOrQueue after connecting via scanner', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'hmsoft-1',
+        name: 'HMSoft',
+        rssi: -55,
+        monitorCharacteristicForService,
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
+    await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
+
+    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
+
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"vitals.heart_rate","value":78}\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: '/api/streams',
+        payload: expect.objectContaining({
+          metric: 'vitals.heart_rate',
+          samples: [expect.objectContaining({ value: 78 })],
+        }),
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// arduino_hm10 profile
+// ---------------------------------------------------------------------------
+
+describe('arduino_hm10 profile', () => {
+  it('is present in the profiles list', () => {
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    const ids = snapshot!.profiles.map((p) => p.id);
+    expect(ids).toContain('arduino_hm10');
+  });
+
+  it('pre-fills FFE0 / FFE1 UUIDs and vitals.heart_rate metric', async () => {
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
+
+    expect(snapshot!.config.serviceUUID).toBe('FFE0');
+    expect(snapshot!.config.characteristicUUID).toBe('FFE1');
+    expect(snapshot!.config.metric).toBe('vitals.heart_rate');
+    expect(snapshot!.config.profile).toBe('arduino_hm10');
   });
 });

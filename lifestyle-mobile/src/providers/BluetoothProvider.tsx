@@ -165,7 +165,7 @@ function normalizeUuid(value: string) {
 // Full UUIDs are returned unchanged.  Used only at BLE API call sites –
 // the stored config values stay in short form so the UI stays readable.
 const BLE_BASE_SUFFIX = '-0000-1000-8000-00805F9B34FB';
-function expandUuid(value: string): string {
+export function expandUuid(value: string): string {
   const n = normalizeUuid(value);
   if (!n) return n;
   if (/^[0-9A-F]{4}$/.test(n)) return `0000${n}${BLE_BASE_SUFFIX}`;
@@ -624,7 +624,7 @@ const METRIC_RANGES: Record<string, [number, number]> = {
   'vitals.diastolic_bp':[20,  200],
 };
 
-function validateMetricValue(metric: string, value: number): number | null {
+export function validateMetricValue(metric: string, value: number): number | null {
   const range = METRIC_RANGES[metric];
   if (!range) return value;
   const [min, max] = range;
@@ -939,17 +939,17 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     devicesRef.current.clear();
     setDevices([]);
     setIsScanning(true);
-    const targetService = normalizeUuid(config.serviceUUID);
-    managerRef.current.startDeviceScan(targetService ? [expandUuid(targetService)] : null, null, (scanError, device) => {
+    // Pass null to scan ALL nearby BLE devices so the user can pick by name
+    // (DSD Tech / nRF Connect style). The service UUID is only needed when
+    // subscribing to the characteristic after the device is chosen.
+    managerRef.current.startDeviceScan(null, null, (scanError, device) => {
       if (scanError) {
         setError(scanError.message);
         stopScan();
         setStatus('error');
         return;
       }
-      if (!device) {
-        return;
-      }
+      if (!device) return;
       devicesRef.current.set(device.id, {
         id: device.id,
         name: device.name,
@@ -957,7 +957,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       });
       setDevices(Array.from(devicesRef.current.values()));
     });
-  }, [config.serviceUUID, isPoweredOn, isScanning, stopScan, unsupportedMessage]);
+  }, [isPoweredOn, isScanning, stopScan, unsupportedMessage]);
 
   const disconnectFromDevice = useCallback(async () => {
     monitorRef.current?.remove();

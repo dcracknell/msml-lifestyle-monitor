@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, View, Pressable } from 'react-native';
+import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Card, SectionHeader, AppText, AppButton, AppInput, TrendChart } from '../../components';
 import { colors, spacing } from '../../theme';
-import { useBluetooth } from '../../providers/BluetoothProvider';
+import { useBluetooth, BluetoothDeviceSummary } from '../../providers/BluetoothProvider';
 import { formatDate, formatNumber } from '../../utils/format';
 import { streamHistoryRequest } from '../../api/endpoints';
 import { useAuth } from '../../providers/AuthProvider';
@@ -71,6 +71,93 @@ function toMetricLabel(metric: string) {
 }
 
 // ---------------------------------------------------------------------------
+// DeviceRow – one row in the scan results list
+// ---------------------------------------------------------------------------
+
+function signalInfo(rssi: number | null | undefined): { label: string; bars: string; color: string } {
+  const r = rssi ?? -100;
+  if (r > -60) return { label: 'Strong',   bars: '████', color: colors.accent };
+  if (r > -75) return { label: 'Good',     bars: '███░', color: '#4ade80' };
+  if (r > -85) return { label: 'Weak',     bars: '██░░', color: colors.warning };
+  return         { label: 'Poor',      bars: '█░░░', color: colors.danger };
+}
+
+function DeviceRow({
+  device,
+  onConnect,
+  connecting,
+}: {
+  device: BluetoothDeviceSummary;
+  onConnect: () => void;
+  connecting: boolean;
+}) {
+  const sig = signalInfo(device.rssi);
+  return (
+    <View style={deviceRowStyles.row}>
+      <View style={deviceRowStyles.info}>
+        <AppText variant="body" style={deviceRowStyles.name}>
+          {device.name || 'Unknown device'}
+        </AppText>
+        <View style={deviceRowStyles.sigRow}>
+          <AppText style={[deviceRowStyles.bars, { color: sig.color }]}>{sig.bars}</AppText>
+          <AppText variant="muted" style={deviceRowStyles.sigLabel}>
+            {sig.label}  {device.rssi != null ? `${device.rssi} dBm` : ''}
+          </AppText>
+        </View>
+        <AppText variant="muted" style={deviceRowStyles.id} numberOfLines={1}>
+          {device.id}
+        </AppText>
+      </View>
+      <AppButton
+        title="Connect"
+        onPress={onConnect}
+        loading={connecting}
+        style={deviceRowStyles.connectBtn}
+      />
+    </View>
+  );
+}
+
+const deviceRowStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: spacing.sm,
+  },
+  info: {
+    flex: 1,
+    gap: 2,
+  },
+  name: {
+    fontWeight: '600',
+  },
+  sigRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  bars: {
+    fontSize: 11,
+    letterSpacing: 1,
+  },
+  sigLabel: {
+    fontSize: 12,
+  },
+  id: {
+    fontSize: 10,
+    opacity: 0.5,
+  },
+  connectBtn: {
+    flexShrink: 0,
+    minWidth: 88,
+  },
+});
+
+// ---------------------------------------------------------------------------
 // BluetoothDevicesSection
 // ---------------------------------------------------------------------------
 
@@ -87,12 +174,16 @@ export function BluetoothDevicesSection() {
     bluetoothState,
     status,
     isPoweredOn,
+    isScanning,
+    devices,
     connectedDevice,
     lastSample,
     recentSamples,
     lastUploadStatus,
     error,
-    confirmSystemDevice,
+    startScan,
+    stopScan,
+    connectToDevice,
     disconnectFromDevice,
   } = useBluetooth();
 
@@ -125,14 +216,12 @@ export function BluetoothDevicesSection() {
     [recentSamples]
   );
 
-  const appleWatchProfile = config.profile === 'apple_watch_companion';
-
   return (
     <>
-      {/* Bluetooth bridge card */}
+      {/* Device scanner card */}
       <Card>
         <SectionHeader
-          title="Bluetooth bridge"
+          title="Device scanner"
           subtitle={`Adapter: ${bluetoothState}`}
           action={
             <View style={styles.statusPills}>
@@ -146,61 +235,72 @@ export function BluetoothDevicesSection() {
         />
 
         {connectedDevice ? (
-          <View style={styles.deviceMeta}>
-            <AppText variant="body">
-              Connected to {connectedDevice.name || 'Unnamed peripheral'}
-            </AppText>
-            <AppText variant="muted">ID: {connectedDevice.id}</AppText>
-          </View>
+          /* ── Connected state ── */
+          <>
+            <View style={styles.deviceMeta}>
+              <AppText variant="body">
+                Connected to {connectedDevice.name || 'Unnamed device'}
+              </AppText>
+              <AppText variant="muted">{connectedDevice.id}</AppText>
+            </View>
+            <AppButton
+              title="Disconnect"
+              variant="ghost"
+              onPress={disconnectFromDevice}
+              style={styles.disconnectBtn}
+            />
+          </>
         ) : (
-          <AppText variant="muted">No device connected.</AppText>
+          /* ── Scan state ── */
+          <>
+            <View style={styles.scanRow}>
+              <AppButton
+                title={isScanning ? 'Stop scanning' : 'Scan for devices'}
+                onPress={isScanning ? stopScan : startScan}
+                loading={status === 'connecting'}
+                style={styles.scanBtn}
+              />
+              {isScanning ? (
+                <AppText variant="muted" style={styles.scanningLabel}>Scanning…</AppText>
+              ) : null}
+            </View>
+
+            {/* Device list */}
+            {devices.length > 0 ? (
+              <ScrollView style={styles.deviceList} scrollEnabled={false}>
+                {[...devices]
+                  .sort((a, b) => (b.rssi ?? -100) - (a.rssi ?? -100))
+                  .map((device) => (
+                    <DeviceRow
+                      key={device.id}
+                      device={device}
+                      onConnect={() => {
+                        stopScan();
+                        connectToDevice(device.id);
+                      }}
+                      connecting={status === 'connecting'}
+                    />
+                  ))}
+              </ScrollView>
+            ) : (
+              <AppText variant="muted" style={styles.helper}>
+                {isScanning
+                  ? 'Power on your HM-10 and wait — devices appear here as they are found.'
+                  : 'Tap "Scan for devices" to discover nearby BLE sensors.'}
+              </AppText>
+            )}
+          </>
         )}
 
-        <View style={styles.steps}>
-          <View style={styles.stepRow}>
-            <View style={styles.stepBadge}>
-              <AppText style={styles.stepBadgeText}>1</AppText>
-            </View>
-            <AppText variant="body" style={styles.stepText}>
-              {appleWatchProfile
-                ? 'Pair your watch companion peripheral in iOS Bluetooth settings.'
-                : "Open your phone's Bluetooth settings and pair your sensor as usual."}
-            </AppText>
-          </View>
-          <View style={styles.stepRow}>
-            <View style={styles.stepBadge}>
-              <AppText style={styles.stepBadgeText}>2</AppText>
-            </View>
-            <AppText variant="body" style={styles.stepText}>
-              {appleWatchProfile
-                ? 'Keep the companion app active and tap confirm to start streaming.'
-                : 'Keep the device awake, return here, and tap confirm to start streaming.'}
-            </AppText>
-          </View>
-          {appleWatchProfile ? (
-            <AppText variant="muted" style={styles.helper}>
-              Apple Watch is usually not directly discoverable as a BLE sensor by iPhone apps.
-            </AppText>
-          ) : null}
-        </View>
-
-        <View style={styles.actionsRow}>
-          <AppButton
-            title={connectedDevice ? 'Refresh connection' : 'Confirm connection'}
-            onPress={confirmSystemDevice}
-            loading={status === 'connecting'}
-          />
-          {connectedDevice ? (
-            <AppButton title="Disconnect" variant="ghost" onPress={disconnectFromDevice} />
-          ) : null}
-        </View>
         {error ? (
           <AppText variant="muted" style={styles.error}>
             {error}
           </AppText>
         ) : null}
         {lastUploadStatus ? (
-          <AppText variant="muted">Last upload: {lastUploadStatus.message}</AppText>
+          <AppText variant="muted" style={styles.helper}>
+            Last upload: {lastUploadStatus.message}
+          </AppText>
         ) : null}
       </Card>
 
@@ -731,43 +831,29 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     flexWrap: 'wrap',
   },
-  actionsRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    flexWrap: 'wrap',
-  },
   deviceMeta: {
     marginTop: spacing.xs,
     marginBottom: spacing.xs,
     gap: 4,
   },
-  steps: {
-    marginTop: spacing.md,
-    gap: spacing.sm,
+  disconnectBtn: {
+    marginTop: spacing.sm,
   },
-  stepRow: {
+  scanRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-  },
-  stepBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.accent,
-    justifyContent: 'center',
     alignItems: 'center',
-    flexShrink: 0,
-    marginTop: 1,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  stepBadgeText: {
-    color: colors.background,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  stepText: {
+  scanBtn: {
     flex: 1,
+  },
+  scanningLabel: {
+    fontSize: 13,
+  },
+  deviceList: {
+    marginTop: spacing.sm,
+    maxHeight: 340,
   },
   helper: {
     marginTop: spacing.xs,
