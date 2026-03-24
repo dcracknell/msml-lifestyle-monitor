@@ -160,6 +160,19 @@ function normalizeUuid(value: string) {
   return value.trim().replace(/^0x/i, '').toUpperCase();
 }
 
+// Expands a 4-char (16-bit) or 8-char (32-bit) short UUID to the full
+// 128-bit Bluetooth base UUID that the BLE platform APIs require.
+// Full UUIDs are returned unchanged.  Used only at BLE API call sites –
+// the stored config values stay in short form so the UI stays readable.
+const BLE_BASE_SUFFIX = '-0000-1000-8000-00805F9B34FB';
+function expandUuid(value: string): string {
+  const n = normalizeUuid(value);
+  if (!n) return n;
+  if (/^[0-9A-F]{4}$/.test(n)) return `0000${n}${BLE_BASE_SUFFIX}`;
+  if (/^[0-9A-F]{8}$/.test(n)) return `${n}${BLE_BASE_SUFFIX}`;
+  return n;
+}
+
 function normalizeMetricName(metric: unknown, fallback: string) {
   const value = String(metric ?? '').trim().toLowerCase();
   return value || fallback;
@@ -912,7 +925,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     setDevices([]);
     setIsScanning(true);
     const targetService = normalizeUuid(config.serviceUUID);
-    managerRef.current.startDeviceScan(targetService ? [targetService] : null, null, (scanError, device) => {
+    managerRef.current.startDeviceScan(targetService ? [expandUuid(targetService)] : null, null, (scanError, device) => {
       if (scanError) {
         setError(scanError.message);
         stopScan();
@@ -984,8 +997,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           setStatus('idle');
         });
         monitorRef.current = readyDevice.monitorCharacteristicForService(
-          normalizedService,
-          normalizedCharacteristic,
+          expandUuid(normalizedService),
+          expandUuid(normalizedCharacteristic),
           (monitorError, characteristic) => {
             if (monitorError) {
               setError(monitorError.message);
@@ -1036,7 +1049,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const paired = await manager.connectedDevices([normalizedService]);
+      // connectedDevices() requires the full 128-bit UUID on both iOS and Android.
+      const paired = await manager.connectedDevices([expandUuid(normalizedService)]);
       if (!paired.length) {
         if (config.profile === 'apple_watch_companion') {
           throw new Error(
