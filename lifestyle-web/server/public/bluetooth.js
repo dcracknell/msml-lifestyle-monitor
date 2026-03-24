@@ -170,6 +170,9 @@ let flushTimer = null;
 let currentMetric = '';
 let lastSyncTime = null;
 let isConnecting = false;
+// Line buffer for the jsontext parser – accumulates BLE notification bytes
+// until a complete newline-terminated JSON line is received.
+let lineBuffer = '';
 
 const parserMap = {
   uint8: (dataView) => dataView.getUint8(0),
@@ -270,6 +273,7 @@ function handleDisconnect() {
   characteristic?.removeEventListener('characteristicvaluechanged', handleNotification);
   characteristic = null;
   device = null;
+  lineBuffer = '';
 }
 
 async function disconnectDevice() {
@@ -309,7 +313,62 @@ function parseValue(dataView) {
   return null;
 }
 
+function handleJsonTextNotification(dataView) {
+  // Decode raw bytes as ASCII/UTF-8 text and accumulate in the line buffer.
+  if (!dataView || dataView.byteLength === 0) return;
+  let chunk = '';
+  for (let i = 0; i < dataView.byteLength; i++) {
+    chunk += String.fromCharCode(dataView.getUint8(i));
+  }
+  lineBuffer += chunk;
+
+  // Process every complete line (terminated by '\n').
+  const lines = lineBuffer.split('\n');
+  lineBuffer = lines.pop() || '';  // keep the trailing incomplete fragment
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r$/, '').trim();
+    if (!line) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;  // incomplete or malformed packet – discard
+    }
+    if (!parsed || typeof parsed !== 'object' || !('value' in parsed)) continue;
+
+    const val = Number(parsed.value);
+    if (!Number.isFinite(val)) continue;
+
+    const metricName =
+      typeof parsed.metric === 'string' && parsed.metric.trim()
+        ? parsed.metric.trim()
+        : (currentMetric || 'sensor.mock');
+
+    // Flush any buffered samples from the previous metric before switching.
+    if (metricName !== currentMetric && pendingSamples.length > 0) {
+      flushSamples(true);
+    }
+    currentMetric = metricName;
+    metricInput.value = metricName;
+
+    const rounded = Math.round(val * 100) / 100;
+    const timestamp = Date.now();
+    lastValue.dataset.currentValue = rounded;
+    appendLogEntry(`${metricName}: ${rounded}`, timestamp);
+    pendingSamples.push({ ts: timestamp, value: rounded });
+    updateStats();
+
+    // Each JSON line is one complete reading – upload immediately.
+    flushSamples(true);
+  }
+}
+
 function handleNotification(event) {
+  if (parserSelect.value === 'jsontext') {
+    handleJsonTextNotification(event.target.value);
+    return;
+  }
   const value = parseValue(event.target.value);
   if (value === null) {
     return;
