@@ -1,24 +1,27 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { activityRequest, exportSessionToStravaRequest } from '../../api/endpoints';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { activityRequest, exportSessionToStravaRequest, updateActivitySessionRequest } from '../../api/endpoints';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import {
   LoadingView,
   ErrorView,
   AppButton,
-  Card,
+  AppInput,
   AppText,
-  SectionHeader,
   RefreshableScrollView,
 } from '../../components';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDistance, formatMinutes, formatPace } from '../../utils/format';
 
+const SESSION_NAME_MAX_LENGTH = 96;
+const SESSION_NOTES_MAX_LENGTH = 500;
+
 export function SessionsScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
@@ -30,6 +33,37 @@ export function SessionsScreen() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editFeedback, setEditFeedback] = useState<string | null>(null);
+
+  const sessions = data?.sessions || [];
+  const activeSession = sessions.find((session) => session.id === selectedId) || sessions[0];
+  const splits = activeSession && data ? data.splits[activeSession.id] || [] : [];
+  const canEditSession = Boolean(
+    activeSession &&
+      !requestSubject &&
+      activeSession.userId === user?.id
+  );
+  const canExportToStrava = Boolean(
+    data?.strava?.canManage &&
+      data?.strava?.connected &&
+      activeSession &&
+      !activeSession.stravaActivityId
+  );
+  const hasEditChanges = Boolean(
+    activeSession &&
+      (editName.trim() !== (activeSession.name || '').trim() ||
+        normalizeNotesInput(editNotes) !== (activeSession.notes || null))
+  );
+
+  useEffect(() => {
+    setEditName(activeSession?.name || '');
+    setEditNotes(activeSession?.notes || '');
+    setEditFeedback(null);
+    setExportFeedback(null);
+  }, [activeSession?.id]);
 
   if (isLoading || !data) {
     return <LoadingView />;
@@ -38,16 +72,6 @@ export function SessionsScreen() {
   if (isError) {
     return <ErrorView message="Unable to load sessions" onRetry={refetch} />;
   }
-
-  const sessions = data.sessions || [];
-  const activeSession = sessions.find((session) => session.id === selectedId) || sessions[0];
-  const splits = activeSession ? data.splits[activeSession.id] || [] : [];
-  const canExportToStrava = Boolean(
-    data.strava?.canManage &&
-      data.strava?.connected &&
-      activeSession &&
-      !activeSession.stravaActivityId
-  );
 
   const handleExportToStrava = async () => {
     if (!activeSession) return;
@@ -62,6 +86,29 @@ export function SessionsScreen() {
       setExportFeedback(message);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleSaveSession = async () => {
+    if (!activeSession) return;
+    setEditFeedback(null);
+    setIsSavingEdit(true);
+    try {
+      const payload = await updateActivitySessionRequest(activeSession.id, {
+        name: editName,
+        notes: editNotes,
+      });
+      setEditName(payload.session?.name || '');
+      setEditNotes(payload.session?.notes || '');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['activity'] }),
+        queryClient.invalidateQueries({ queryKey: ['exercise'] }),
+      ]);
+      setEditFeedback(payload.message || 'Session updated.');
+    } catch (error) {
+      setEditFeedback(error instanceof Error ? error.message : 'Unable to update session.');
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -109,6 +156,12 @@ export function SessionsScreen() {
             <AppText style={styles.eyebrow}>{activeSession.sportType?.toUpperCase() ?? 'SESSION'} · {formatDate(activeSession.startTime, 'MMM D, HH:mm')}</AppText>
             <AppText style={styles.heroDistance}>{formatDistance(activeSession.distance || 0)}</AppText>
             <AppText style={styles.heroName}>{activeSession.name}</AppText>
+            {activeSession.notes ? (
+              <View style={styles.heroNotesBlock}>
+                <AppText style={styles.heroNotesLabel}>NOTES</AppText>
+                <AppText style={styles.heroNotesText}>{activeSession.notes}</AppText>
+              </View>
+            ) : null}
             {data.strava?.canManage && data.strava?.connected ? (
               <Pressable
                 style={[styles.stravaBtn, (!canExportToStrava || isExporting) && styles.stravaBtnDisabled]}
@@ -132,6 +185,36 @@ export function SessionsScreen() {
             <SessionMetric label="CADENCE" value={activeSession.averageCadence ? `${activeSession.averageCadence} spm` : '--'} />
             <SessionMetric label="ELEVATION" value={activeSession.elevationGain ? `${Math.round(activeSession.elevationGain)} m` : '--'} />
           </View>
+
+          {canEditSession ? (
+            <View style={styles.card}>
+              <AppText style={styles.eyebrow}>EDIT SESSION</AppText>
+              <AppText style={styles.cardTitle}>Name and notes</AppText>
+              <AppInput
+                label="Activity name"
+                value={editName}
+                onChangeText={(value) => setEditName(value.slice(0, SESSION_NAME_MAX_LENGTH))}
+                placeholder="Morning progression"
+                helperText="Clear the name to fall back to the original imported title."
+              />
+              <AppInput
+                label="Notes"
+                value={editNotes}
+                onChangeText={(value) => setEditNotes(value.slice(0, SESSION_NOTES_MAX_LENGTH))}
+                placeholder="Add context, cues, weather, or how the session felt."
+                helperText={`${editNotes.length}/${SESSION_NOTES_MAX_LENGTH}`}
+                multiline
+                textAlignVertical="top"
+                style={styles.notesInput}
+              />
+              <AppButton
+                title={isSavingEdit ? 'Saving…' : 'Save changes'}
+                onPress={handleSaveSession}
+                disabled={isSavingEdit || !hasEditChanges}
+              />
+              {editFeedback ? <AppText style={styles.mutedText}>{editFeedback}</AppText> : null}
+            </View>
+          ) : null}
 
           {/* Splits */}
           <View style={styles.card}>
@@ -262,6 +345,25 @@ const styles = StyleSheet.create({
     color: colors.muted,
     marginBottom: 4,
   },
+  heroNotesBlock: {
+    marginTop: 4,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 4,
+  },
+  heroNotesLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  heroNotesText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.text,
+  },
   stravaBtn: {
     alignSelf: 'flex-start',
     backgroundColor: `${colors.accent}18`,
@@ -324,6 +426,10 @@ const styles = StyleSheet.create({
     color: colors.text,
     letterSpacing: -0.3,
   },
+  notesInput: {
+    minHeight: 112,
+    paddingTop: 14,
+  },
   // Splits
   splitRow: {
     flexDirection: 'row',
@@ -363,3 +469,8 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
+
+function normalizeNotesInput(value: string) {
+  const trimmed = String(value || '').replace(/\r\n/g, '\n').trim();
+  return trimmed || null;
+}

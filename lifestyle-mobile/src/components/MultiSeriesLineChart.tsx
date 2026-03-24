@@ -1,7 +1,8 @@
 import { View, StyleSheet, useWindowDimensions } from 'react-native';
-import { VictoryAxis, VictoryChart, VictoryLine, VictoryScatter, VictoryTheme } from 'victory-native';
+import { VictoryAxis, VictoryChart, VictoryLabel, VictoryLine, VictoryScatter, VictoryTheme } from 'victory-native';
 import { AppText } from './AppText';
 import { colors, spacing } from '../theme';
+import { buildSmartXTickValues, getXAxisAngle } from './chartUtils';
 
 export interface LineSeriesPoint {
   label: string;
@@ -35,6 +36,19 @@ export function MultiSeriesLineChart({ series, height = 220, yLabel, tickEvery }
       y: point.value,
     })),
   }));
+  const labelSource = normalizedSeries.reduce<string[]>(
+    (selected, serie) => (serie.data.length > selected.length ? serie.data.map((point) => String(point.x)) : selected),
+    []
+  );
+  const tickSource = tickEvery
+    ? labelSource.filter(
+        (_, index) => index === 0 || index === labelSource.length - 1 || index % tickEvery === 0
+      )
+    : labelSource;
+  const innerChartWidth = chartWidth - 84;
+  const xTickValues = buildSmartXTickValues(tickSource, innerChartWidth, 10);
+  const xAxisAngle = getXAxisAngle(xTickValues, innerChartWidth, 10);
+  const chartPadding = { top: 24, bottom: Math.max(40, xAxisAngle ? 54 : 40), left: 52, right: 32 };
   if (!activeSeries.length) {
     return (
       <View style={styles.empty}>
@@ -47,20 +61,25 @@ export function MultiSeriesLineChart({ series, height = 220, yLabel, tickEvery }
     <VictoryChart
       height={height}
       width={chartWidth}
-      padding={{ top: 24, bottom: 40, left: 52, right: 32 }}
+      padding={chartPadding}
       theme={VictoryTheme.material}
     >
       <VictoryAxis
+        tickValues={xTickValues}
+        tickLabelComponent={(
+          <VictoryLabel
+            angle={xAxisAngle}
+            textAnchor={xAxisAngle ? 'end' : 'middle'}
+            verticalAnchor={xAxisAngle ? 'middle' : 'end'}
+            dx={xAxisAngle ? -6 : 0}
+            dy={xAxisAngle ? 4 : 0}
+          />
+        )}
         style={{
           axis: { stroke: 'transparent' },
-          tickLabels: { fill: colors.muted, fontSize: 10, angle: -30 },
+          tickLabels: { fill: colors.muted, fontSize: 10 },
           grid: { stroke: 'transparent' },
         }}
-        tickFormat={
-          tickEvery
-            ? (tick: string, index: number) => (index % tickEvery === 0 ? tick : '')
-            : undefined
-        }
       />
       <VictoryAxis
         dependentAxis

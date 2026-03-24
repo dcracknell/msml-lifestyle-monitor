@@ -85,6 +85,7 @@ export interface ActivitySession {
   sourceId: string | null;
   userId: number;
   name: string;
+  notes: string | null;
   sportType: string;
   startTime: string;
   distance: number | null;
@@ -160,6 +161,11 @@ export interface ActivityResponse {
   bestEfforts: ActivityEffort[];
   summary: ActivitySummary | null;
   strava: StravaStatus;
+}
+
+export interface ActivitySessionUpdateResponse {
+  message: string;
+  session: Pick<ActivitySession, 'id' | 'source' | 'sourceId' | 'userId' | 'name' | 'notes'>;
 }
 
 export interface StravaConnectResponse {

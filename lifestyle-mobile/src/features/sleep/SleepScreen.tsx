@@ -71,9 +71,9 @@ export function SleepScreen() {
       .slice(-14)
       .map((entry) => ({
         label: formatDate(entry.date, 'MMM D'),
-        value: entry.sleepHours ?? 0,
+        value: entry.sleepHours,
       }))
-      .filter((entry) => Number.isFinite(entry.value));
+      .filter(hasFiniteTrendValue);
   }, [data?.timeline, sleepStreamData?.points]);
 
   if (isLoading || !data) {
@@ -378,6 +378,12 @@ function computeGoalStreak(
     }
   }
   return streak;
+}
+
+function hasFiniteTrendValue<T extends { value: number | null | undefined }>(
+  entry: T
+): entry is T & { value: number } {
+  return Number.isFinite(entry.value);
 }
 
 function buildDailyTrendFromStream(

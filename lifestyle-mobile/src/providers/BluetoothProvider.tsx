@@ -886,6 +886,21 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         if (!trimmedLine) continue;
         await processBatches(trimmedLine, '');
       }
+
+      // Apple Watch companion payloads (and other JSON sources) may arrive as
+      // a complete JSON object without a trailing '\n'. If the buffered remainder
+      // looks like a complete JSON object, process it immediately rather than
+      // waiting for a newline that will never come.
+      const remainder = lineBufferRef.current.trim();
+      if (remainder.startsWith('{') && remainder.endsWith('}')) {
+        try {
+          JSON.parse(remainder);
+          lineBufferRef.current = '';
+          await processBatches(remainder, '');
+        } catch {
+          // Incomplete JSON fragment – keep buffered until more data arrives.
+        }
+      }
     },
     [
       config.metric,

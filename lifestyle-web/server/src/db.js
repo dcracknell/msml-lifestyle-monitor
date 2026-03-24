@@ -512,6 +512,8 @@ function ensureActivityTables() {
       source TEXT NOT NULL DEFAULT 'manual',
       source_id TEXT,
       name TEXT NOT NULL,
+      custom_name TEXT,
+      notes TEXT,
       sport_type TEXT NOT NULL DEFAULT 'Run',
       start_time TEXT NOT NULL,
       distance_m REAL,
@@ -558,6 +560,21 @@ function ensureActivityTables() {
 }
 
 ensureActivityTables();
+
+function ensureActivitySessionMetadataColumns() {
+  const columns = db.prepare("PRAGMA table_info(activity_sessions)").all();
+  const hasCustomName = columns.some((column) => column.name === 'custom_name');
+  const hasNotes = columns.some((column) => column.name === 'notes');
+
+  if (!hasCustomName) {
+    db.prepare('ALTER TABLE activity_sessions ADD COLUMN custom_name TEXT').run();
+  }
+  if (!hasNotes) {
+    db.prepare('ALTER TABLE activity_sessions ADD COLUMN notes TEXT').run();
+  }
+}
+
+ensureActivitySessionMetadataColumns();
 
 function ensureSleepStagesTable() {
   db.prepare(

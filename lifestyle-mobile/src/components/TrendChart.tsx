@@ -3,12 +3,19 @@ import {
   VictoryArea,
   VictoryAxis,
   VictoryChart,
+  VictoryLabel,
   VictoryLine,
   VictoryScatter,
   VictoryTheme,
 } from 'victory-native';
 import { colors, spacing } from '../theme';
 import { AppText } from './AppText';
+import {
+  buildSmartXTickValues,
+  buildYAxisTickValues,
+  buildZeroSeriesDomain,
+  getXAxisAngle,
+} from './chartUtils';
 
 export interface TrendPoint {
   label: string;
@@ -49,21 +56,34 @@ export function TrendChart({
   const { width } = useWindowDimensions();
   const horizontalPadding = spacing.lg * 2 + 32; // screen gutters + card padding
   const chartWidth = Math.max(240, width - horizontalPadding);
-  const chartData = data?.map((point) => ({
-    x: point.label,
-    y: point.value,
-  }));
-  const comparisonData = targetData?.map((point) => ({
-    x: point.label,
-    y: point.value,
-  }));
-  const tickValues =
-    Array.isArray(yDomain) && yDomain.length === 2 && yTickStep
-      ? buildTickValues(yDomain[0], yDomain[1], yTickStep)
-      : undefined;
-  const xTickValues = buildXTickValues(data.map((point) => point.label));
+  const chartData = (data || [])
+    .filter((point) => Boolean(point?.label) && Number.isFinite(point?.value))
+    .map((point) => ({
+      x: point.label,
+      y: point.value,
+    }));
+  const comparisonData = (targetData || [])
+    .filter((point) => Boolean(point?.label) && Number.isFinite(point?.value))
+    .map((point) => ({
+      x: point.label,
+      y: point.value,
+    }));
+  const innerChartWidth = chartWidth - chartPadding.left - chartPadding.right;
+  const xTickValues = buildSmartXTickValues(
+    chartData.map((point) => String(point.x)),
+    innerChartWidth
+  );
+  const xAxisAngle = getXAxisAngle(xTickValues, innerChartWidth);
+  const normalizedPadding = {
+    ...chartPadding,
+    bottom: Math.max(chartPadding.bottom, xAxisAngle ? 54 : 42),
+  };
+  const resolvedYDomain = yDomain ?? buildZeroSeriesDomain(chartData.map((point) => point.y));
+  const tickValues = resolvedYDomain
+    ? buildYAxisTickValues(resolvedYDomain, yTickStep)
+    : undefined;
 
-  if (!data || !data.length) {
+  if (!chartData.length) {
     return (
       <View style={{ alignItems: 'center', padding: 16 }}>
         <AppText variant="muted">No data available.</AppText>
@@ -75,12 +95,21 @@ export function TrendChart({
     <VictoryChart
       height={height}
       width={chartWidth}
-      padding={chartPadding}
+      padding={normalizedPadding}
       theme={VictoryTheme.material}
-      domain={yDomain ? { y: yDomain } : undefined}
+      domain={resolvedYDomain ? { y: resolvedYDomain } : undefined}
     >
       <VictoryAxis
         tickValues={xTickValues}
+        tickLabelComponent={(
+          <VictoryLabel
+            angle={xAxisAngle}
+            textAnchor={xAxisAngle ? 'end' : 'middle'}
+            verticalAnchor={xAxisAngle ? 'middle' : 'end'}
+            dx={xAxisAngle ? -6 : 0}
+            dy={xAxisAngle ? 4 : 0}
+          />
+        )}
         style={{
           axis: { stroke: 'transparent' },
           tickLabels: { fill: colors.muted, fontSize: 11, padding: 8 },
@@ -138,23 +167,6 @@ export function TrendChart({
       ) : null}
     </VictoryChart>
   );
-}
-
-function buildTickValues(min: number, max: number, step: number) {
-  const values: number[] = [];
-  for (let value = min; value <= max; value += step) {
-    values.push(value);
-  }
-  return values;
-}
-
-function buildXTickValues(labels: string[]) {
-  if (labels.length <= 5) {
-    return labels;
-  }
-  const step = Math.max(1, Math.ceil(labels.length / 4));
-  const ticks = labels.filter((_, index) => index === 0 || index === labels.length - 1 || index % step === 0);
-  return Array.from(new Set(ticks));
 }
 
 function formatAxisValue(value: number) {

@@ -132,10 +132,22 @@ If iOS shows `No script URL provided`, launch through the dev client so Metro is
 npm run ios:dev
 ```
 
+If you're building straight onto a physical iPhone, `npm run ios:device` now starts Metro automatically for Debug builds before launching the app.
+
+If a device build fails with `CodeSign ... resource fork, Finder information, or similar detritus not allowed`, use `npm run ios:device` instead of `npx expo run:ios --device`. The helper builds in `~/Library/Caches/msml-lifestyle/ios-device-build` so macOS file-provider metadata from synced folders like `Documents` does not break codesign.
+
+If `npm run ios:device` says the launch was denied because the device is locked, the build and install already worked. Unlock the iPhone and either tap the app icon manually or rerun `npm run ios:device -- --no-install`.
+
 If that still fails, clear Metro cache and relaunch:
 
 ```bash
 npm run ios:dev:clear
+```
+
+For device-only network issues, try the tunnel host mode:
+
+```bash
+npm run ios:device -- --host tunnel --bundler-clear
 ```
 
 If you launched from Xcode, start Metro first in `lifestyle-mobile`:
