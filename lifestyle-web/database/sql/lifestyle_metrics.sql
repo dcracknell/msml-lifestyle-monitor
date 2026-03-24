@@ -603,6 +603,8 @@ CREATE TABLE activity_sessions (
   source TEXT NOT NULL DEFAULT 'manual',
   source_id TEXT,
   name TEXT NOT NULL,
+  custom_name TEXT,
+  notes TEXT,
   sport_type TEXT NOT NULL DEFAULT 'Run',
   start_time TEXT NOT NULL,
   distance_m REAL,

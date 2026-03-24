@@ -381,7 +381,7 @@ const styles = StyleSheet.create({
   navLabel: {
     fontSize: 15,
     color: 'rgba(255,255,255,0.85)',
-    fontFamily: fonts.body,
+    fontFamily: fonts.sans,
   },
   navLabelActive: {
     color: colors.accent,
@@ -390,7 +390,7 @@ const styles = StyleSheet.create({
   navLabelSignOut: {
     fontSize: 15,
     color: '#ef4444',
-    fontFamily: fonts.body,
+    fontFamily: fonts.sans,
   },
 
   // Header

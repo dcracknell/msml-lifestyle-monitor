@@ -78,8 +78,15 @@ export default ({ config }) => ({
       'android.permission.CAMERA',
       'android.permission.ACCESS_COARSE_LOCATION',
       'android.permission.ACCESS_FINE_LOCATION',
+      'android.permission.ACCESS_BACKGROUND_LOCATION',
+      'android.permission.FOREGROUND_SERVICE',
+      'android.permission.FOREGROUND_SERVICE_LOCATION',
       'android.permission.ACTIVITY_RECOGNITION',
     ],
+    // Google Maps API key for react-native-maps on Android
+    ...(process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
+      ? { config: { googleMaps: { apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY } } }
+      : {}),
   },
   web: {
     favicon: './assets/icon.png',
@@ -88,6 +95,17 @@ export default ({ config }) => ({
     'expo-secure-store',
     'expo-font',
     'expo-web-browser',
+    [
+      'expo-location',
+      {
+        locationWhenInUsePermission:
+          'Allow MSML Lifestyle to track route distance and pace during your workouts.',
+        locationAlwaysAndWhenInUsePermission:
+          'Allow MSML Lifestyle to keep tracking route distance and pace while the app is in the background.',
+        isIosBackgroundLocationEnabled: true,
+        isAndroidBackgroundLocationEnabled: true,
+      },
+    ],
     [
       'expo-image-picker',
       {

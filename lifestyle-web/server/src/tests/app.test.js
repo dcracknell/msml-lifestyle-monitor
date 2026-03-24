@@ -356,6 +356,70 @@ describe('Strava export route', () => {
   });
 });
 
+describe('Activity session editing', () => {
+  it('stores workout notes and allows self-owned sessions to be updated after logging', async () => {
+    const { token } = await loginAsCoach();
+    const sourceId = `editable-run:${Date.now()}`;
+    const startedAt = new Date().toISOString();
+
+    const workout = await request(app)
+      .post('/api/streams/workouts')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        workouts: [
+          {
+            sourceId,
+            name: 'Lunch shakeout',
+            notes: 'Kept it relaxed until the final kilometre.',
+            sportType: 'Run',
+            startTime: startedAt,
+            endTime: startedAt,
+            distanceMeters: 6200,
+            movingTimeSeconds: 1860,
+            elapsedTimeSeconds: 1860,
+          },
+        ],
+      });
+
+    expect(workout.status).toBe(202);
+
+    const activityBefore = await request(app)
+      .get('/api/activity')
+      .set('Authorization', `Bearer ${token}`);
+    expect(activityBefore.status).toBe(200);
+
+    const createdSession = activityBefore.body.sessions.find((session) => session.sourceId === sourceId);
+    expect(createdSession).toBeTruthy();
+    expect(createdSession.notes).toBe('Kept it relaxed until the final kilometre.');
+
+    const update = await request(app)
+      .patch(`/api/activity/sessions/${createdSession.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'Lunch progression',
+        notes: 'Felt smooth, then closed hard over the final 2 km.',
+      });
+
+    expect(update.status).toBe(200);
+    expect(update.body.message).toBe('Session updated.');
+    expect(update.body.session).toMatchObject({
+      id: createdSession.id,
+      name: 'Lunch progression',
+      notes: 'Felt smooth, then closed hard over the final 2 km.',
+    });
+
+    const activityAfter = await request(app)
+      .get('/api/activity')
+      .set('Authorization', `Bearer ${token}`);
+    expect(activityAfter.status).toBe(200);
+
+    const updatedSession = activityAfter.body.sessions.find((session) => session.id === createdSession.id);
+    expect(updatedSession).toBeTruthy();
+    expect(updatedSession.name).toBe('Lunch progression');
+    expect(updatedSession.notes).toBe('Felt smooth, then closed hard over the final 2 km.');
+  });
+});
+
 describe('CORS configuration', () => {
   it('always includes default localhost origins even when custom origins are set', () => {
     const customApp = createApp({ appOrigin: 'https://msmls.org' });

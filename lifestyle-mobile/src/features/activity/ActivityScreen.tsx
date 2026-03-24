@@ -181,7 +181,7 @@ export function ActivityScreen() {
     ? streamTrainingLoadTrend
     : trainingLoadTrendData.map((entry) => ({
         startTime: entry.startTime,
-        value: entry.trainingLoad ?? 0,
+        value: entry.trainingLoad,
       }));
 
   const mileageSeries = [
@@ -189,30 +189,36 @@ export function ActivityScreen() {
       id: 'distance',
       label: 'Distance (km)',
       color: colors.accent,
-      data: mileageSource.map((entry) => ({
-        label: formatDate(entry.startTime, 'MMM D'),
-        value: entry.distanceKm ?? 0,
-      })),
+      data: mileageSource
+        .filter((entry) => Number.isFinite(entry.distanceKm))
+        .map((entry) => ({
+          label: formatDate(entry.startTime, 'MMM D'),
+          value: entry.distanceKm as number,
+        })),
     },
     {
       id: 'duration',
       label: 'Duration (min)',
       color: colors.accentStrong,
       strokeDasharray: '6,4',
-      data: mileageSource.map((entry) => ({
-        label: formatDate(entry.startTime, 'MMM D'),
-        value: entry.movingMinutes ?? 0,
-      })),
+      data: mileageSource
+        .filter((entry) => Number.isFinite(entry.movingMinutes))
+        .map((entry) => ({
+          label: formatDate(entry.startTime, 'MMM D'),
+          value: entry.movingMinutes as number,
+        })),
     },
   ];
   const legendItems = mileageSeries
     .filter((serie) => serie.data.length)
     .map((serie) => ({ label: serie.label, color: serie.color || colors.accent }));
 
-  const trainingTrend = trainingLoadSource.map((entry) => ({
-    label: formatDate(entry.startTime, 'MMM D'),
-    value: entry.value ?? 0,
-  }));
+  const trainingTrend = trainingLoadSource
+    .filter((entry) => Number.isFinite(entry.value))
+    .map((entry) => ({
+      label: formatDate(entry.startTime, 'MMM D'),
+      value: entry.value as number,
+    }));
 
   const chartSummary = buildSummaryFromCharts(mileageSource, trainingLoadSource);
   const weeklyDistanceKm = chartSummary.weeklyDistanceKm ?? summary?.weeklyDistanceKm ?? null;

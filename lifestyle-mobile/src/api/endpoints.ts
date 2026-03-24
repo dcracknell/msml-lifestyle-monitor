@@ -1,5 +1,6 @@
 import apiClient from './client';
 import {
+  ActivitySessionUpdateResponse,
   ActivityResponse,
   AthletesResponse,
   MessageResponse,
@@ -50,6 +51,15 @@ export const metricsRequest = (params?: { athleteId?: number }) =>
 
 export const activityRequest = (params?: { athleteId?: number }) =>
   apiClient.get<ActivityResponse>(`/api/activity${buildQuery({ athleteId: params?.athleteId })}`);
+
+export const updateActivitySessionRequest = (
+  sessionId: number,
+  payload: { name?: string | null; notes?: string | null }
+) =>
+  apiClient.request<ActivitySessionUpdateResponse>(`/api/activity/sessions/${sessionId}`, {
+    method: 'PATCH',
+    body: payload,
+  });
 
 export const vitalsRequest = (params?: { athleteId?: number }) =>
   apiClient.get<VitalsResponse>(`/api/vitals${buildQuery({ athleteId: params?.athleteId })}`);
@@ -221,6 +231,7 @@ export const publishWorkoutSessionsRequest = (payload: {
   workouts: Array<{
     sourceId: string;
     name: string;
+    notes?: string | null;
     sportType: string;
     startTime: string;
     endTime?: string | null;

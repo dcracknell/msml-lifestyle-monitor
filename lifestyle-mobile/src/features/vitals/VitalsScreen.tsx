@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { StyleSheet, View } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { streamHistoryRequest, vitalsRequest } from '../../api/endpoints';
@@ -59,26 +60,32 @@ export function VitalsScreen() {
   }
 
   const timeline = data.timeline || [];
+  const fourteenDayStart = dayjs().startOf('day').subtract(13, 'day');
+  const recentTimeline = timeline.filter((entry) => !dayjs(entry.date).isBefore(fourteenDayStart));
   const restingTrendFromStreams = buildDailyTrendFromStream(
-    restingHrStreamData?.points || [],
+    (restingHrStreamData?.points || []).filter(
+      (point) => Number.isFinite(point.ts) && point.ts >= fourteenDayStart.valueOf()
+    ),
     (values) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)
   ).slice(-14);
   const glucoseTrendFromStreams = buildDailyTrendFromStream(
-    glucoseStreamData?.points || [],
+    (glucoseStreamData?.points || []).filter(
+      (point) => Number.isFinite(point.ts) && point.ts >= fourteenDayStart.valueOf()
+    ),
     (values) => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length)
   ).slice(-14);
   const restingTrend = restingTrendFromStreams.length
     ? restingTrendFromStreams
-    : timeline.slice(-14).map((entry) => ({
+    : recentTimeline.map((entry) => ({
         label: formatDate(entry.date, 'MMM D'),
-        value: entry.restingHr || 0,
-      }));
+        value: entry.restingHr,
+      })).filter(hasFiniteTrendValue);
   const glucoseTrend = glucoseTrendFromStreams.length
     ? glucoseTrendFromStreams
-    : timeline.slice(-14).map((entry) => ({
+    : recentTimeline.map((entry) => ({
         label: formatDate(entry.date, 'MMM D'),
-        value: entry.glucose || 0,
-      }));
+        value: entry.glucose,
+      })).filter(hasFiniteTrendValue);
   const latestRestingHrValue =
     restingTrend.length > 0 ? restingTrend[restingTrend.length - 1].value : data.latest?.restingHr;
   const latestGlucoseValue =
@@ -88,7 +95,7 @@ export function VitalsScreen() {
     latestPointTimestamp(glucoseStreamData?.points || [])
   );
   const latestFallbackDate =
-    timeline.length > 0 ? timeline[timeline.length - 1]?.date : data.latest?.date;
+    recentTimeline.length > 0 ? recentTimeline[recentTimeline.length - 1]?.date : data.latest?.date;
   const latestVitalsDate = latestStreamTs > 0 ? new Date(latestStreamTs).toISOString() : latestFallbackDate;
 
   const hrvValue = data.latest?.hrvScore ?? null;
@@ -196,6 +203,12 @@ function buildDailyTrendFromStream(
     .filter((entry) => Number.isFinite(entry.value))
     .sort((a, b) => a.ts - b.ts)
     .map((entry) => ({ label: entry.label, value: entry.value }));
+}
+
+function hasFiniteTrendValue<T extends { value: number | null | undefined }>(
+  entry: T
+): entry is T & { value: number } {
+  return Number.isFinite(entry.value);
 }
 
 const styles = StyleSheet.create({

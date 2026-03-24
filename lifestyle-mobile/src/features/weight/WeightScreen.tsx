@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { StyleSheet, View, Pressable } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { weightRequest, deleteWeightEntryRequest } from '../../api/endpoints';
-import { WeightStats } from '../../api/types';
+import { WeightEntry, WeightStats } from '../../api/types';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
 import {
@@ -42,11 +42,7 @@ export function WeightScreen() {
   const bodyMetrics = useBodyMetrics();
   const timeline = data?.timeline ?? [];
   const trend = useMemo(
-    () =>
-      timeline.map((entry) => ({
-        label: formatDate(entry.date, 'MMM D'),
-        value: unit === 'kg' ? entry.weightKg || 0 : entry.weightLbs || 0,
-      })),
+    () => buildWeightTrend(timeline, unit),
     [timeline, unit]
   );
 
@@ -107,8 +103,8 @@ export function WeightScreen() {
     ? latestWeightKg / Math.pow(bodyMetrics.heightCm / 100, 2)
     : null;
   const weeklyChange = unit === 'kg' ? data.stats?.weeklyChangeKg : data.stats?.weeklyChangeLbs;
+  const weeklyChangeLabel = formatWeeklyChange(weeklyChange, unit);
   const changeColor = weeklyChange == null ? colors.muted : weeklyChange > 0 ? colors.warning : colors.accent;
-  const changeSign = weeklyChange != null && weeklyChange > 0 ? '+' : '';
 
   return (
     <RefreshableScrollView
@@ -136,7 +132,7 @@ export function WeightScreen() {
             <View style={[styles.heroBadge, { borderColor: `${changeColor}44`, backgroundColor: `${changeColor}12` }]}>
               <View style={[styles.badgeDot, { backgroundColor: changeColor }]} />
               <AppText style={[styles.badgeText, { color: changeColor }]}>
-                {changeSign}{weeklyChange.toFixed(1)} {unit} this week
+                {weeklyChangeLabel} this week
               </AppText>
             </View>
           ) : null}
@@ -148,7 +144,7 @@ export function WeightScreen() {
         <View style={styles.metricGrid}>
           <WeightMetric label="BMI" value={bmiForHero !== null ? bmiForHero.toFixed(1) : '--'} />
           <WeightMetric label={`AVG ${unit.toUpperCase()}`} value={formatNumber(unit === 'kg' ? data.stats.avgWeightKg : data.stats.avgWeightLbs, { suffix: ` ${unit}` })} />
-          <WeightMetric label="WEEKLY CHANGE" value={weeklyChange != null ? `${changeSign}${weeklyChange.toFixed(1)} ${unit}` : '--'} />
+          <WeightMetric label="WEEKLY CHANGE" value={weeklyChangeLabel} />
           <WeightMetric label="CALORIE AVG" value={formatNumber(data.stats.caloriesAvg, { suffix: ' kcal' })} />
         </View>
       ) : null}
@@ -157,7 +153,7 @@ export function WeightScreen() {
       <View style={styles.card}>
         <AppText style={styles.eyebrow}>TIMELINE · 14 DAYS</AppText>
         <AppText style={styles.cardTitle}>Weight trend</AppText>
-        <AppText style={styles.cardSubtitle}>Avg weekly change {formatNumber(data.stats?.weeklyChangeKg)} kg</AppText>
+        <AppText style={styles.cardSubtitle}>Avg weekly change {weeklyChangeLabel}</AppText>
         <TrendChart data={trend} yLabel={unit} />
       </View>
 
@@ -203,7 +199,7 @@ export function WeightScreen() {
             <View key={entry.id} style={styles.entryRow}>
               <View>
                 <AppText style={styles.entryDate}>{formatDate(entry.date)}</AppText>
-                <AppText style={styles.mutedText}>{entry.weightKg} kg · {entry.weightLbs} lb</AppText>
+                <AppText style={styles.mutedText}>{entry.weightKg?.toFixed(1)} kg · {entry.weightLbs?.toFixed(1)} lb</AppText>
               </View>
               {viewingOwnData ? (
                 <Pressable style={styles.removeBtn} onPress={() => handleDelete(entry.id)}>
@@ -601,4 +597,42 @@ function formatWeightValue(value: number | null | undefined, unit: 'kg' | 'lb') 
     return `-- ${unit}`;
   }
   return `${value.toFixed(1)} ${unit}`;
+}
+
+function buildWeightTrend(timeline: WeightEntry[], unit: 'kg' | 'lb') {
+  const mapped = timeline
+    .map((entry) => ({
+      label: formatDate(entry.date, 'MMM D'),
+      value: unit === 'kg' ? entry.weightKg : entry.weightLbs,
+    }))
+    .filter((entry) => Number.isFinite(entry.value));
+
+  if (mapped.length < 4) {
+    return mapped as Array<{ label: string; value: number }>;
+  }
+
+  const values = mapped.map((entry) => entry.value as number).sort((a, b) => a - b);
+  const median = values[Math.floor(values.length / 2)];
+  const tolerance = Math.max(unit === 'kg' ? 20 : 44, median * 0.18);
+  const filtered = mapped.filter((entry) => Math.abs((entry.value as number) - median) <= tolerance);
+
+  if (filtered.length >= Math.max(3, Math.ceil(mapped.length * 0.6))) {
+    return filtered as Array<{ label: string; value: number }>;
+  }
+
+  return mapped as Array<{ label: string; value: number }>;
+}
+
+function formatWeeklyChange(value: number | null | undefined, unit: 'kg' | 'lb') {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+
+  const normalized = Math.abs(value as number) < 0.05 ? 0 : Number((value as number).toFixed(1));
+  if (normalized === 0) {
+    return `0 ${unit}`;
+  }
+
+  const sign = normalized > 0 ? '+' : '';
+  return `${sign}${normalized.toFixed(1)} ${unit}`;
 }

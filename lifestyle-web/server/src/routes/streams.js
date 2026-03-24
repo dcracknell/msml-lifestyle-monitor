@@ -8,6 +8,8 @@ const router = express.Router();
 const MAX_BATCH_SIZE = Math.max(1, parseInt(process.env.STREAM_MAX_BATCH || '2000', 10));
 const MAX_WORKOUT_BATCH_SIZE = Math.max(1, parseInt(process.env.STREAM_MAX_WORKOUT_BATCH || '500', 10));
 const MAX_POINTS = Math.max(10, parseInt(process.env.STREAM_MAX_POINTS || '600', 10));
+const SESSION_NAME_MAX_LENGTH = 96;
+const SESSION_NOTES_MAX_LENGTH = 500;
 const DEFAULT_WINDOW_MS = Math.max(
   60 * 1000,
   parseInt(process.env.STREAM_DEFAULT_WINDOW_MS || `${6 * 60 * 60 * 1000}`, 10)
@@ -182,6 +184,7 @@ const upsertWeightLogStatement = db.prepare(
 const phoneSessionBySourceStatement = db.prepare(
   `SELECT id,
           name,
+          notes,
           sport_type AS sportType,
           start_time AS startTime,
           distance_m AS distanceMeters,
@@ -208,6 +211,7 @@ const phoneSessionBySourceStatement = db.prepare(
 const updatePhoneSessionByIdStatement = db.prepare(
   `UPDATE activity_sessions
       SET name = ?,
+          notes = ?,
           sport_type = ?,
           start_time = ?,
           distance_m = ?,
@@ -232,6 +236,7 @@ const insertPhoneSessionStatement = db.prepare(
       source,
       source_id,
       name,
+      notes,
       sport_type,
       start_time,
       distance_m,
@@ -247,7 +252,7 @@ const insertPhoneSessionStatement = db.prepare(
       training_load,
       perceived_effort,
       calories
-    ) VALUES (?, 'phone_sync', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, 'phone_sync', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 );
 
 function normalizeMetric(input = '') {
@@ -794,13 +799,24 @@ function normalizeSessionName(rawName, sportType, fallback = 'Phone workout sync
   if (typeof rawName === 'string') {
     const trimmed = rawName.trim();
     if (trimmed) {
-      return trimmed.slice(0, 96);
+      return trimmed.slice(0, SESSION_NAME_MAX_LENGTH);
     }
   }
   if (typeof sportType === 'string' && sportType.trim()) {
     return `${sportType.trim()} workout`;
   }
   return fallback;
+}
+
+function normalizeSessionNotes(rawNotes) {
+  if (rawNotes === null || rawNotes === undefined) {
+    return null;
+  }
+  const normalized = String(rawNotes).replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.slice(0, SESSION_NOTES_MAX_LENGTH);
 }
 
 function normalizeSourceId(value) {
@@ -903,11 +919,15 @@ function sanitizeWorkoutImports(rawWorkouts = []) {
         'Run'
       );
       const sourceId = deriveWorkoutSourceId(workout, startTs, endTs);
+      const hasNotesField =
+        Object.prototype.hasOwnProperty.call(workout, 'notes') ||
+        Object.prototype.hasOwnProperty.call(workout, 'note');
 
       return {
         sourceId,
         date: toUtcDateString(startTs),
         name: normalizeSessionName(workout.name ?? workout.activityName, sportType, 'Phone workout sync'),
+        notes: hasNotesField ? normalizeSessionNotes(workout.notes ?? workout.note) : undefined,
         sportType,
         startTime: new Date(startTs).toISOString(),
         distanceMeters,
@@ -950,6 +970,12 @@ function upsertPhoneSessionRecord(userId, sourceId, row) {
     row.sportType,
     existing?.name || 'Phone workout sync'
   );
+  const nextNotes =
+    row.notes !== undefined
+      ? row.notes
+      : existing?.notes !== undefined
+      ? existing.notes
+      : null;
   const nextSportType = normalizeSportType(row.sportType, existing?.sportType || 'Run');
   const nextDistance = Number.isFinite(row.distanceMeters)
     ? row.distanceMeters
@@ -1049,6 +1075,7 @@ function upsertPhoneSessionRecord(userId, sourceId, row) {
   if (existing?.id) {
     updatePhoneSessionByIdStatement.run(
       nextName,
+      nextNotes,
       nextSportType,
       startTime,
       nextDistance,
@@ -1073,6 +1100,7 @@ function upsertPhoneSessionRecord(userId, sourceId, row) {
     userId,
     sourceId,
     nextName,
+    nextNotes,
     nextSportType,
     startTime,
     nextDistance,

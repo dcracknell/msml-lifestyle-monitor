@@ -19,6 +19,8 @@ const router = express.Router();
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const WEEK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_NAME_MAX_LENGTH = 96;
+const SESSION_NOTES_MAX_LENGTH = 500;
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
@@ -70,7 +72,8 @@ const sessionsStatement = db.prepare(
           user_id          AS userId,
           source,
           source_id        AS sourceId,
-          name,
+          COALESCE(custom_name, name) AS name,
+          notes,
           sport_type       AS sportType,
           start_time       AS startTime,
           distance_m       AS distance,
@@ -232,7 +235,8 @@ const sessionForExportStatement = db.prepare(
           user_id AS userId,
           source,
           source_id AS sourceId,
-          name,
+          COALESCE(custom_name, name) AS name,
+          notes,
           sport_type AS sportType,
           start_time AS startTime,
           distance_m AS distance,
@@ -250,7 +254,8 @@ const sessionForExportBySourceStatement = db.prepare(
           user_id AS userId,
           source,
           source_id AS sourceId,
-          name,
+          COALESCE(custom_name, name) AS name,
+          notes,
           sport_type AS sportType,
           start_time AS startTime,
           distance_m AS distance,
@@ -267,6 +272,28 @@ const sessionForExportBySourceStatement = db.prepare(
 const updateSessionStravaLinkStatement = db.prepare(
   `UPDATE activity_sessions
       SET strava_activity_id = ?
+    WHERE id = ?
+      AND user_id = ?`
+);
+
+const editableSessionStatement = db.prepare(
+  `SELECT id,
+          user_id AS userId,
+          source,
+          source_id AS sourceId,
+          name AS baseName,
+          custom_name AS customName,
+          COALESCE(custom_name, name) AS name,
+          notes
+     FROM activity_sessions
+    WHERE id = ?
+    LIMIT 1`
+);
+
+const updateSessionMetadataStatement = db.prepare(
+  `UPDATE activity_sessions
+      SET custom_name = ?,
+          notes = ?
     WHERE id = ?
       AND user_id = ?`
 );
@@ -465,6 +492,7 @@ function normalizeSession(row) {
     sourceId: row.sourceId,
     userId: row.userId,
     name: row.name,
+    notes: typeof row.notes === 'string' ? row.notes : null,
     sportType: row.sportType,
     startTime: row.startTime,
     distance: coerceNumber(row.distance),
@@ -482,6 +510,34 @@ function normalizeSession(row) {
     trainingLoad: coerceNumber(row.trainingLoad),
     stravaActivityId: row.stravaActivityId,
   };
+}
+
+function normalizeSessionCustomName(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length > SESSION_NAME_MAX_LENGTH) {
+    throw new Error(`Session name must be ${SESSION_NAME_MAX_LENGTH} characters or fewer.`);
+  }
+  return normalized;
+}
+
+function normalizeSessionNotes(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value).replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length > SESSION_NOTES_MAX_LENGTH) {
+    throw new Error(`Session notes must be ${SESSION_NOTES_MAX_LENGTH} characters or fewer.`);
+  }
+  return normalized;
 }
 
 function computeSummary(sessions) {
@@ -837,6 +893,53 @@ router.get('/', authenticate, (req, res) => {
     summary,
     strava,
   });
+});
+
+router.patch('/sessions/:sessionId', authenticate, (req, res) => {
+  const sessionId = Number.parseInt(req.params.sessionId, 10);
+  if (!Number.isFinite(sessionId) || sessionId <= 0) {
+    return res.status(400).json({ message: 'A valid session id is required.' });
+  }
+
+  const existing = editableSessionStatement.get(sessionId);
+  if (!existing) {
+    return res.status(404).json({ message: 'Session not found.' });
+  }
+  if (existing.userId !== req.user.id) {
+    return res.status(403).json({ message: 'You can only edit your own sessions.' });
+  }
+
+  const hasName = Object.prototype.hasOwnProperty.call(req.body || {}, 'name');
+  const hasNotes = Object.prototype.hasOwnProperty.call(req.body || {}, 'notes');
+  if (!hasName && !hasNotes) {
+    return res.status(400).json({ message: 'Provide a session name or notes to update.' });
+  }
+
+  try {
+    const nextCustomName = hasName
+      ? normalizeSessionCustomName(req.body?.name)
+      : existing.customName || null;
+    const nextNotes = hasNotes
+      ? normalizeSessionNotes(req.body?.notes)
+      : existing.notes || null;
+
+    updateSessionMetadataStatement.run(nextCustomName, nextNotes, sessionId, req.user.id);
+    const updated = editableSessionStatement.get(sessionId);
+
+    return res.json({
+      message: 'Session updated.',
+      session: {
+        id: updated.id,
+        source: updated.source,
+        sourceId: updated.sourceId,
+        userId: updated.userId,
+        name: updated.name,
+        notes: updated.notes || null,
+      },
+    });
+  } catch (error) {
+    return res.status(400).json({ message: error.message || 'Unable to update session.' });
+  }
 });
 
 router.post('/strava/connect', authenticate, (req, res) => {

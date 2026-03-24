@@ -1,10 +1,44 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
+import { AppState, StyleSheet, View, Pressable, ScrollView, Platform } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Svg, { Circle, Defs, FeBlend, FeGaussianBlur, Filter, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
+
+// react-native-maps — loaded dynamically so the app works on web and before native rebuild
+let MapView: any = null;
+let MapPolyline: any = null;
+let MapMarker: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const RNMaps = require('react-native-maps');
+  MapView = RNMaps.default ?? RNMaps.MapView;
+  MapPolyline = RNMaps.Polyline;
+  MapMarker = RNMaps.Marker;
+} catch {
+  // react-native-maps not yet built into native binary — SVG fallback is used
+}
+
+// expo-keep-awake — keeps screen on during active workouts
+let activateKeepAwakeAsync: (() => Promise<void>) | null = null;
+let deactivateKeepAwakeAsync: (() => Promise<void>) | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const KeepAwake = require('expo-keep-awake');
+  activateKeepAwakeAsync = KeepAwake.activateKeepAwakeAsync ?? null;
+  deactivateKeepAwakeAsync = KeepAwake.deactivateKeepAwakeAsync ?? null;
+} catch { /* not available before native rebuild */ }
+
+// expo-speech — audio km split announcements
+let speechSpeak: ((text: string) => void) | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const Speech = require('expo-speech');
+  speechSpeak = Speech.speak ?? Speech.default?.speak ?? null;
+} catch { /* not available before native rebuild */ }
+
 import {
+  AppInput,
   AppText,
   TrendChart,
 } from '../../components';
@@ -18,8 +52,25 @@ import { useBluetooth } from '../../providers/BluetoothProvider';
 import { useSyncQueue } from '../../providers/SyncProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDateTime, formatDistance, formatPace, titleCase } from '../../utils/format';
-
-type SportId = 'run' | 'ride' | 'walk';
+import {
+  startExerciseBackgroundLocationUpdates,
+  stopExerciseBackgroundLocationUpdates,
+} from './backgroundTracking';
+import {
+  applyLocationPointToTrackingSnapshot,
+  clearStoredExerciseTrackingSnapshot,
+  createExerciseTrackingSnapshot,
+  getTrackingDistanceKm,
+  getTrackingElapsedMs,
+  loadStoredExerciseTrackingSnapshot,
+  pauseExerciseTrackingSnapshot,
+  type PhoneGeoPoint,
+  resumeExerciseTrackingSnapshot,
+  saveExerciseTrackingSnapshot,
+  type SportId,
+  stopExerciseTrackingSnapshot,
+  type ExerciseTrackingSnapshot,
+} from './trackingState';
 
 interface SportOption {
   id: SportId;
@@ -32,12 +83,6 @@ type SessionState = 'idle' | 'recording' | 'paused';
 
 type ExerciseAction = 'start' | 'pause' | 'resume' | 'stop';
 type PhoneTrackerSource = 'expo-location' | 'geolocation';
-
-interface PhoneGeoPoint {
-  latitude: number;
-  longitude: number;
-  timestamp: number;
-}
 
 const SPORT_OPTIONS: SportOption[] = [
   { id: 'run', label: 'Run', tagline: 'Outdoor effort', match: 'run' },
@@ -57,16 +102,34 @@ const ORANGE = '#ff9132';
 const PURPLE = '#a080ff';
 const GRAY = 'rgba(255,255,255,0.25)';
 
+// ── Google Maps dark style (Android) ─────────────────────────────────────────
+// Matches the app's navy night theme so the teal route line pops clearly.
+const DARK_MAP_STYLE = [
+  { elementType: 'geometry',                                      stylers: [{ color: '#1a2534' }] },
+  { elementType: 'labels.text.fill',                              stylers: [{ color: '#8496b0' }] },
+  { elementType: 'labels.text.stroke',                            stylers: [{ color: '#0d1927' }] },
+  { featureType: 'administrative', elementType: 'geometry',       stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi',                                           stylers: [{ visibility: 'off' }] },
+  { featureType: 'road', elementType: 'geometry.fill',            stylers: [{ color: '#253649' }] },
+  { featureType: 'road', elementType: 'geometry.stroke',          stylers: [{ color: '#1a2a3e' }] },
+  { featureType: 'road', elementType: 'labels.icon',              stylers: [{ visibility: 'off' }] },
+  { featureType: 'road.highway', elementType: 'geometry.fill',    stylers: [{ color: '#2f4665' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke',  stylers: [{ color: '#1e3452' }] },
+  { featureType: 'transit',                                       stylers: [{ visibility: 'off' }] },
+  { featureType: 'water', elementType: 'geometry',                stylers: [{ color: '#0d1b2a' }] },
+  { featureType: 'water', elementType: 'labels.text.fill',        stylers: [{ color: '#3d5a7a' }] },
+];
+
 const WATCH_COMMAND_TIMEOUT_MS = 3500;
 const PHONE_TRACKER_START_TIMEOUT_MS = 4000;
 const PHONE_UPLOAD_INTERVAL_MS = 15_000;
 const PHONE_UPLOAD_DISTANCE_DELTA_KM = 0.05;
-const PHONE_MIN_STEP_METERS = 1;
-const PHONE_MAX_STEP_METERS = 300;
-const PHONE_MAX_SPEED_MS = 40; // ~144 km/h – rejects GPS teleportation jumps
 const WATCH_AUTO_START_FRESH_WINDOW_MS = 15_000;
 const EXERCISE_STREAM_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
-const ROUTE_POINT_LIMIT = 160;
+const CALORIE_FACTORS: Record<SportId, number> = { run: 1.0, ride: 0.4, walk: 0.7 }; // kcal/kg/km
+const CALORIE_BODY_WEIGHT_KG = 70; // default body weight estimate
+const WORKOUT_NAME_MAX_LENGTH = 96;
+const WORKOUT_NOTES_MAX_LENGTH = 500;
 
 export function ExerciseScreen() {
   const navigation = useNavigation();
@@ -117,25 +180,32 @@ export function ExerciseScreen() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [controlLoading, setControlLoading] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [workoutName, setWorkoutName] = useState(() => buildDefaultWorkoutName('Run'));
+  const [workoutNotes, setWorkoutNotes] = useState('');
   const [phoneDistanceKm, setPhoneDistanceKm] = useState<number | null>(null);
   const [phonePaceSeconds, setPhonePaceSeconds] = useState<number | null>(null);
+  const [phoneCurrentPaceSeconds, setPhoneCurrentPaceSeconds] = useState<number | null>(null);
+  const [elevationGainMeters, setElevationGainMeters] = useState(0);
+  const [gpsAccuracyMeters, setGpsAccuracyMeters] = useState<number | null>(null);
   const [isPhoneTracking, setIsPhoneTracking] = useState(false);
   const [phoneTrackingSource, setPhoneTrackingSource] = useState<PhoneTrackerSource | null>(null);
   const [phoneTrackingError, setPhoneTrackingError] = useState<string | null>(null);
   const [routePoints, setRoutePoints] = useState<PhoneGeoPoint[]>([]);
+  const [isAutoPaused, setIsAutoPaused] = useState(false);
+  const [kmSplits, setKmSplits] = useState<Array<{ km: number; paceSeconds: number }>>([]);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const elapsedBeforePauseRef = useRef(0);
   const sessionStartRef = useRef<number | null>(null);
   const workoutStartedAtRef = useRef<number | null>(null);
   const workoutSourceIdRef = useRef<string | null>(null);
+  const trackingSnapshotRef = useRef<ExerciseTrackingSnapshot | null>(null);
   const sessionStateRef = useRef<SessionState>('idle');
   const locationWatcherRef = useRef<null | { stop: () => void }>(null);
-  const lastPhonePointRef = useRef<PhoneGeoPoint | null>(null);
-  const phoneDistanceMetersRef = useRef(0);
   const lastPhoneUploadRef = useRef({ ts: 0, distanceKm: 0 });
   const phoneDistanceRef = useRef<number | null>(null);
   const phonePaceRef = useRef<number | null>(null);
+  const elevationGainRef = useRef(0);
 
   const sportConfig = useMemo(() => {
     return SPORT_OPTIONS.find((option) => option.id === selectedSport) ?? SPORT_OPTIONS[0];
@@ -147,11 +217,92 @@ export function ExerciseScreen() {
   }, [sessions, sportConfig.match]);
 
   useEffect(() => {
+    setWorkoutName((current) => {
+      const trimmed = current.trim();
+      if (!trimmed || isAutoWorkoutName(trimmed)) {
+        return buildDefaultWorkoutName(sportConfig.label);
+      }
+      return current;
+    });
+  }, [sportConfig.label]);
+
+  useEffect(() => {
     setWorkoutMirrorSuppressed(sessionState !== 'idle');
     return () => {
       setWorkoutMirrorSuppressed(false);
     };
   }, [sessionState, setWorkoutMirrorSuppressed]);
+
+  // Keep screen on whenever a session is active (recording or paused)
+  useEffect(() => {
+    if (sessionState !== 'idle') {
+      activateKeepAwakeAsync?.().catch(() => {});
+    } else {
+      deactivateKeepAwakeAsync?.().catch(() => {});
+    }
+    return () => {
+      deactivateKeepAwakeAsync?.().catch(() => {});
+    };
+  }, [sessionState]);
+
+  const applyTrackingSnapshot = useCallback((snapshot: ExerciseTrackingSnapshot | null) => {
+    trackingSnapshotRef.current = snapshot;
+    elapsedBeforePauseRef.current = snapshot?.elapsedBeforePauseMs ?? 0;
+    sessionStartRef.current = snapshot?.sessionStartTs ?? null;
+    elevationGainRef.current = snapshot?.elevationGainMeters ?? 0;
+    phoneDistanceRef.current = getTrackingDistanceKm(snapshot);
+    phonePaceRef.current = snapshot?.phonePaceSeconds ?? null;
+
+    setPhoneDistanceKm(getTrackingDistanceKm(snapshot));
+    setPhonePaceSeconds(snapshot?.phonePaceSeconds ?? null);
+    setPhoneCurrentPaceSeconds(snapshot?.phoneCurrentPaceSeconds ?? null);
+    setElevationGainMeters(Math.round(snapshot?.elevationGainMeters ?? 0));
+    setGpsAccuracyMeters(snapshot?.gpsAccuracyMeters ?? null);
+    setIsAutoPaused(snapshot?.isAutoPaused ?? false);
+    setRoutePoints(snapshot?.routePoints ?? []);
+    setKmSplits(snapshot?.kmSplits ?? []);
+
+    if (snapshot && sessionStateRef.current !== 'idle') {
+      setElapsedMs(getTrackingElapsedMs(snapshot));
+    }
+  }, []);
+
+  const persistTrackingSnapshot = useCallback((snapshot: ExerciseTrackingSnapshot | null) => {
+    applyTrackingSnapshot(snapshot);
+    return saveExerciseTrackingSnapshot(snapshot).catch(() => {});
+  }, [applyTrackingSnapshot]);
+
+  const restorePersistedTrackingSnapshot = useCallback(async () => {
+    const expectedSourceId = workoutSourceIdRef.current;
+    if (!expectedSourceId) {
+      return null;
+    }
+
+    const snapshot = await loadStoredExerciseTrackingSnapshot();
+    if (!snapshot || snapshot.workoutSourceId !== expectedSourceId) {
+      return null;
+    }
+
+    applyTrackingSnapshot(snapshot);
+    return snapshot;
+  }, [applyTrackingSnapshot]);
+
+  const maybeStartBackgroundTracking = useCallback(
+    async (snapshot: ExerciseTrackingSnapshot) => {
+      const result = await startExerciseBackgroundLocationUpdates(snapshot);
+      if (result.started) {
+        return null;
+      }
+      if (result.reason === 'background-denied') {
+        return 'Background tracking is off. Keep the app open for full phone GPS distance.';
+      }
+      if (result.reason === 'unsupported' || result.reason === 'start-failed') {
+        return 'Background tracking is unavailable in this build. Keep the app open for full phone GPS distance.';
+      }
+      return null;
+    },
+    []
+  );
 
   const uploadPhoneMetrics = useCallback(
     async (distanceKm: number, paceSeconds: number | null, force = false) => {
@@ -198,42 +349,50 @@ export function ExerciseScreen() {
       if (sessionStateRef.current !== 'recording') {
         return;
       }
-      const previous = lastPhonePointRef.current;
-      let acceptPoint = !previous;
-      if (previous) {
-        const deltaMeters = haversineDistanceMeters(previous, point);
-        const timeDeltaSeconds = Math.max(0.1, (point.timestamp - previous.timestamp) / 1000);
-        const speedMs = deltaMeters / timeDeltaSeconds;
-        if (
-          Number.isFinite(deltaMeters) &&
-          deltaMeters >= PHONE_MIN_STEP_METERS &&
-          deltaMeters <= PHONE_MAX_STEP_METERS &&
-          speedMs <= PHONE_MAX_SPEED_MS
-        ) {
-          phoneDistanceMetersRef.current += deltaMeters;
-          acceptPoint = true;
-        }
-      }
-      if (!acceptPoint) {
-        return;
-      }
-      lastPhonePointRef.current = point;
-      setRoutePoints((current) => appendRoutePoint(current, point));
 
-      const distanceKm = phoneDistanceMetersRef.current / 1000;
-      const activeDurationMs =
-        elapsedBeforePauseRef.current +
-        (sessionStartRef.current ? Math.max(0, Date.now() - sessionStartRef.current) : 0);
-      const paceSeconds =
-        distanceKm > 0.02 && activeDurationMs > 0
-          ? Math.round((activeDurationMs / 1000) / distanceKm)
-          : null;
+      const startedAt =
+        workoutStartedAtRef.current && workoutStartedAtRef.current > 0
+          ? workoutStartedAtRef.current
+          : Date.now();
+      const sourceId =
+        workoutSourceIdRef.current || buildWorkoutSourceId(sportConfig.id, startedAt);
+      if (!workoutStartedAtRef.current) {
+        workoutStartedAtRef.current = startedAt;
+      }
+      if (!workoutSourceIdRef.current) {
+        workoutSourceIdRef.current = sourceId;
+      }
 
-      setPhoneDistanceKm(distanceKm);
-      setPhonePaceSeconds(paceSeconds);
-      void uploadPhoneMetrics(distanceKm, paceSeconds);
+      const currentSnapshot =
+        trackingSnapshotRef.current ||
+        createExerciseTrackingSnapshot({
+          sportId: sportConfig.id,
+          startedAt,
+          workoutSourceId: sourceId,
+        });
+      const nextSnapshot = applyLocationPointToTrackingSnapshot(currentSnapshot, point);
+      const previousDistanceKm = getTrackingDistanceKm(currentSnapshot) ?? 0;
+      const nextDistanceKm = getTrackingDistanceKm(nextSnapshot) ?? 0;
+      const previousSplitCount = currentSnapshot.kmSplits.length;
+
+      void persistTrackingSnapshot(nextSnapshot);
+
+      if (nextSnapshot.kmSplits.length > previousSplitCount) {
+        const split = nextSnapshot.kmSplits[nextSnapshot.kmSplits.length - 1];
+        const paceMin = Math.floor(split.paceSeconds / 60);
+        const paceSec = split.paceSeconds % 60;
+        const paceStr =
+          paceSec > 0 ? `${paceMin} minutes ${paceSec} seconds` : `${paceMin} minutes`;
+        speechSpeak?.(
+          `${split.km} kilometre${split.km > 1 ? 's' : ''}. Pace ${paceStr} per kilometre.`
+        );
+      }
+
+      if (nextDistanceKm > previousDistanceKm) {
+        void uploadPhoneMetrics(nextDistanceKm, nextSnapshot.phonePaceSeconds);
+      }
     },
-    [uploadPhoneMetrics]
+    [persistTrackingSnapshot, sportConfig.id, uploadPhoneMetrics]
   );
 
   const stopPhoneTracking = useCallback(() => {
@@ -241,20 +400,17 @@ export function ExerciseScreen() {
     locationWatcherRef.current = null;
     setIsPhoneTracking(false);
     setPhoneTrackingSource(null);
-    lastPhonePointRef.current = null;
+    void stopExerciseBackgroundLocationUpdates();
   }, []);
 
   const resetPhoneTracking = useCallback(() => {
     stopPhoneTracking();
-    phoneDistanceMetersRef.current = 0;
     lastPhoneUploadRef.current = { ts: 0, distanceKm: 0 };
-    setPhoneDistanceKm(null);
-    setPhonePaceSeconds(null);
+    elevationGainRef.current = 0;
+    applyTrackingSnapshot(null);
     setPhoneTrackingError(null);
-    setRoutePoints([]);
-    phoneDistanceRef.current = null;
-    phonePaceRef.current = null;
-  }, [stopPhoneTracking]);
+    void clearStoredExerciseTrackingSnapshot();
+  }, [applyTrackingSnapshot, stopPhoneTracking]);
 
   const startPhoneTracking = useCallback(async () => {
     if (locationWatcherRef.current) {
@@ -264,7 +420,10 @@ export function ExerciseScreen() {
     const createPoint = (
       latitude: number | null | undefined,
       longitude: number | null | undefined,
-      timestamp?: number | null
+      timestamp?: number | null,
+      altitude?: number | null,
+      accuracy?: number | null,
+      speed?: number | null,
     ) => {
       if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
         return;
@@ -273,6 +432,9 @@ export function ExerciseScreen() {
         latitude: latitude as number,
         longitude: longitude as number,
         timestamp: Number.isFinite(timestamp as number) ? Math.round(timestamp as number) : Date.now(),
+        altitude: Number.isFinite(altitude as number) ? (altitude as number) : undefined,
+        accuracy: Number.isFinite(accuracy as number) ? (accuracy as number) : undefined,
+        speed: Number.isFinite(speed as number) ? (speed as number) : undefined,
       });
     };
 
@@ -302,7 +464,10 @@ export function ExerciseScreen() {
             createPoint(
               location?.coords?.latitude,
               location?.coords?.longitude,
-              location?.timestamp ?? Date.now()
+              location?.timestamp ?? Date.now(),
+              location?.coords?.altitude,
+              location?.coords?.accuracy,
+              location?.coords?.speed,
             );
           }
         );
@@ -327,7 +492,10 @@ export function ExerciseScreen() {
           createPoint(
             position?.coords?.latitude,
             position?.coords?.longitude,
-            position?.timestamp ?? Date.now()
+            position?.timestamp ?? Date.now(),
+            position?.coords?.altitude,
+            position?.coords?.accuracy,
+            position?.coords?.speed,
           );
         },
         (geoError) => {
@@ -407,12 +575,31 @@ export function ExerciseScreen() {
     ? (lastSessionForSport.distance || 0) / 1000
     : null;
   const displayDistanceKm = liveDistanceKm > 0 ? liveDistanceKm : fallbackDistanceKm;
+  // During recording show current (rolling 30 s) pace like Strava; otherwise show average
   const displayPaceSeconds =
+    sessionState === 'recording'
+      ? (watchMetrics.pace !== null
+          ? watchMetrics.pace
+          : phoneCurrentPaceSeconds !== null
+          ? phoneCurrentPaceSeconds
+          : phonePaceSeconds !== null
+          ? phonePaceSeconds
+          : null)
+      : (watchMetrics.pace !== null
+          ? watchMetrics.pace
+          : phonePaceSeconds !== null
+          ? phonePaceSeconds
+          : lastSessionForSport?.averagePace ?? null);
+  const avgPaceSeconds =
     watchMetrics.pace !== null
       ? watchMetrics.pace
       : phonePaceSeconds !== null
       ? phonePaceSeconds
       : lastSessionForSport?.averagePace ?? null;
+  const liveCalories =
+    liveDistanceKm > 0
+      ? Math.round(liveDistanceKm * CALORIE_BODY_WEIGHT_KG * CALORIE_FACTORS[selectedSport])
+      : null;
   const displayHeartRate =
     watchMetrics.heartRate !== null ? watchMetrics.heartRate : lastSessionForSport?.averageHr ?? null;
   const heartRateTrend = useMemo(
@@ -468,19 +655,24 @@ export function ExerciseScreen() {
       : sessionState === 'paused'
       ? 'Route capture is paused until you resume.'
       : 'Start a session to draw a live route map.';
-  const trackerLabel =
-    phoneTrackingSource === 'expo-location'
-      ? 'Phone GPS'
-      : phoneTrackingSource === 'geolocation'
-      ? 'Fallback GPS'
-      : sessionState === 'recording'
-      ? 'Starting'
-      : 'Standby';
+  const gpsAccuracyLabel =
+    gpsAccuracyMeters == null
+      ? '--'
+      : gpsAccuracyMeters <= 10
+      ? `±${Math.round(gpsAccuracyMeters)} m ●`
+      : gpsAccuracyMeters <= 30
+      ? `±${Math.round(gpsAccuracyMeters)} m ◑`
+      : `±${Math.round(gpsAccuracyMeters)} m ○`;
+
   const routeSummary = [
-    { label: 'Status', value: sessionState === 'idle' ? 'Ready' : titleCase(sessionState) },
+    {
+      label: 'Status',
+      value: sessionState === 'idle' ? 'Ready' : isAutoPaused ? 'Auto-paused' : titleCase(sessionState),
+    },
     { label: 'Source', value: liveSourceLabel },
-    { label: 'Tracker', value: trackerLabel },
-    { label: 'GPS points', value: routePoints.length ? String(routePoints.length) : '--' },
+    { label: 'GPS accuracy', value: gpsAccuracyLabel },
+    { label: 'Elevation gain', value: elevationGainMeters > 0 ? `${elevationGainMeters} m` : '--' },
+    { label: 'Calories', value: liveCalories !== null ? `${liveCalories} kcal` : '--' },
   ];
   const trainingSnapshot = [
     { label: 'This week', value: formatKilometers(data?.summary?.weeklyDistanceKm) },
@@ -492,6 +684,18 @@ export function ExerciseScreen() {
   useEffect(() => {
     sessionStateRef.current = sessionState;
   }, [sessionState]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void restorePersistedTrackingSnapshot();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [restorePersistedTrackingSnapshot]);
 
   useFocusEffect(
     useCallback(() => {
@@ -535,10 +739,13 @@ export function ExerciseScreen() {
       const sourceId =
         workoutSourceIdRef.current || buildWorkoutSourceId(sportConfig.id, startTs);
       workoutSourceIdRef.current = sourceId;
+      const normalizedWorkoutName = normalizeWorkoutName(workoutName, sportConfig.label);
+      const normalizedWorkoutNotes = normalizeWorkoutNotes(workoutNotes);
 
       const workoutPayload = {
         sourceId,
-        name: `${sportConfig.label} workout`,
+        name: normalizedWorkoutName,
+        notes: normalizedWorkoutNotes,
         sportType: sportConfig.label,
         startTime: new Date(startTs).toISOString(),
         endTime: new Date(endedAt).toISOString(),
@@ -556,6 +763,11 @@ export function ExerciseScreen() {
           paceSeconds !== null && Number.isFinite(paceSeconds) && paceSeconds > 0
             ? Math.round(paceSeconds)
             : null,
+        elevationGain: elevationGainRef.current > 0 ? Math.round(elevationGainRef.current) : null,
+        calories:
+          distanceKm !== null && distanceKm > 0
+            ? Math.round(distanceKm * CALORIE_BODY_WEIGHT_KG * CALORIE_FACTORS[sportConfig.id])
+            : null,
       };
 
       const workoutResult = await runOrQueue({
@@ -571,10 +783,11 @@ export function ExerciseScreen() {
 
       return {
         sourceId,
+        name: normalizedWorkoutName,
         workoutStatus: workoutResult.status,
       };
     },
-    [invalidateActivityData, runOrQueue, sportConfig.id, sportConfig.label]
+    [invalidateActivityData, runOrQueue, sportConfig.id, sportConfig.label, workoutName, workoutNotes]
   );
 
   useEffect(() => {
@@ -589,13 +802,28 @@ export function ExerciseScreen() {
     elapsedBeforePauseRef.current = 0;
     sessionStartRef.current = startedAt;
     workoutStartedAtRef.current = startedAt;
-    workoutSourceIdRef.current = buildWorkoutSourceId(sportConfig.id, startedAt);
+    const sourceId = buildWorkoutSourceId(sportConfig.id, startedAt);
+    workoutSourceIdRef.current = sourceId;
+    const snapshot = createExerciseTrackingSnapshot({
+      sportId: sportConfig.id,
+      startedAt,
+      workoutSourceId: sourceId,
+    });
+    void persistTrackingSnapshot(snapshot);
     setElapsedMs(0);
     setSessionState('recording');
     sessionStateRef.current = 'recording';
     setFeedback('Workout data detected from watch. Recording started automatically.');
     void startPhoneTracking();
-  }, [latestWatchSignalTs, sessionState, sportConfig.id, startPhoneTracking]);
+    void maybeStartBackgroundTracking(snapshot);
+  }, [
+    latestWatchSignalTs,
+    maybeStartBackgroundTracking,
+    persistTrackingSnapshot,
+    sessionState,
+    sportConfig.id,
+    startPhoneTracking,
+  ]);
 
   useEffect(() => {
     if (sessionState !== 'recording') {
@@ -624,18 +852,42 @@ export function ExerciseScreen() {
     try {
       const stopRequested = nextState === 'idle';
       const endedAt = stopRequested ? Date.now() : 0;
-      const elapsedAtStop = stopRequested
-        ? elapsedBeforePauseRef.current +
-          (sessionStartRef.current ? Math.max(0, endedAt - sessionStartRef.current) : 0)
-        : 0;
-      const finalDistance =
-        stopRequested && liveDistanceKm > 0
-          ? liveDistanceKm
-          : stopRequested
-          ? phoneDistanceRef.current
+      const expectedSourceId = workoutSourceIdRef.current;
+      const storedSnapshot = stopRequested ? await loadStoredExerciseTrackingSnapshot() : null;
+      const matchingStoredSnapshot =
+        storedSnapshot && (!expectedSourceId || storedSnapshot.workoutSourceId === expectedSourceId)
+          ? storedSnapshot
           : null;
+      const trackingSnapshotForStop =
+        matchingStoredSnapshot && trackingSnapshotRef.current
+          ? (getTrackingDistanceKm(matchingStoredSnapshot) ?? 0) >=
+            (getTrackingDistanceKm(trackingSnapshotRef.current) ?? 0)
+            ? matchingStoredSnapshot
+            : trackingSnapshotRef.current
+          : matchingStoredSnapshot || trackingSnapshotRef.current;
+      const stoppedTrackingSnapshot = stopRequested
+        ? stopExerciseTrackingSnapshot(trackingSnapshotForStop, endedAt || Date.now())
+        : null;
+      const elapsedAtStop = stopRequested
+        ? Math.max(
+            stoppedTrackingSnapshot ? getTrackingElapsedMs(stoppedTrackingSnapshot, endedAt || Date.now()) : 0,
+            elapsedBeforePauseRef.current +
+              (sessionStartRef.current ? Math.max(0, endedAt - sessionStartRef.current) : 0)
+          )
+        : 0;
+      const persistedDistance = getTrackingDistanceKm(stoppedTrackingSnapshot);
+      const finalDistanceCandidates = [
+        liveDistanceKm > 0 ? liveDistanceKm : null,
+        phoneDistanceRef.current,
+        persistedDistance,
+      ].filter((value): value is number => value !== null && Number.isFinite(value) && value > 0);
+      const finalDistance = finalDistanceCandidates.length ? Math.max(...finalDistanceCandidates) : null;
       const finalPace =
-        stopRequested && watchMetrics.pace !== null ? watchMetrics.pace : stopRequested ? phonePaceRef.current : null;
+        stopRequested && watchMetrics.pace !== null
+          ? watchMetrics.pace
+          : stopRequested
+          ? stoppedTrackingSnapshot?.phonePaceSeconds ?? phonePaceRef.current
+          : null;
       const finalHeartRate = stopRequested ? watchMetrics.heartRate : null;
 
       // Make controls respond immediately, then complete device operations in the background flow below.
@@ -666,16 +918,46 @@ export function ExerciseScreen() {
         elapsedBeforePauseRef.current = 0;
         sessionStartRef.current = startedAt;
         workoutStartedAtRef.current = startedAt;
-        workoutSourceIdRef.current = buildWorkoutSourceId(sportConfig.id, startedAt);
+        const sourceId = buildWorkoutSourceId(sportConfig.id, startedAt);
+        workoutSourceIdRef.current = sourceId;
+        const snapshot = createExerciseTrackingSnapshot({
+          sportId: sportConfig.id,
+          startedAt,
+          workoutSourceId: sourceId,
+        });
+        void persistTrackingSnapshot(snapshot);
         setElapsedMs(0);
       } else if (nextState === 'recording') {
-        sessionStartRef.current = Date.now();
+        const resumedAt = Date.now();
+        sessionStartRef.current = resumedAt;
+        const startedAt =
+          workoutStartedAtRef.current && workoutStartedAtRef.current > 0
+            ? workoutStartedAtRef.current
+            : resumedAt;
+        workoutStartedAtRef.current = startedAt;
+        const sourceId =
+          workoutSourceIdRef.current || buildWorkoutSourceId(sportConfig.id, startedAt);
+        workoutSourceIdRef.current = sourceId;
+        const snapshot = resumeExerciseTrackingSnapshot(
+          trackingSnapshotRef.current ||
+            createExerciseTrackingSnapshot({
+              sportId: sportConfig.id,
+              startedAt,
+              workoutSourceId: sourceId,
+            }),
+          resumedAt
+        );
+        void persistTrackingSnapshot(snapshot);
       } else if (nextState === 'paused') {
-        elapsedBeforePauseRef.current += Date.now() - (sessionStartRef.current || Date.now());
+        const pausedAt = Date.now();
+        elapsedBeforePauseRef.current += pausedAt - (sessionStartRef.current || pausedAt);
         sessionStartRef.current = null;
+        const snapshot = pauseExerciseTrackingSnapshot(trackingSnapshotRef.current, pausedAt);
+        void persistTrackingSnapshot(snapshot);
       } else {
         sessionStartRef.current = null;
         setElapsedMs(0);
+        void persistTrackingSnapshot(stoppedTrackingSnapshot);
       }
 
       if (nextState === 'recording') {
@@ -690,6 +972,12 @@ export function ExerciseScreen() {
           const message = error instanceof Error ? error.message : 'Phone GPS tracking unavailable.';
           setPhoneTrackingError(message);
           trackingNote = message;
+        }
+        if (startedPhoneTracking && trackingSnapshotRef.current) {
+          const backgroundNote = await maybeStartBackgroundTracking(trackingSnapshotRef.current);
+          if (backgroundNote) {
+            trackingNote = trackingNote ? `${trackingNote} ${backgroundNote}` : backgroundNote;
+          }
         }
         if (!startedPhoneTracking && !trackingNote && !connectedDevice) {
           trackingNote = 'Phone GPS tracking unavailable.';
@@ -724,6 +1012,8 @@ export function ExerciseScreen() {
           heartRate: finalHeartRate,
         });
 
+        setWorkoutName(buildDefaultWorkoutName(sportConfig.label));
+        setWorkoutNotes('');
         elapsedBeforePauseRef.current = 0;
         workoutStartedAtRef.current = null;
         workoutSourceIdRef.current = null;
@@ -750,11 +1040,15 @@ export function ExerciseScreen() {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }
-      stopPhoneTracking();
-      workoutStartedAtRef.current = null;
-      workoutSourceIdRef.current = null;
+      locationWatcherRef.current?.stop();
+      locationWatcherRef.current = null;
+      if (sessionStateRef.current === 'idle') {
+        void stopExerciseBackgroundLocationUpdates();
+        workoutStartedAtRef.current = null;
+        workoutSourceIdRef.current = null;
+      }
     };
-  }, [stopPhoneTracking]);
+  }, []);
 
   const handleStart = () => {
     setFeedback(`Starting ${sportConfig.label.toLowerCase()}...`);
@@ -774,9 +1068,9 @@ export function ExerciseScreen() {
   const isSportSelectionDisabled = sessionState !== 'idle';
 
   const sessionPillLabel =
-    sessionState === 'recording' ? 'Active' : sessionState === 'paused' ? 'Paused' : 'Ready';
+    isAutoPaused ? 'Auto-paused' : sessionState === 'recording' ? 'Active' : sessionState === 'paused' ? 'Paused' : 'Ready';
   const sessionPillColor =
-    sessionState === 'recording' ? TEAL : sessionState === 'paused' ? ORANGE : TEAL;
+    isAutoPaused ? ORANGE : sessionState === 'recording' ? TEAL : sessionState === 'paused' ? ORANGE : TEAL;
 
   return (
     <ScrollView
@@ -827,7 +1121,40 @@ export function ExerciseScreen() {
           <View style={styles.stripDivider} />
           <StatStripItem label="BPM" value={displayHeartRate != null ? String(Math.round(displayHeartRate)) : '--'} />
           <View style={styles.stripDivider} />
-          <StatStripItem label="PACE" value={formatPace(displayPaceSeconds)} />
+          <StatStripItem
+            label={sessionState === 'recording' ? 'CURR PACE' : 'PACE'}
+            value={formatPace(displayPaceSeconds)}
+            sublabel={sessionState === 'recording' && avgPaceSeconds != null ? `avg ${formatPace(avgPaceSeconds)}` : undefined}
+          />
+        </View>
+
+        {/* Auto-pause banner */}
+        {isAutoPaused ? (
+          <View style={styles.autoPauseBanner}>
+            <AppText style={styles.autoPauseBannerText}>Auto-paused — start moving to resume</AppText>
+          </View>
+        ) : null}
+
+        <View style={styles.workoutDetailsForm}>
+          <AppInput
+            label="Activity name"
+            value={workoutName}
+            onChangeText={(value) => setWorkoutName(value.slice(0, WORKOUT_NAME_MAX_LENGTH))}
+            placeholder={buildDefaultWorkoutName(sportConfig.label)}
+            helperText="Saved with this workout and editable later."
+            editable={!controlLoading}
+          />
+          <AppInput
+            label="Notes"
+            value={workoutNotes}
+            onChangeText={(value) => setWorkoutNotes(value.slice(0, WORKOUT_NOTES_MAX_LENGTH))}
+            placeholder="How it felt, terrain, weather, or anything you want to remember."
+            helperText={`${workoutNotes.length}/${WORKOUT_NOTES_MAX_LENGTH}`}
+            multiline
+            textAlignVertical="top"
+            style={styles.workoutNotesInput}
+            editable={!controlLoading}
+          />
         </View>
 
         {/* CTA */}
@@ -877,8 +1204,16 @@ export function ExerciseScreen() {
             <MetricSubCard label="DISTANCE" value={formatDistance(lastSessionForSport.distance)} />
             <MetricSubCard label="PACE" value={formatPace(lastSessionForSport.averagePace)} />
             <MetricSubCard label="AVG HR" value={formatHeartRate(lastSessionForSport.averageHr)} sublabel="bpm" />
-            <MetricSubCard label="ELEVATION" value="--" sublabel="m" />
-            <MetricSubCard label="CALORIES" value="--" sublabel="kcal" />
+            <MetricSubCard
+              label="ELEVATION"
+              value={lastSessionForSport?.elevationGain != null ? String(Math.round(lastSessionForSport.elevationGain)) : '--'}
+              sublabel="m"
+            />
+            <MetricSubCard
+              label="CALORIES"
+              value={lastSessionForSport?.calories != null ? String(Math.round(lastSessionForSport.calories)) : '--'}
+              sublabel="kcal"
+            />
             <MetricSubCard
               label="DURATION"
               value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
@@ -896,12 +1231,26 @@ export function ExerciseScreen() {
           points={routePoints}
           active={sessionState === 'recording'}
           distanceKm={displayDistanceKm}
+          elevationGainMeters={elevationGainMeters}
+          gpsAccuracyMeters={gpsAccuracyMeters}
         />
         <View style={styles.twoColGrid}>
           {routeSummary.map((item) => (
             <MetricSubCard key={item.label} label={item.label.toUpperCase()} value={item.value} />
           ))}
         </View>
+
+        {kmSplits.length > 0 ? (
+          <View style={styles.splitsTable}>
+            <AppText style={styles.splitsTitle}>Km splits</AppText>
+            {kmSplits.map((split) => (
+              <View key={split.km} style={styles.splitRow}>
+                <AppText style={styles.splitKmLabel}>KM {split.km}</AppText>
+                <AppText style={styles.splitPaceValue}>{formatPace(split.paceSeconds)}</AppText>
+              </View>
+            ))}
+          </View>
+        ) : null}
 
         {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
       </View>
@@ -1055,21 +1404,29 @@ function buildWorkoutSourceId(sportId: SportId, startedAt: number) {
   return `exercise:${sportId}:${startedAt}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function appendRoutePoint(points: PhoneGeoPoint[], point: PhoneGeoPoint) {
-  const lastPoint = points[points.length - 1];
-  if (
-    lastPoint &&
-    lastPoint.latitude === point.latitude &&
-    lastPoint.longitude === point.longitude &&
-    lastPoint.timestamp === point.timestamp
-  ) {
-    return points;
+function buildDefaultWorkoutName(sportLabel: string) {
+  return `${sportLabel} workout`;
+}
+
+function isAutoWorkoutName(name: string) {
+  const normalized = String(name || '').trim().toLowerCase();
+  return normalized === 'run workout' || normalized === 'ride workout' || normalized === 'walk workout';
+}
+
+function normalizeWorkoutName(name: string, sportLabel: string) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) {
+    return buildDefaultWorkoutName(sportLabel);
   }
-  const nextPoints = [...points, point];
-  if (nextPoints.length <= ROUTE_POINT_LIMIT) {
-    return nextPoints;
+  return trimmed.slice(0, WORKOUT_NAME_MAX_LENGTH);
+}
+
+function normalizeWorkoutNotes(notes: string) {
+  const trimmed = String(notes || '').replace(/\r\n/g, '\n').trim();
+  if (!trimmed) {
+    return null;
   }
-  return nextPoints.slice(nextPoints.length - ROUTE_POINT_LIMIT);
+  return trimmed.slice(0, WORKOUT_NOTES_MAX_LENGTH);
 }
 
 function normalizeMetric(metric: string) {
@@ -1186,20 +1543,6 @@ function loadExpoLocationModule():
   }
 }
 
-function haversineDistanceMeters(start: PhoneGeoPoint, end: PhoneGeoPoint) {
-  const toRadians = (value: number) => (value * Math.PI) / 180;
-  const earthRadiusMeters = 6371000;
-  const dLat = toRadians(end.latitude - start.latitude);
-  const dLon = toRadians(end.longitude - start.longitude);
-  const lat1 = toRadians(start.latitude);
-  const lat2 = toRadians(end.latitude);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return earthRadiusMeters * c;
-}
-
 // ── Small helper components ───────────────────────────────────────────────────
 
 function EyebrowLabel({ children }: { children: string }) {
@@ -1223,11 +1566,12 @@ function StatusPill({ label, color, dot }: { label: string; color: string; dot?:
   );
 }
 
-function StatStripItem({ label, value }: { label: string; value: string }) {
+function StatStripItem({ label, value, sublabel }: { label: string; value: string; sublabel?: string }) {
   return (
     <View style={styles.statStripItem}>
       <AppText style={styles.statStripLabel}>{label}</AppText>
       <AppText style={styles.statStripValue}>{value}</AppText>
+      {sublabel ? <AppText style={styles.statStripSublabel}>{sublabel}</AppText> : null}
     </View>
   );
 }
@@ -1246,23 +1590,148 @@ function RouteMapCard({
   points,
   active,
   distanceKm,
+  elevationGainMeters,
+  gpsAccuracyMeters,
 }: {
   points: PhoneGeoPoint[];
   active: boolean;
   distanceKm: number | null;
+  elevationGainMeters: number;
+  gpsAccuracyMeters: number | null;
 }) {
-  const preview = buildRoutePreview(points);
+  const mapRef = useRef<any>(null);
+  const wasActiveRef = useRef(active);
+  const hasRealPoints = points.length >= 2;
 
-  // Static placeholder loop route when no live points
+  // During recording: smoothly track the latest GPS position at street level (zoom 16)
+  useEffect(() => {
+    if (!MapView || !mapRef.current || !active || points.length === 0) return;
+    const last = points[points.length - 1];
+    mapRef.current.animateCamera(
+      { center: { latitude: last.latitude, longitude: last.longitude }, zoom: 16, altitude: 400 },
+      { duration: 350 }
+    );
+  }, [active, points]);
+
+  // When recording stops: fit the full route in frame with padding
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (!MapView || !mapRef.current || active || !wasActive || points.length < 2) return;
+    mapRef.current.fitToCoordinates(
+      points.map((p) => ({ latitude: p.latitude, longitude: p.longitude })),
+      { edgePadding: { top: 50, right: 44, bottom: 80, left: 44 }, animated: true }
+    );
+  }, [active, points]);
+
+  // Position the camera the moment the MapView becomes ready (handles first mount)
+  const onMapReady = useCallback(() => {
+    if (!mapRef.current || points.length === 0) return;
+    if (active) {
+      const last = points[points.length - 1];
+      mapRef.current.animateCamera(
+        { center: { latitude: last.latitude, longitude: last.longitude }, zoom: 16, altitude: 400 },
+        { duration: 0 }
+      );
+    } else if (points.length >= 2) {
+      mapRef.current.fitToCoordinates(
+        points.map((p) => ({ latitude: p.latitude, longitude: p.longitude })),
+        { edgePadding: { top: 50, right: 44, bottom: 80, left: 44 }, animated: false }
+      );
+    }
+  }, [active, points]);
+
+  const accuracyColor =
+    gpsAccuracyMeters == null
+      ? GRAY
+      : gpsAccuracyMeters <= 10
+      ? '#22c55e'
+      : gpsAccuracyMeters <= 30
+      ? ORANGE
+      : '#ef4444';
+
+  const bottomBar = (
+    <View style={styles.routeBottomBar}>
+      <AppText style={styles.routeBottomItem}>
+        {distanceKm != null ? `${distanceKm.toFixed(2)} km` : '--'}
+      </AppText>
+      <View style={styles.routeBottomDivider} />
+      <AppText style={styles.routeBottomItem}>
+        {elevationGainMeters > 0 ? `↑ ${elevationGainMeters} m` : '↑ --'}
+      </AppText>
+      <View style={styles.routeBottomDivider} />
+      <AppText style={[styles.routeBottomItem, { color: accuracyColor }]}>
+        {gpsAccuracyMeters != null ? `GPS ±${Math.round(gpsAccuracyMeters)} m` : 'GPS --'}
+      </AppText>
+    </View>
+  );
+
+  // ── Real map tiles via react-native-maps ────────────────────────────────────
+  if (MapView && hasRealPoints) {
+    const coordinates = points.map((p) => ({ latitude: p.latitude, longitude: p.longitude }));
+    const startCoord = coordinates[0];
+    const endCoord = coordinates[coordinates.length - 1];
+
+    return (
+      <View style={styles.routeMapCard}>
+        <MapView
+          ref={mapRef}
+          style={styles.mapView}
+          onMapReady={onMapReady}
+          scrollEnabled={false}
+          zoomEnabled={false}
+          rotateEnabled={false}
+          pitchEnabled={false}
+          showsUserLocation={active}
+          showsMyLocationButton={false}
+          showsCompass={false}
+          showsScale={false}
+          showsTraffic={false}
+          showsBuildings={false}
+          showsPointsOfInterest={false}
+          mapType={Platform.OS === 'ios' ? 'mutedStandard' : 'standard'}
+          customMapStyle={Platform.OS === 'android' ? DARK_MAP_STYLE : undefined}
+        >
+          {/* White halo for visibility on both light and dark map backgrounds */}
+          <MapPolyline
+            coordinates={coordinates}
+            strokeColor="rgba(255,255,255,0.65)"
+            strokeWidth={8}
+            lineCap="round"
+            lineJoin="round"
+          />
+          {/* Main teal route line */}
+          <MapPolyline
+            coordinates={coordinates}
+            strokeColor={TEAL}
+            strokeWidth={4.5}
+            lineCap="round"
+            lineJoin="round"
+          />
+          {/* Start marker */}
+          <MapMarker coordinate={startCoord} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+            <View style={styles.mapDotGreen} />
+          </MapMarker>
+          {/* Finish marker — hidden while still recording */}
+          {!active ? (
+            <MapMarker coordinate={endCoord} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+              <View style={styles.mapDotOrange} />
+            </MapMarker>
+          ) : null}
+        </MapView>
+        {bottomBar}
+      </View>
+    );
+  }
+
+  // ── SVG fallback (web / before native rebuild) ────────────────────────────────
+  const preview = buildRoutePreview(points);
   const placeholderPoints =
     '18,72 24,58 32,50 38,42 46,36 54,34 62,36 70,44 76,54 80,64 78,72 70,78 58,80 46,78 34,76 24,76 18,72';
-
   const liveOrPlaceholder = preview?.points ?? placeholderPoints;
   const isLive = Boolean(preview);
   const startPt = preview?.start ?? { x: 18, y: 72 };
   const endPt = preview?.end ?? { x: 18, y: 72 };
-
-  // Km waypoint markers spaced evenly along the placeholder
   const waypointPositions = [
     { x: 38, y: 42 },
     { x: 62, y: 36 },
@@ -1280,14 +1749,12 @@ function RouteMapCard({
           </Filter>
         </Defs>
         <Rect x={0} y={0} width={100} height={100} fill="#0a1420" />
-        {/* Grid */}
         {[20, 40, 60, 80].map((o) => (
           <Line key={`h${o}`} x1={8} y1={o} x2={92} y2={o} stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
         ))}
         {[20, 40, 60, 80].map((o) => (
           <Line key={`v${o}`} x1={o} y1={8} x2={o} y2={88} stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
         ))}
-        {/* Glow line */}
         <Polyline
           points={liveOrPlaceholder}
           fill="none"
@@ -1297,7 +1764,6 @@ function RouteMapCard({
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        {/* Main route line */}
         <Polyline
           points={liveOrPlaceholder}
           fill="none"
@@ -1306,27 +1772,15 @@ function RouteMapCard({
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        {/* Km waypoints */}
         {!isLive
           ? waypointPositions.map((pt, i) => (
               <Circle key={i} cx={pt.x} cy={pt.y} r={2.2} fill={TEAL} fillOpacity={0.7} />
             ))
           : null}
-        {/* Start dot */}
         <Circle cx={startPt.x} cy={startPt.y} r={3} fill="#22c55e" />
-        {/* Finish dot */}
         <Circle cx={endPt.x} cy={endPt.y} r={3} fill={ORANGE} />
       </Svg>
-      {/* Bottom bar */}
-      <View style={styles.routeBottomBar}>
-        <AppText style={styles.routeBottomItem}>
-          {distanceKm != null ? `${distanceKm.toFixed(2)} km` : '--'}
-        </AppText>
-        <View style={styles.routeBottomDivider} />
-        <AppText style={styles.routeBottomItem}>↑ --</AppText>
-        <View style={styles.routeBottomDivider} />
-        <AppText style={styles.routeBottomItem}>--</AppText>
-      </View>
+      {bottomBar}
     </View>
   );
 }
@@ -1526,6 +1980,11 @@ const styles = StyleSheet.create({
     color: colors.text,
     letterSpacing: -0.3,
   },
+  statStripSublabel: {
+    fontSize: 9,
+    color: colors.muted,
+    letterSpacing: 0.2,
+  },
   stripDivider: {
     width: 1,
     height: 32,
@@ -1541,6 +2000,13 @@ const styles = StyleSheet.create({
   },
   ctaButtonDisabled: {
     opacity: 0.5,
+  },
+  workoutDetailsForm: {
+    gap: 0,
+  },
+  workoutNotesInput: {
+    minHeight: 104,
+    paddingTop: 14,
   },
   ctaText: {
     fontSize: 15,
@@ -1655,12 +2121,31 @@ const styles = StyleSheet.create({
 
   // ── Route map card ────────────────────────────────────────────────────────────
   routeMapCard: {
-    height: 220,
+    height: 260,
     borderRadius: 13,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
     backgroundColor: '#0a1420',
+  },
+  mapView: {
+    flex: 1,
+  },
+  mapDotGreen: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22c55e',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  mapDotOrange: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: ORANGE,
+    borderWidth: 2,
+    borderColor: '#fff',
   },
   routeBottomBar: {
     position: 'absolute',
@@ -1755,5 +2240,56 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     color: colors.danger,
     fontSize: 13,
+  },
+
+  // ── Auto-pause banner ─────────────────────────────────────────────────────────
+  autoPauseBanner: {
+    backgroundColor: `${ORANGE}18`,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: `${ORANGE}44`,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  autoPauseBannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: ORANGE,
+    letterSpacing: 0.2,
+  },
+
+  // ── Km splits table ───────────────────────────────────────────────────────────
+  splitsTable: {
+    gap: 5,
+  },
+  splitsTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+    marginBottom: 2,
+  },
+  splitRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#060b16',
+    borderRadius: 8,
+  },
+  splitKmLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.muted,
+    letterSpacing: 0.8,
+  },
+  splitPaceValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: TEAL,
+    letterSpacing: -0.2,
   },
 });

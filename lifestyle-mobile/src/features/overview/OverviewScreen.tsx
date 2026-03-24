@@ -155,25 +155,25 @@ export function OverviewScreen() {
     .slice(-10)
     .map((entry) => ({
       label: formatDate(entry.date, 'MMM D'),
-      value: entry.readiness ?? 0,
+      value: entry.readiness,
     }))
-    .filter((entry) => Number.isFinite(entry.value));
+    .filter(hasFiniteTrendValue);
 
   const sleepTrend = (sleepData?.timeline || [])
     .slice(-14)
     .map((entry) => ({
       label: formatDate(entry.date, 'MMM D'),
-      value: entry.sleepHours ?? 0,
+      value: entry.sleepHours,
     }))
-    .filter((entry) => Number.isFinite(entry.value));
+    .filter(hasFiniteTrendValue);
 
   const trainingLoadTrend = (activityData?.charts?.trainingLoad || [])
     .slice(-10)
     .map((entry) => ({
       label: formatDate(entry.startTime, 'MMM D'),
-      value: entry.trainingLoad ?? 0,
+      value: entry.trainingLoad,
     }))
-    .filter((entry) => Number.isFinite(entry.value));
+    .filter(hasFiniteTrendValue);
 
   const activitySummary = activityData?.summary;
   const latestVitals = vitalsData?.latest;
@@ -904,6 +904,12 @@ function formatPercent(value?: number | null) {
     return '--';
   }
   return `${Math.round(value)}%`;
+}
+
+function hasFiniteTrendValue<T extends { value: number | null | undefined }>(
+  entry: T
+): entry is T & { value: number } {
+  return Number.isFinite(entry.value);
 }
 
 function formatKilometers(value?: number | null) {
