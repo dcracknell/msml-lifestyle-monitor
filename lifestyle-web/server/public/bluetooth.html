@@ -51,6 +51,15 @@
       </div>
       <form class="device-form" id="bluetoothForm">
         <label>
+          Device profile
+          <select id="profileSelect">
+            <option value="custom">Custom peripheral</option>
+            <option value="ble_hrm">BLE Heart Rate Monitor (0x180D)</option>
+            <option value="arduino_hm10">Arduino + HM-10 (0xFFE0)</option>
+            <option value="apple_watch_companion">Apple Watch companion (0xFFF0)</option>
+          </select>
+        </label>
+        <label>
           Metric name
           <input
             type="text"
@@ -80,7 +89,8 @@
         <label>
           Data parser
           <select id="parser">
-            <option value="jsontext">JSON text (Arduino / HM-10)</option>
+            <option value="jsontext">JSON text (Arduino / HM-10 / Apple Watch)</option>
+            <option value="ble_hrm">BLE Heart Rate binary (0x2A37)</option>
             <option value="uint8">Unsigned 8-bit</option>
             <option value="uint16">Unsigned 16-bit (little-endian)</option>
             <option value="int16">Signed 16-bit (little-endian)</option>

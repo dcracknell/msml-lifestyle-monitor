@@ -1,5 +1,5 @@
 import { Component, ReactNode, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -24,6 +24,12 @@ import { useAuth } from '../../providers/AuthProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDecimal, formatDistance, formatNumber, formatPace } from '../../utils/format';
 import { useActivityGoals } from './useActivityGoals';
+import {
+  createActivityProgressWidgetSnapshot,
+  syncActivityProgressWidget,
+  type ActivityProgressWidgetProps,
+  type ActivityWidgetSyncResult,
+} from './activityWidget';
 import { getPedometerModule, isPermissionGranted } from '../../utils/pedometer';
 
 function formatKilometers(value?: number | null) {
@@ -67,6 +73,8 @@ export function ActivityScreen() {
   const navigation = useNavigation();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const [todayPhoneSteps, setTodayPhoneSteps] = useState<number | null>(null);
+  const [widgetSyncResult, setWidgetSyncResult] = useState<ActivityWidgetSyncResult | null>(null);
+  const [widgetSyncMessage, setWidgetSyncMessage] = useState<string | null>(null);
 
   const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ['activity', requestSubject || user?.id],
@@ -249,6 +257,17 @@ export function ActivityScreen() {
       : weeklyTrainingLoad > 100
       ? 'On track'
       : 'Low activity';
+  const widgetPreview = goalsReady
+    ? createActivityProgressWidgetSnapshot({
+        athleteName: data.subject?.name,
+        weeklyDistanceKm,
+        weeklyDurationMin,
+        goalDistanceKm: goals.targetDistanceKm,
+        goalDurationMin: goals.targetDurationMin,
+        weeklyTrainingLoad,
+        statusLabel: loadBadgeLabel,
+      })
+    : null;
 
   const trainingTrendIsEmpty =
     trainingTrend.length === 0 || trainingTrend.every((p) => p.value === 0);
@@ -259,6 +278,29 @@ export function ActivityScreen() {
   const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
   const ringOffset = RING_CIRCUMFERENCE * (1 - loadPct / 100);
+
+  useEffect(() => {
+    if (!widgetPreview) return;
+    const result = syncActivityProgressWidget(widgetPreview);
+    setWidgetSyncResult(result);
+    setWidgetSyncMessage(buildWidgetSyncMessage(result));
+  }, [
+    widgetPreview?.athleteName,
+    widgetPreview?.overallPercent,
+    widgetPreview?.distancePercent,
+    widgetPreview?.durationPercent,
+    widgetPreview?.distanceSummary,
+    widgetPreview?.durationSummary,
+    widgetPreview?.trainingLoadSummary,
+    widgetPreview?.statusLabel,
+  ]);
+
+  const handleRefreshWidget = () => {
+    if (!widgetPreview) return;
+    const result = syncActivityProgressWidget(widgetPreview);
+    setWidgetSyncResult(result);
+    setWidgetSyncMessage(buildWidgetSyncMessage(result));
+  };
 
   return (
     <RefreshableScrollView
@@ -329,6 +371,16 @@ export function ActivityScreen() {
           summaryDurationMin={weeklyDurationMin ?? 0}
           goals={goals}
           onSaveGoals={saveGoals}
+        />
+      ) : null}
+
+      {widgetPreview ? (
+        <LockScreenWidgetCard
+          snapshot={widgetPreview}
+          syncResult={widgetSyncResult}
+          syncMessage={widgetSyncMessage}
+          statusColor={loadBadgeColor}
+          onRefresh={handleRefreshWidget}
         />
       ) : null}
 
@@ -587,6 +639,91 @@ function GoalProgressBar({
       <AppText variant="muted">
         {currentLabel} of {targetLabel}
       </AppText>
+    </View>
+  );
+}
+
+interface LockScreenWidgetCardProps {
+  snapshot: ActivityProgressWidgetProps;
+  syncResult: ActivityWidgetSyncResult | null;
+  syncMessage: string | null;
+  statusColor: string;
+  onRefresh: () => void;
+}
+
+function LockScreenWidgetCard({
+  snapshot,
+  syncResult,
+  syncMessage,
+  statusColor,
+  onRefresh,
+}: LockScreenWidgetCardProps) {
+  const isIos = Platform.OS === 'ios';
+  const setupHint = isIos
+    ? 'On iPhone, long-press the Lock Screen, tap Customize, then add the MSML Lifestyle widget.'
+    : 'This preview targets iPhone Lock Screen widgets. Android keeps using workout notifications for live stats.';
+
+  return (
+    <Card>
+      <SectionHeader
+        title="Lock screen widget"
+        subtitle="Weekly progress at a glance"
+        action={
+          isIos ? (
+            <Pressable onPress={onRefresh} style={styles.widgetRefreshButton} hitSlop={8}>
+              <AppText style={styles.widgetRefreshText}>Refresh</AppText>
+            </Pressable>
+          ) : null
+        }
+      />
+      <View style={styles.widgetPreviewCard}>
+        <View style={styles.widgetPreviewTopRow}>
+          <View style={styles.widgetPreviewDial}>
+            <AppText style={styles.widgetPreviewPercent}>{formatPercent(snapshot.overallPercent)}</AppText>
+            <AppText style={styles.widgetPreviewDialLabel}>complete</AppText>
+          </View>
+          <View style={styles.widgetPreviewMeta}>
+            <AppText style={styles.widgetPreviewTitle}>Weekly activity</AppText>
+            <View
+              style={[
+                styles.heroBadge,
+                { backgroundColor: `${statusColor}1a`, borderColor: `${statusColor}44` },
+              ]}
+            >
+              <View style={[styles.badgeDot, { backgroundColor: statusColor }]} />
+              <AppText style={[styles.badgeText, { color: statusColor }]}>{snapshot.statusLabel}</AppText>
+            </View>
+            <AppText style={styles.mutedText}>{snapshot.trainingLoadSummary} training load this week</AppText>
+          </View>
+        </View>
+
+        <WidgetPreviewMetric label="Distance" value={snapshot.distanceSummary} progress={snapshot.distancePercent} />
+        <WidgetPreviewMetric label="Duration" value={snapshot.durationSummary} progress={snapshot.durationPercent} />
+      </View>
+
+      <AppText style={styles.mutedText}>
+        {syncMessage ||
+          'This widget refreshes whenever the Activity page syncs or you update your weekly goals.'}
+      </AppText>
+      <AppText style={styles.widgetHintText}>
+        {syncResult === 'unavailable'
+          ? 'Rebuild the iOS app after this change to enable the real widget. Expo Go cannot host Lock Screen widgets.'
+          : setupHint}
+      </AppText>
+    </Card>
+  );
+}
+
+function WidgetPreviewMetric({ label, value, progress }: { label: string; value: string; progress: number }) {
+  return (
+    <View style={styles.widgetMetric}>
+      <View style={styles.widgetMetricHeader}>
+        <AppText style={styles.widgetMetricLabel}>{label}</AppText>
+        <AppText style={styles.widgetMetricValue}>{value}</AppText>
+      </View>
+      <View style={styles.widgetMetricTrack}>
+        <View style={[styles.widgetMetricFill, { width: `${Math.min(progress, 100)}%` }]} />
+      </View>
     </View>
   );
 }
@@ -1030,6 +1167,101 @@ const styles = StyleSheet.create({
   goalFeedback: {
     marginTop: spacing.xs,
   },
+  widgetRefreshButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: `${colors.accent}14`,
+    borderWidth: 1,
+    borderColor: `${colors.accent}30`,
+  },
+  widgetRefreshText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.accent,
+  },
+  widgetPreviewCard: {
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  widgetPreviewTopRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    alignItems: 'center',
+  },
+  widgetPreviewDial: {
+    width: 96,
+    height: 96,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: `${colors.accent}40`,
+    backgroundColor: `${colors.accent}16`,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.sm,
+  },
+  widgetPreviewPercent: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.5,
+  },
+  widgetPreviewDialLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
+  widgetPreviewMeta: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  widgetPreviewTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  widgetMetric: {
+    gap: spacing.xs,
+  },
+  widgetMetricHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  widgetMetricLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  widgetMetricValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  widgetMetricTrack: {
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: colors.border,
+    overflow: 'hidden',
+  },
+  widgetMetricFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.accent,
+  },
+  widgetHintText: {
+    fontSize: 13,
+    color: colors.muted,
+    lineHeight: 18,
+  },
   // Pencil edit button
   pencilBtn: {
     padding: 6,
@@ -1047,6 +1279,20 @@ function extractErrorMessage(error: unknown, fallback: string) {
   }
   if (error instanceof Error && error.message) return error.message;
   return fallback;
+}
+
+function buildWidgetSyncMessage(result: ActivityWidgetSyncResult) {
+  if (result === 'updated') {
+    const syncedAt = new Date().toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    return `Widget synced at ${syncedAt}.`;
+  }
+  if (result === 'ios_only') {
+    return 'This widget is currently available on iPhone Lock Screen only.';
+  }
+  return 'The widget is configured, but this build cannot render it yet.';
 }
 
 interface ChartErrorBoundaryProps {

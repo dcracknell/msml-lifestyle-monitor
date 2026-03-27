@@ -1,19 +1,34 @@
-import { useMemo, useState } from 'react';
-import { StyleSheet, View, Pressable, ScrollView } from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { Card, SectionHeader, AppText, AppButton, AppInput, TrendChart } from '../../components';
-import { colors, spacing } from '../../theme';
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { AppButton, AppText, Card, SectionHeader, TrendChart } from '../../components';
 import { useBluetooth, BluetoothDeviceSummary } from '../../providers/BluetoothProvider';
+import { colors, spacing } from '../../theme';
 import { formatDate, formatNumber } from '../../utils/format';
-import { streamHistoryRequest } from '../../api/endpoints';
-import { useAuth } from '../../providers/AuthProvider';
-import { useSubject } from '../../providers/SubjectProvider';
-import { useSyncQueue } from '../../providers/SyncProvider';
-import { parseIPhoneExportPayload, StreamBatch } from './iphoneImport';
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
+const LIVE_SAMPLE_WINDOW_MS = 10_000;
+
+function formatSampleFreshness(ts: number | null | undefined, now: number) {
+  if (!ts) {
+    return 'No samples received yet.';
+  }
+
+  const ageMs = Math.max(0, now - ts);
+  if (ageMs < 1_500) {
+    return 'Last packet just now.';
+  }
+
+  if (ageMs < 60_000) {
+    return `Last packet ${Math.round(ageMs / 1_000)}s ago.`;
+  }
+
+  const ageMinutes = Math.round(ageMs / 60_000);
+  if (ageMinutes < 60) {
+    return `Last packet ${ageMinutes}m ago.`;
+  }
+
+  const ageHours = Math.round(ageMinutes / 60);
+  return `Last packet ${ageHours}h ago.`;
+}
 
 function StatusPill({ label, active }: { label: string; active?: boolean }) {
   return (
@@ -26,11 +41,28 @@ function StatusPill({ label, active }: { label: string; active?: boolean }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  compact,
+  valueNumberOfLines,
+}: {
+  label: string;
+  value: string;
+  compact?: boolean;
+  valueNumberOfLines?: number;
+}) {
   return (
     <View style={metricStyles.metric}>
       <AppText variant="label">{label}</AppText>
-      <AppText variant="heading">{value}</AppText>
+      <AppText
+        variant={compact ? 'body' : 'heading'}
+        weight={compact ? 'semibold' : 'regular'}
+        style={compact ? metricStyles.compactValue : undefined}
+        numberOfLines={valueNumberOfLines}
+      >
+        {value}
+      </AppText>
     </View>
   );
 }
@@ -54,32 +86,12 @@ function AppToggle({
   );
 }
 
-function formatImportWindow(startTs: number | null, endTs: number | null) {
-  if (!startTs || !endTs) {
-    return null;
-  }
-  return `${formatDate(new Date(startTs).toISOString(), 'MMM D, HH:mm')} - ${formatDate(
-    new Date(endTs).toISOString(),
-    'MMM D, HH:mm'
-  )}`;
-}
-
-function toMetricLabel(metric: string) {
-  const tail = metric.split('.').pop() || metric;
-  const pretty = tail.replace(/_/g, ' ');
-  return pretty.length > 18 ? `${pretty.slice(0, 16)}..` : pretty;
-}
-
-// ---------------------------------------------------------------------------
-// DeviceRow – one row in the scan results list
-// ---------------------------------------------------------------------------
-
 function signalInfo(rssi: number | null | undefined): { label: string; bars: string; color: string } {
   const r = rssi ?? -100;
-  if (r > -60) return { label: 'Strong',   bars: '████', color: colors.accent };
-  if (r > -75) return { label: 'Good',     bars: '███░', color: '#4ade80' };
-  if (r > -85) return { label: 'Weak',     bars: '██░░', color: colors.warning };
-  return         { label: 'Poor',      bars: '█░░░', color: colors.danger };
+  if (r > -60) return { label: 'Strong', bars: '████', color: colors.accent };
+  if (r > -75) return { label: 'Good', bars: '███░', color: '#4ade80' };
+  if (r > -85) return { label: 'Weak', bars: '██░░', color: colors.warning };
+  return { label: 'Poor', bars: '█░░░', color: colors.danger };
 }
 
 function DeviceRow({
@@ -92,16 +104,18 @@ function DeviceRow({
   connecting: boolean;
 }) {
   const sig = signalInfo(device.rssi);
+
   return (
     <View style={deviceRowStyles.row}>
       <View style={deviceRowStyles.info}>
-        <AppText variant="body" style={deviceRowStyles.name}>
+        <AppText variant="body" weight="semibold" style={deviceRowStyles.name} numberOfLines={2}>
           {device.name || 'Unknown device'}
         </AppText>
         <View style={deviceRowStyles.sigRow}>
           <AppText style={[deviceRowStyles.bars, { color: sig.color }]}>{sig.bars}</AppText>
           <AppText variant="muted" style={deviceRowStyles.sigLabel}>
-            {sig.label}  {device.rssi != null ? `${device.rssi} dBm` : ''}
+            {sig.label}
+            {device.rssi != null ? `  ${device.rssi} dBm` : ''}
           </AppText>
         </View>
         <AppText variant="muted" style={deviceRowStyles.id} numberOfLines={1}>
@@ -118,54 +132,7 @@ function DeviceRow({
   );
 }
 
-const deviceRowStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    gap: spacing.sm,
-  },
-  info: {
-    flex: 1,
-    gap: 2,
-  },
-  name: {
-    fontWeight: '600',
-  },
-  sigRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  bars: {
-    fontSize: 11,
-    letterSpacing: 1,
-  },
-  sigLabel: {
-    fontSize: 12,
-  },
-  id: {
-    fontSize: 10,
-    opacity: 0.5,
-  },
-  connectBtn: {
-    flexShrink: 0,
-    minWidth: 88,
-  },
-});
-
-// ---------------------------------------------------------------------------
-// BluetoothDevicesSection
-// ---------------------------------------------------------------------------
-
 export function BluetoothDevicesSection() {
-  const { user } = useAuth();
-  const { subjectId } = useSubject();
-  const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
-
   const {
     config,
     profiles,
@@ -186,18 +153,21 @@ export function BluetoothDevicesSection() {
     connectToDevice,
     disconnectFromDevice,
   } = useBluetooth();
+  const [now, setNow] = useState(() => Date.now());
 
-  const { data: streamHistory } = useQuery({
-    queryKey: ['streamHistory', config.metric, requestSubject],
-    queryFn: () =>
-      streamHistoryRequest({
-        metric: config.metric,
-        athleteId: requestSubject,
-        windowMs: 6 * 60 * 60 * 1000,
-        maxPoints: 60,
-      }),
-    enabled: Boolean(user?.id && config.metric),
-  });
+  useEffect(() => {
+    setNow(Date.now());
+
+    if (!connectedDevice && !lastSample) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+
+    return () => clearInterval(timer);
+  }, [connectedDevice, lastSample?.ts]);
 
   const activeProfile = useMemo(
     () => profiles.find((profile) => profile.id === config.profile) || profiles[0],
@@ -216,30 +186,60 @@ export function BluetoothDevicesSection() {
     [recentSamples]
   );
 
+  const scanStatusLabel = status === 'connected' ? 'Connected' : isScanning ? 'Scanning' : 'Ready';
+  const lastSampleAgeMs = lastSample ? Math.max(0, now - lastSample.ts) : null;
+  const isReceivingLiveData =
+    lastSampleAgeMs !== null && lastSampleAgeMs <= LIVE_SAMPLE_WINDOW_MS;
+  const streamStatusLabel = isReceivingLiveData
+    ? 'Data live'
+    : lastSample
+      ? 'Data waiting'
+      : 'No data';
+  const liveStatusTitle = isReceivingLiveData
+    ? 'Live data is coming in'
+    : connectedDevice
+      ? 'Connected, waiting for data'
+      : 'No live data yet';
+  const liveStatusMessage = connectedDevice
+    ? isReceivingLiveData
+      ? 'Packets are arriving from your sensor now.'
+      : 'The device is connected, but no new packets have arrived recently.'
+    : 'Connect a device to start receiving live samples.';
+  const liveFreshnessLabel = formatSampleFreshness(lastSample?.ts, now);
+
   return (
     <>
-      {/* Device scanner card */}
       <Card>
         <SectionHeader
           title="Device scanner"
-          subtitle={`Adapter: ${bluetoothState}`}
-          action={
-            <View style={styles.statusPills}>
-              <StatusPill
-                label={isPoweredOn ? 'Powered on' : 'Turn on Bluetooth'}
-                active={isPoweredOn}
-              />
-              <StatusPill label={`Status: ${status}`} active={status === 'connected'} />
-            </View>
+          subtitle={
+            connectedDevice
+              ? 'Connected and ready to receive live samples.'
+              : `Adapter: ${bluetoothState}`
           }
         />
 
+        <View style={styles.statusStack}>
+          <View style={styles.statusPills}>
+            <StatusPill label={isPoweredOn ? 'Bluetooth on' : 'Bluetooth off'} active={isPoweredOn} />
+            <StatusPill
+              label={scanStatusLabel}
+              active={status === 'connected' || isScanning}
+            />
+            <StatusPill label={streamStatusLabel} active={isReceivingLiveData} />
+          </View>
+          {activeProfile ? (
+            <AppText variant="muted" style={styles.profileSummary}>
+              Using the {activeProfile.label} preset.
+            </AppText>
+          ) : null}
+        </View>
+
         {connectedDevice ? (
-          /* ── Connected state ── */
           <>
-            <View style={styles.deviceMeta}>
-              <AppText variant="body">
-                Connected to {connectedDevice.name || 'Unnamed device'}
+            <View style={styles.connectedPanel}>
+              <AppText variant="body" weight="semibold">
+                {connectedDevice.name || 'Unnamed device'}
               </AppText>
               <AppText variant="muted">{connectedDevice.id}</AppText>
             </View>
@@ -247,27 +247,25 @@ export function BluetoothDevicesSection() {
               title="Disconnect"
               variant="ghost"
               onPress={disconnectFromDevice}
-              style={styles.disconnectBtn}
+              style={styles.fullWidthButton}
             />
           </>
         ) : (
-          /* ── Scan state ── */
           <>
-            <View style={styles.scanRow}>
-              <AppButton
-                title={isScanning ? 'Stop scanning' : 'Scan for devices'}
-                onPress={isScanning ? stopScan : startScan}
-                loading={status === 'connecting'}
-                style={styles.scanBtn}
-              />
-              {isScanning ? (
-                <AppText variant="muted" style={styles.scanningLabel}>Scanning…</AppText>
-              ) : null}
-            </View>
+            <AppButton
+              title={isScanning ? 'Stop scanning' : 'Scan for devices'}
+              onPress={isScanning ? stopScan : startScan}
+              loading={status === 'connecting'}
+              style={styles.fullWidthButton}
+            />
+            {isScanning ? (
+              <AppText variant="muted" style={styles.scanningLabel}>
+                Searching for nearby sensors...
+              </AppText>
+            ) : null}
 
-            {/* Device list */}
             {devices.length > 0 ? (
-              <ScrollView style={styles.deviceList}>
+              <ScrollView style={styles.deviceList} contentContainerStyle={styles.deviceListContent}>
                 {[...devices]
                   .sort((a, b) => (b.rssi ?? -100) - (a.rssi ?? -100))
                   .map((device) => (
@@ -283,11 +281,16 @@ export function BluetoothDevicesSection() {
                   ))}
               </ScrollView>
             ) : (
-              <AppText variant="muted" style={styles.helper}>
-                {isScanning
-                  ? 'Power on your HM-10 and wait — devices appear here as they are found.'
-                  : 'Tap "Scan for devices" to discover nearby BLE sensors.'}
-              </AppText>
+              <View style={styles.emptyState}>
+                <AppText variant="body" weight="semibold">
+                  No devices found yet
+                </AppText>
+                <AppText variant="muted">
+                  {isScanning
+                    ? 'Keep your sensor powered on and nearby. It will appear here when it is discovered.'
+                    : 'Tap "Scan for devices" to look for nearby BLE sensors.'}
+                </AppText>
+              </View>
             )}
           </>
         )}
@@ -304,9 +307,8 @@ export function BluetoothDevicesSection() {
         ) : null}
       </Card>
 
-      {/* Configuration card */}
       <Card>
-        <SectionHeader title="Configuration" subtitle="Match your sensor's characteristics" />
+        <SectionHeader title="Sensor setup" subtitle="Choose the preset that matches your device." />
         <AppText variant="label" style={styles.profileLabel}>
           Device profile
         </AppText>
@@ -322,34 +324,19 @@ export function BluetoothDevicesSection() {
           ))}
         </View>
         {activeProfile ? (
-          <AppText variant="muted" style={styles.profileDescription}>
-            {activeProfile.description}
-          </AppText>
+          <>
+            <AppText variant="muted" style={styles.profileDescription}>
+              {activeProfile.description}
+            </AppText>
+            <View style={styles.configSummary}>
+              <AppText variant="label">Preset details</AppText>
+              <AppText variant="muted" style={styles.configSummaryText}>
+                Service {config.serviceUUID}, characteristic {config.characteristicUUID}, metric{' '}
+                {config.metric}.
+              </AppText>
+            </View>
+          </>
         ) : null}
-        <AppInput
-          label="Service UUID"
-          autoCapitalize="characters"
-          value={config.serviceUUID}
-          onChangeText={(text) => updateConfig({ serviceUUID: text })}
-          helperText="Default FFF0"
-          style={{ borderColor: '#1e3a5f' }}
-        />
-        <AppInput
-          label="Characteristic UUID"
-          autoCapitalize="characters"
-          value={config.characteristicUUID}
-          onChangeText={(text) => updateConfig({ characteristicUUID: text })}
-          helperText="Default FFF1"
-          style={{ borderColor: '#1e3a5f' }}
-        />
-        <AppInput
-          label="Metric name"
-          value={config.metric}
-          onChangeText={(text) => updateConfig({ metric: text })}
-          autoCapitalize="none"
-          helperText="Samples are stored under this metric in /api/streams."
-          style={{ borderColor: '#1e3a5f' }}
-        />
         <View style={styles.switchRow}>
           <AppText variant="body">Auto upload samples</AppText>
           <AppToggle
@@ -359,7 +346,6 @@ export function BluetoothDevicesSection() {
         </View>
       </Card>
 
-      {/* Live data card */}
       <Card>
         <SectionHeader
           title="Live data"
@@ -369,10 +355,41 @@ export function BluetoothDevicesSection() {
               : 'Waiting for payloads'
           }
         />
+        <View
+          style={[
+            styles.liveBanner,
+            isReceivingLiveData ? styles.liveBannerActive : styles.liveBannerInactive,
+          ]}
+        >
+          <View
+            style={[
+              styles.liveBannerDot,
+              isReceivingLiveData ? styles.liveBannerDotActive : styles.liveBannerDotInactive,
+            ]}
+          />
+          <View style={styles.liveBannerContent}>
+            <AppText variant="body" weight="semibold">
+              {liveStatusTitle}
+            </AppText>
+            <AppText variant="muted" style={styles.liveBannerText}>
+              {liveStatusMessage} {liveFreshnessLabel}
+            </AppText>
+          </View>
+        </View>
         <View style={styles.metricsRow}>
-          <Metric label="Metric" value={lastSample?.metric || config.metric} />
+          <Metric
+            label="Metric"
+            value={lastSample?.metric || config.metric}
+            compact
+            valueNumberOfLines={2}
+          />
           <Metric label="Value" value={formatNumber(lastSample?.value)} />
-          <Metric label="Raw" value={lastSample?.raw || '--'} />
+        </View>
+        <View style={styles.rawPayload}>
+          <AppText variant="label">Raw payload</AppText>
+          <AppText variant="muted" style={styles.rawPayloadText}>
+            {lastSample?.raw || 'Waiting for device data'}
+          </AppText>
         </View>
         {liveTrend.length === 0 ? (
           <View style={styles.emptyChart}>
@@ -386,375 +403,6 @@ export function BluetoothDevicesSection() {
     </>
   );
 }
-
-// ---------------------------------------------------------------------------
-// BluetoothDeveloperSection
-// ---------------------------------------------------------------------------
-
-export function BluetoothDeveloperSection() {
-  const { user } = useAuth();
-  const { subjectId } = useSubject();
-  const { runOrQueue } = useSyncQueue();
-  const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
-
-  const { config, updateConfig, sendCommand, manualPublish } = useBluetooth();
-
-  const [commandText, setCommandText] = useState('');
-  const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
-  const [commandLoading, setCommandLoading] = useState(false);
-  const [manualValue, setManualValue] = useState('');
-  const [manualFeedback, setManualFeedback] = useState<string | null>(null);
-  const [manualLoading, setManualLoading] = useState(false);
-  const [iphonePayload, setIphonePayload] = useState('');
-  const [iphoneBatches, setIphoneBatches] = useState<StreamBatch[]>([]);
-  const [iphoneImportFeedback, setIphoneImportFeedback] = useState<string | null>(null);
-  const [iphoneImportLoading, setIphoneImportLoading] = useState(false);
-  const [iphoneUploadLoading, setIphoneUploadLoading] = useState(false);
-  const [selectedImportMetric, setSelectedImportMetric] = useState<string | null>(null);
-  const [importWindow, setImportWindow] = useState<string | null>(null);
-
-  const { data: streamHistory, refetch, isRefetching } = useQuery({
-    queryKey: ['streamHistory', config.metric, requestSubject],
-    queryFn: () =>
-      streamHistoryRequest({
-        metric: config.metric,
-        athleteId: requestSubject,
-        windowMs: 6 * 60 * 60 * 1000,
-        maxPoints: 60,
-      }),
-    enabled: Boolean(user?.id && config.metric),
-  });
-
-  const serverTrend = useMemo(
-    () =>
-      (streamHistory?.points || [])
-        .filter((point) => point.value !== null && Number.isFinite(point.value as number))
-        .map((point) => ({
-          label: formatDate(new Date(point.ts).toISOString(), 'HH:mm'),
-          value: point.value as number,
-        })),
-    [streamHistory?.points]
-  );
-
-  const importedSampleCount = useMemo(
-    () => iphoneBatches.reduce((total, batch) => total + batch.samples.length, 0),
-    [iphoneBatches]
-  );
-
-  const selectedImportBatch = useMemo(
-    () =>
-      iphoneBatches.find((batch) => batch.metric === selectedImportMetric) ||
-      iphoneBatches[0] ||
-      null,
-    [iphoneBatches, selectedImportMetric]
-  );
-
-  const selectedImportTrend = useMemo(
-    () =>
-      (selectedImportBatch?.samples || [])
-        .filter((sample) => sample.value !== null && Number.isFinite(sample.value))
-        .slice(-40)
-        .map((sample) => ({
-          label: formatDate(new Date(sample.ts).toISOString(), 'MMM D HH:mm'),
-          value: sample.value as number,
-        })),
-    [selectedImportBatch]
-  );
-
-  const visibleImportBatches = useMemo(() => iphoneBatches.slice(0, 8), [iphoneBatches]);
-
-  const handleSendCommand = async () => {
-    const trimmed = commandText.trim();
-    if (!trimmed) {
-      setCommandFeedback('Enter a command to send.');
-      return;
-    }
-    setCommandFeedback(null);
-    setCommandLoading(true);
-    try {
-      await sendCommand(trimmed);
-      setCommandFeedback('Command sent to device.');
-      setCommandText('');
-    } catch (sendError) {
-      setCommandFeedback(sendError instanceof Error ? sendError.message : 'Unable to send command.');
-    } finally {
-      setCommandLoading(false);
-    }
-  };
-
-  const handleManualPublish = async () => {
-    const numeric = Number(manualValue);
-    if (!Number.isFinite(numeric)) {
-      setManualFeedback('Enter a numeric sample value.');
-      return;
-    }
-    setManualFeedback(null);
-    setManualLoading(true);
-    try {
-      await manualPublish(numeric);
-      setManualFeedback('Sample sent to server.');
-      setManualValue('');
-      refetch();
-    } catch (publishError) {
-      setManualFeedback(
-        publishError instanceof Error ? publishError.message : 'Unable to send sample.'
-      );
-    } finally {
-      setManualLoading(false);
-    }
-  };
-
-  const handleParseIphonePayload = () => {
-    const trimmed = iphonePayload.trim();
-    if (!trimmed) {
-      setIphoneImportFeedback('Paste your iPhone export JSON before parsing.');
-      return;
-    }
-
-    setIphoneImportLoading(true);
-    setIphoneImportFeedback(null);
-    try {
-      const parsed = parseIPhoneExportPayload(trimmed);
-      setIphoneBatches(parsed.batches);
-      setSelectedImportMetric(parsed.batches[0]?.metric || null);
-      setImportWindow(formatImportWindow(parsed.startTs, parsed.endTs));
-      setIphoneImportFeedback(
-        `Parsed ${parsed.sampleCount} samples across ${parsed.metricCount} metrics.`
-      );
-    } catch (parseError) {
-      setIphoneBatches([]);
-      setSelectedImportMetric(null);
-      setImportWindow(null);
-      setIphoneImportFeedback(
-        parseError instanceof Error ? parseError.message : 'Unable to parse iPhone export.'
-      );
-    } finally {
-      setIphoneImportLoading(false);
-    }
-  };
-
-  const handleUploadIphoneImport = async () => {
-    if (!iphoneBatches.length) {
-      setIphoneImportFeedback('Parse an iPhone export before uploading.');
-      return;
-    }
-
-    setIphoneUploadLoading(true);
-    setIphoneImportFeedback(null);
-    try {
-      const uploadResults = await Promise.all(
-        iphoneBatches.map((batch) =>
-          runOrQueue({
-            endpoint: '/api/streams',
-            payload: { metric: batch.metric, samples: batch.samples },
-            description: `iPhone import (${batch.metric})`,
-          })
-        )
-      );
-      const queuedCount = uploadResults.filter((result) => result.status === 'queued').length;
-      const sentCount = uploadResults.length - queuedCount;
-      const sampleCount = iphoneBatches.reduce((total, batch) => total + batch.samples.length, 0);
-
-      setIphoneImportFeedback(
-        queuedCount > 0
-          ? `Imported ${sampleCount} samples. Uploaded ${sentCount} metrics and queued ${queuedCount}.`
-          : `Imported ${sampleCount} samples across ${sentCount} metrics.`
-      );
-
-      const focusMetric = selectedImportMetric || iphoneBatches[0]?.metric;
-      if (focusMetric) {
-        updateConfig({ metric: focusMetric });
-        refetch();
-      }
-    } catch (uploadError) {
-      setIphoneImportFeedback(
-        uploadError instanceof Error ? uploadError.message : 'Unable to upload imported samples.'
-      );
-    } finally {
-      setIphoneUploadLoading(false);
-    }
-  };
-
-  const handleClearIphoneImport = () => {
-    setIphonePayload('');
-    setIphoneBatches([]);
-    setSelectedImportMetric(null);
-    setImportWindow(null);
-    setIphoneImportFeedback(null);
-  };
-
-  return (
-    <>
-      {/* Manual controls card */}
-      <View style={[styles.devCard]}>
-        <Card style={styles.devCardInner}>
-          <AppText style={styles.devEyebrow}>MANUAL CONTROLS</AppText>
-          <SectionHeader title="Manual controls" subtitle="Send commands or test uploads" />
-          <AppInput
-            label="Device command"
-            placeholder="e.g. READ"
-            value={commandText}
-            onChangeText={setCommandText}
-            autoCapitalize="characters"
-            style={{ borderColor: '#1e3a5f' }}
-          />
-          <AppButton
-            title="Send command"
-            variant="ghost"
-            onPress={handleSendCommand}
-            loading={commandLoading}
-          />
-          {commandFeedback ? (
-            <AppText variant="muted" style={styles.helper}>
-              {commandFeedback}
-            </AppText>
-          ) : null}
-          <View style={styles.divider} />
-          <AppInput
-            label="Manual sample"
-            placeholder="123.4"
-            keyboardType="numeric"
-            value={manualValue}
-            onChangeText={setManualValue}
-            style={{ borderColor: '#1e3a5f' }}
-          />
-          <AppButton
-            title="Send sample to server"
-            variant="ghost"
-            onPress={handleManualPublish}
-            loading={manualLoading}
-          />
-          {manualFeedback ? (
-            <AppText variant="muted" style={styles.helper}>
-              {manualFeedback}
-            </AppText>
-          ) : null}
-        </Card>
-      </View>
-
-      {/* iPhone import card */}
-      <View style={styles.devCard}>
-        <Card style={styles.devCardInner}>
-          <AppText style={styles.devEyebrow}>IPHONE IMPORT</AppText>
-          <SectionHeader
-            title="iPhone import"
-            subtitle="Paste Auto Export JSON and preview metrics"
-          />
-          <AppText variant="muted" style={styles.importHint}>
-            From your iPhone export app, copy JSON data and paste it here. Parsed metrics can be
-            uploaded into the same stream pipeline used by Bluetooth imports.
-          </AppText>
-          <AppInput
-            label="Export JSON"
-            placeholder='{"samples":[{"metric":"exercise.hr","ts":1739836800000,"value":72}]}'
-            value={iphonePayload}
-            onChangeText={setIphonePayload}
-            multiline
-            numberOfLines={8}
-            autoCapitalize="none"
-            style={styles.importInput}
-          />
-          <AppButton
-            title="Parse export"
-            onPress={handleParseIphonePayload}
-            loading={iphoneImportLoading}
-            style={{ width: '100%' }}
-          />
-          <AppButton
-            title="Upload to server"
-            variant="ghost"
-            onPress={handleUploadIphoneImport}
-            loading={iphoneUploadLoading}
-            disabled={!iphoneBatches.length}
-            style={{ width: '100%' }}
-          />
-          <Pressable onPress={handleClearIphoneImport} style={styles.clearLink}>
-            <AppText variant="muted" style={styles.clearLinkText}>
-              Clear
-            </AppText>
-          </Pressable>
-          {iphoneImportFeedback ? (
-            <AppText variant="muted" style={styles.helper}>
-              {iphoneImportFeedback}
-            </AppText>
-          ) : null}
-          {iphoneBatches.length ? (
-            <>
-              <View style={styles.metricsRow}>
-                <Metric label="Metrics" value={formatNumber(iphoneBatches.length)} />
-                <Metric label="Samples" value={formatNumber(importedSampleCount)} />
-                <Metric
-                  label="Preview"
-                  value={selectedImportBatch ? toMetricLabel(selectedImportBatch.metric) : '--'}
-                />
-              </View>
-              {importWindow ? (
-                <AppText variant="muted" style={styles.helper}>
-                  Time window: {importWindow}
-                </AppText>
-              ) : null}
-              <View style={styles.profileRow}>
-                {visibleImportBatches.map((batch) => (
-                  <AppButton
-                    key={batch.metric}
-                    title={toMetricLabel(batch.metric)}
-                    variant={selectedImportMetric === batch.metric ? 'secondary' : 'ghost'}
-                    onPress={() => setSelectedImportMetric(batch.metric)}
-                    style={styles.metricChipButton}
-                  />
-                ))}
-              </View>
-              {iphoneBatches.length > visibleImportBatches.length ? (
-                <AppText variant="muted" style={styles.helper}>
-                  +{iphoneBatches.length - visibleImportBatches.length} more metrics parsed.
-                </AppText>
-              ) : null}
-              <TrendChart
-                data={selectedImportTrend}
-                yLabel={selectedImportBatch ? toMetricLabel(selectedImportBatch.metric) : 'Value'}
-              />
-            </>
-          ) : null}
-        </Card>
-      </View>
-
-      {/* Server stream card */}
-      <View style={styles.devCard}>
-        <Card style={styles.devCardInner}>
-          <AppText style={styles.devEyebrow}>SERVER STREAM</AppText>
-          <SectionHeader title="Server stream" subtitle={`Metric: ${config.metric}`} />
-          {serverTrend.length === 0 ? (
-            <View style={styles.emptyChart}>
-              <AppText style={styles.emptyChartIcon}>◌</AppText>
-              <AppText variant="muted">No stream data recorded yet</AppText>
-            </View>
-          ) : (
-            <TrendChart data={serverTrend} yLabel="Server value" />
-          )}
-          <AppButton
-            title="Refresh data"
-            onPress={() => refetch()}
-            loading={isRefetching}
-            style={styles.refreshButton}
-          />
-          {streamHistory ? (
-            <AppText variant="muted" style={styles.helper}>
-              Showing {streamHistory.points.length} points from the last window.
-            </AppText>
-          ) : (
-            <AppText variant="muted" style={styles.helper}>
-              Trigger uploads to populate server-side samples.
-            </AppText>
-          )}
-        </Card>
-      </View>
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
 
 const pillStyles = StyleSheet.create({
   pill: {
@@ -792,6 +440,12 @@ const pillStyles = StyleSheet.create({
 const metricStyles = StyleSheet.create({
   metric: {
     flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  compactValue: {
+    fontSize: 15,
+    lineHeight: 20,
   },
 });
 
@@ -825,35 +479,89 @@ const toggleStyles = StyleSheet.create({
   },
 });
 
+const deviceRowStyles = StyleSheet.create({
+  row: {
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: spacing.sm,
+  },
+  info: {
+    minWidth: 0,
+    gap: 4,
+  },
+  name: {
+    minWidth: 0,
+  },
+  sigRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  bars: {
+    fontSize: 11,
+    letterSpacing: 1,
+  },
+  sigLabel: {
+    fontSize: 12,
+  },
+  id: {
+    fontSize: 10,
+    opacity: 0.5,
+  },
+  connectBtn: {
+    width: '100%',
+  },
+});
+
 const styles = StyleSheet.create({
+  statusStack: {
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
   statusPills: {
     flexDirection: 'row',
     gap: spacing.xs,
     flexWrap: 'wrap',
   },
-  deviceMeta: {
-    marginTop: spacing.xs,
-    marginBottom: spacing.xs,
+  profileSummary: {
+    lineHeight: 20,
+  },
+  connectedPanel: {
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
     gap: 4,
   },
-  disconnectBtn: {
-    marginTop: spacing.sm,
-  },
-  scanRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  scanBtn: {
-    flex: 1,
+  fullWidthButton: {
+    width: '100%',
   },
   scanningLabel: {
+    marginTop: spacing.xs,
     fontSize: 13,
   },
   deviceList: {
     marginTop: spacing.sm,
-    maxHeight: 340,
+    maxHeight: 360,
+  },
+  deviceListContent: {
+    gap: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  emptyState: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: spacing.xs,
   },
   helper: {
     marginTop: spacing.xs,
@@ -861,18 +569,6 @@ const styles = StyleSheet.create({
   error: {
     marginTop: spacing.sm,
     color: colors.danger,
-  },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: spacing.sm,
-  },
-  metricsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
   },
   profileLabel: {
     marginBottom: spacing.xs,
@@ -890,25 +586,80 @@ const styles = StyleSheet.create({
   profileDescription: {
     marginBottom: spacing.sm,
   },
-  metricChipButton: {
-    flexGrow: 1,
-    minWidth: 104,
+  configSummary: {
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: spacing.xs,
   },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginVertical: spacing.sm,
+  configSummaryText: {
+    lineHeight: 20,
   },
-  importHint: {
-    marginBottom: spacing.sm,
-  },
-  importInput: {
-    minHeight: 150,
-    textAlignVertical: 'top',
-    borderColor: '#1e3a5f',
-  },
-  refreshButton: {
+  switchRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginTop: spacing.sm,
+    gap: spacing.sm,
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+    marginTop: spacing.sm,
+  },
+  liveBanner: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  liveBannerActive: {
+    borderColor: colors.accent + '66',
+    backgroundColor: colors.accent + '14',
+  },
+  liveBannerInactive: {
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  liveBannerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginTop: 6,
+  },
+  liveBannerDotActive: {
+    backgroundColor: colors.accent,
+  },
+  liveBannerDotInactive: {
+    backgroundColor: colors.muted,
+  },
+  liveBannerContent: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  liveBannerText: {
+    lineHeight: 19,
+  },
+  rawPayload: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: spacing.xs,
+  },
+  rawPayloadText: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   emptyChart: {
     alignItems: 'center',
@@ -918,29 +669,5 @@ const styles = StyleSheet.create({
   emptyChartIcon: {
     fontSize: 28,
     color: colors.muted,
-  },
-  devCard: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderLeftWidth: 3,
-    borderLeftColor: colors.warning + '66',
-  },
-  devCardInner: {
-    backgroundColor: colors.glass,
-  },
-  devEyebrow: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.6,
-    color: colors.warning,
-    marginBottom: spacing.xs,
-  },
-  clearLink: {
-    alignItems: 'center',
-    paddingVertical: spacing.xs,
-  },
-  clearLinkText: {
-    color: colors.muted,
-    fontSize: 13,
   },
 });

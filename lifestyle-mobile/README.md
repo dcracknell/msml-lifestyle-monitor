@@ -126,31 +126,63 @@ The app is managed by Expo, so you can develop on any platform (no macOS require
 
 ## Troubleshooting
 
-If iOS shows `No script URL provided`, launch through the dev client so Metro is attached:
+If iOS shows `No script URL provided`, rebuild the app once so the embedded fallback bundle is refreshed:
 
 ```bash
-npm run ios:dev
+npm run ios
 ```
 
-If you're building straight onto a physical iPhone, `npm run ios:device` now starts Metro automatically for Debug builds before launching the app.
+The default iOS scripts now use the embedded `main.jsbundle` in Debug builds, so normal simulator and device launches do not depend on Metro anymore.
+
+If you're building straight onto a physical iPhone, `npm run ios:device` now builds, installs, and launches from the embedded bundle by default.
+
+After the first successful device install, you usually do not need to rebuild native code for JS-only changes. Use the faster launch-only path to reuse the installed dev build:
+
+```bash
+npm run ios:device:launch
+```
+
+If you want live reload on a physical iPhone, use the explicit Metro-enabled flow:
+
+```bash
+npm run ios:device:dev
+```
+
+If Metro gets confused during that opt-in dev flow, clear its cache and rebuild:
+
+```bash
+npm run ios:device:dev:clear
+```
+
+If you want to relaunch the already-installed device build with Metro, use:
+
+```bash
+npm run ios:device:launch:dev
+```
+
+If you want to reinstall the most recently built `.app` onto the phone without running `xcodebuild` again, use:
+
+```bash
+npm run ios:device:install
+```
 
 If a device build fails with `CodeSign ... resource fork, Finder information, or similar detritus not allowed`, use `npm run ios:device` instead of `npx expo run:ios --device`. The helper builds in `~/Library/Caches/msml-lifestyle/ios-device-build` so macOS file-provider metadata from synced folders like `Documents` does not break codesign.
 
 If `npm run ios:device` says the launch was denied because the device is locked, the build and install already worked. Unlock the iPhone and either tap the app icon manually or rerun `npm run ios:device -- --no-install`.
 
-If that still fails, clear Metro cache and relaunch:
+If you want the simulator to use Metro for hot reload instead of the embedded bundle, use:
 
 ```bash
-npm run ios:dev:clear
+npm run ios:dev
 ```
 
-For device-only network issues, try the tunnel host mode:
+For device-only network issues while using the Metro dev flow, try the tunnel host mode:
 
 ```bash
-npm run ios:device -- --host tunnel --bundler-clear
+npm run ios:device:dev -- --host tunnel --bundler-clear
 ```
 
-If you launched from Xcode, start Metro first in `lifestyle-mobile`:
+If you launched from Xcode and want live reload, start Metro first in `lifestyle-mobile`:
 
 ```bash
 npm run dev-client

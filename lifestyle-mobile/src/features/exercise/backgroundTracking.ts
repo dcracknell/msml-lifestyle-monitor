@@ -9,6 +9,13 @@ import {
   loadStoredExerciseTrackingSnapshot,
   saveExerciseTrackingSnapshot,
 } from './trackingState';
+import { updateWorkoutNotification } from './workoutNotification';
+import { buildWorkoutLiveActivityPropsFromSnapshot, updateWorkoutLiveActivity } from './workoutLiveActivity';
+import { buildCurrentRunWidgetPropsFromTracking, syncCurrentRunWidget } from './currentRunWidget';
+
+// Throttle background notification updates to once per minute
+let lastBgNotificationTs = 0;
+const BG_NOTIFICATION_INTERVAL_MS = 60_000;
 
 export const EXERCISE_BACKGROUND_LOCATION_TASK = 'msml.exercise.background-location';
 
@@ -52,7 +59,12 @@ if (!TaskManager.isTaskDefined(EXERCISE_BACKGROUND_LOCATION_TASK)) {
       return;
     }
 
-    const snapshot = await loadStoredExerciseTrackingSnapshot();
+    let snapshot: ExerciseTrackingSnapshot | null = null;
+    try {
+      snapshot = await loadStoredExerciseTrackingSnapshot();
+    } catch {
+      return;
+    }
     if (!snapshot || snapshot.status !== 'recording') {
       return;
     }
@@ -66,7 +78,28 @@ if (!TaskManager.isTaskDefined(EXERCISE_BACKGROUND_LOCATION_TASK)) {
       nextSnapshot = applyLocationPointToTrackingSnapshot(nextSnapshot, point);
     });
 
-    await saveExerciseTrackingSnapshot(nextSnapshot);
+    try {
+      await saveExerciseTrackingSnapshot(nextSnapshot);
+    } catch {
+      // Storage write failed — continue without saving this batch
+    }
+
+    // Update the live workout notification and Live Activity while the screen is locked (throttled)
+    const now = Date.now();
+    if (now - lastBgNotificationTs >= BG_NOTIFICATION_INTERVAL_MS) {
+      lastBgNotificationTs = now;
+      const liveProps = buildWorkoutLiveActivityPropsFromSnapshot(nextSnapshot);
+      const widgetProps = buildCurrentRunWidgetPropsFromTracking(nextSnapshot, {
+        sportLabel: nextSnapshot.sportId.charAt(0).toUpperCase() + nextSnapshot.sportId.slice(1),
+        paceSeconds: nextSnapshot.phoneCurrentPaceSeconds ?? nextSnapshot.phonePaceSeconds,
+        calories: null,
+      });
+      await Promise.all([
+        updateWorkoutNotification(nextSnapshot).catch(() => {}),
+        updateWorkoutLiveActivity(liveProps).catch(() => {}),
+        Promise.resolve(syncCurrentRunWidget(widgetProps)).catch(() => {}),
+      ]);
+    }
   });
 }
 

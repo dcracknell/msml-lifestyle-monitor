@@ -6,6 +6,25 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const {
+  detectAppleTeamId,
+  getDebugBundlePreflightIssues,
+  syncIosNative,
+} = require('./sync-ios-native');
+
+// Suppress Expo's built-in dotenvx loading — app.config.js loads .env itself.
+// Without this, Expo calls dotenvx multiple times and prints tip spam to stdout.
+process.env.EXPO_NO_DOTENV = '1';
+if (!/utf-?8/i.test(process.env.LANG || '')) {
+  process.env.LANG = 'en_US.UTF-8';
+}
+if (!/utf-?8/i.test(process.env.LC_ALL || '')) {
+  process.env.LC_ALL = process.env.LANG;
+}
+if (!/utf-?8/i.test(process.env.LC_CTYPE || '')) {
+  process.env.LC_CTYPE = process.env.LANG;
+}
+
 const projectRoot = path.resolve(__dirname, '..');
 const iosRoot = path.join(projectRoot, 'ios');
 const workspacePath = path.join(iosRoot, 'MSMLLifestyle.xcworkspace');
@@ -30,6 +49,24 @@ const defaultBundleId =
   'com.dcracknell.msml.lifestyle';
 const npxCommand = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
+function getEmbeddedMainBundlePath(appPath) {
+  return path.join(appPath, 'main.jsbundle');
+}
+
+function getEmbeddedMainBundleStats(bundlePath) {
+  try {
+    const stats = fs.statSync(bundlePath);
+    return stats.isFile() ? stats : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasEmbeddedMainBundle(bundlePath) {
+  const stats = getEmbeddedMainBundleStats(bundlePath);
+  return Boolean(stats && stats.size > 0);
+}
+
 function printUsage() {
   console.log(`Usage: npm run ios:device -- [options]
 
@@ -37,13 +74,15 @@ Options:
   -d, --device <name-or-udid>   Device name, UDID, or CoreDevice identifier
       --configuration <name>    Xcode configuration to build (default: Debug)
       --host <lan|tunnel|localhost>
-                               Metro hosting mode for Debug builds (default: lan)
-      --port <number>           Metro port for Debug builds (default: 8081)
-      --bundler-clear           Clear Metro cache before starting it
+                               Metro hosting mode when using --with-bundler (default: lan)
+      --port <number>           Metro port when using --with-bundler (default: 8081)
+      --no-build               Skip xcodebuild and reuse the last built / installed app
+      --bundler-clear           Clear Metro cache before starting it (implies --with-bundler)
       --no-build-cache          Remove the local device DerivedData folder first
-      --no-bundler              Skip starting Metro for Debug launches
-      --no-install              Build only, skip app install
-      --no-launch               Install only, skip app launch
+      --with-bundler            Start Metro and use the live-reload dev-client flow
+      --no-bundler              Force the embedded bundle flow (default)
+      --no-install              Skip app install
+      --no-launch               Skip app launch
   -h, --help                    Show this help text
 `);
 }
@@ -51,6 +90,10 @@ Options:
 function fail(message) {
   console.error(message);
   process.exit(1);
+}
+
+function formatIssueList(issues) {
+  return issues.map((issue) => `- ${issue}`).join('\n');
 }
 
 function quoteArg(value) {
@@ -74,6 +117,47 @@ function run(command, args) {
   if (typeof result.status === 'number' && result.status !== 0) {
     process.exit(result.status);
   }
+}
+
+function runStreaming(command, args, options = {}) {
+  const { cwd = projectRoot, env = process.env, outputLimit = 200000 } = options;
+  console.log(`$ ${command} ${args.map(quoteArg).join(' ')}`);
+
+  return new Promise((resolve, reject) => {
+    let combinedOutput = '';
+    const appendOutput = (chunk) => {
+      combinedOutput += chunk;
+      if (combinedOutput.length > outputLimit) {
+        combinedOutput = combinedOutput.slice(-outputLimit);
+      }
+    };
+
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      process.stdout.write(chunk);
+      appendOutput(text);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      process.stderr.write(chunk);
+      appendOutput(text);
+    });
+
+    child.on('error', reject);
+    child.on('close', (code) => {
+      resolve({
+        code: typeof code === 'number' ? code : 1,
+        output: combinedOutput,
+      });
+    });
+  });
 }
 
 function runJson(command, args, options = {}) {
@@ -117,9 +201,10 @@ function parseArgs(argv) {
     device: null,
     host: 'lan',
     port: defaultMetroPort,
+    noBuild: false,
     bundlerClear: false,
     noBuildCache: false,
-    noBundler: false,
+    noBundler: true,
     noInstall: false,
     noLaunch: false,
   };
@@ -159,11 +244,18 @@ function parseArgs(argv) {
           fail('Port must be a positive integer.');
         }
         break;
+      case '--no-build':
+        options.noBuild = true;
+        break;
       case '--bundler-clear':
         options.bundlerClear = true;
+        options.noBundler = false;
         break;
       case '--no-build-cache':
         options.noBuildCache = true;
+        break;
+      case '--with-bundler':
+        options.noBundler = false;
         break;
       case '--no-bundler':
         options.noBundler = true;
@@ -315,6 +407,120 @@ function sleep(ms) {
   });
 }
 
+function isBusyDestinationBuildError(output) {
+  return (
+    /Timed out waiting for all destinations matching the provided destination specifier/i.test(
+      output
+    ) &&
+    /Device is busy \(Connecting to /i.test(output)
+  );
+}
+
+async function buildForDevice(deviceUdid, deviceName, buildArgs) {
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (attempt === 1) {
+      console.log(`Building for ${deviceName}...`);
+    } else {
+      console.log(`Retrying build for ${deviceName} (${attempt}/${maxAttempts})...`);
+    }
+
+    const result = await runStreaming('xcodebuild', buildArgs);
+    if (result.code === 0) {
+      return;
+    }
+
+    if (attempt < maxAttempts && isBusyDestinationBuildError(result.output)) {
+      console.log(
+        `${deviceName} is still connecting to Xcode. Waiting 15 seconds before retrying the build...`
+      );
+      await sleep(15000);
+      ensureDeviceReady(deviceUdid, deviceName);
+      continue;
+    }
+
+    if (isBusyDestinationBuildError(result.output)) {
+      fail(
+        `${deviceName} stayed busy while Xcode was trying to connect.\n` +
+          `Unlock the phone, keep it awake on the home screen, leave it plugged in, then rerun the same command.`
+      );
+    }
+
+    process.exit(result.code);
+  }
+}
+
+function withCleanBuildActions(buildArgs) {
+  const nextArgs = [...buildArgs];
+  while (nextArgs.length > 0 && ['clean', 'build'].includes(nextArgs[nextArgs.length - 1])) {
+    nextArgs.pop();
+  }
+  nextArgs.push('clean', 'build');
+  return nextArgs;
+}
+
+function getMissingEmbeddedBundleMessage(options, appPath, embeddedMainBundlePath) {
+  return options.noBuild
+    ? `The cached iPhone build at ${appPath} does not contain an embedded main.jsbundle.\nRun \`npm run ios:device\` once to rebuild the app before installing or launching it again.`
+    : `Build finished, but ${embeddedMainBundlePath} was not created.\nInstalling this Debug iPhone build would recreate the red screen because the embedded JS bundle is missing.`;
+}
+
+async function ensureEmbeddedBundleReady({
+  appPath,
+  buildArgs,
+  deviceName,
+  deviceUdid,
+  embeddedMainBundlePath,
+  options,
+}) {
+  const expectsEmbeddedBundle = isDebugConfiguration(options.configuration) && options.noBundler;
+  if (!expectsEmbeddedBundle) {
+    return;
+  }
+
+  if (!options.noBuild) {
+    const debugBundlePreflightIssues = getDebugBundlePreflightIssues();
+    if (debugBundlePreflightIssues.length > 0) {
+      fail(
+        `Embedded-bundle preflight failed before install:\n${formatIssueList(debugBundlePreflightIssues)}`
+      );
+    }
+    console.log('Embedded-bundle preflight passed. Install will stop if main.jsbundle is missing.');
+  }
+
+  if (hasEmbeddedMainBundle(embeddedMainBundlePath)) {
+    console.log(`Verified embedded Debug JS bundle at ${embeddedMainBundlePath}.`);
+    return;
+  }
+
+  if (options.noBuild || !buildArgs) {
+    fail(getMissingEmbeddedBundleMessage(options, appPath, embeddedMainBundlePath));
+  }
+
+  console.log(
+    'Embedded Debug JS bundle is missing after the build. Repairing the native bundle setup and rebuilding once before install...'
+  );
+  syncIosNative(process.env);
+
+  const repairPreflightIssues = getDebugBundlePreflightIssues();
+  if (repairPreflightIssues.length > 0) {
+    fail(
+      `Automatic repair could not restore the iPhone bundle setup:\n${formatIssueList(repairPreflightIssues)}`
+    );
+  }
+
+  await buildForDevice(deviceUdid, deviceName, withCleanBuildActions(buildArgs));
+
+  if (!hasEmbeddedMainBundle(embeddedMainBundlePath)) {
+    fail(
+      `${getMissingEmbeddedBundleMessage(options, appPath, embeddedMainBundlePath)}\nAutomatic repair was attempted, but install was cancelled because the rebuilt app is still missing main.jsbundle.`
+    );
+  }
+
+  console.log(`Repaired and verified embedded Debug JS bundle at ${embeddedMainBundlePath}.`);
+}
+
 function isMetroRunning(port) {
   return new Promise((resolve) => {
     const request = http.get(
@@ -342,6 +548,78 @@ function isMetroRunning(port) {
       resolve(false);
     });
   });
+}
+
+function getMetroProcessIds(port) {
+  const result = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: process.env,
+  });
+
+  if (result.error || typeof result.status !== 'number' || result.status !== 0) {
+    return [];
+  }
+
+  return [...new Set((result.stdout || '')
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean))];
+}
+
+function getProcessCommand(pid) {
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: process.env,
+  });
+
+  if (result.error || typeof result.status !== 'number' || result.status !== 0) {
+    return '';
+  }
+
+  return (result.stdout || '').trim();
+}
+
+async function ensureEmbeddedLaunchUsesBundle(port) {
+  if (!(await isMetroRunning(port))) {
+    return;
+  }
+
+  const metroPids = getMetroProcessIds(port).filter((pid) => {
+    const command = getProcessCommand(pid);
+    return /(?:^|\s)(?:npx\s+)?expo\s+start\b|node .*expo start\b/i.test(command);
+  });
+
+  if (!metroPids.length) {
+    fail(
+      `Port ${port} is already in use, and the running process does not look like Metro.\n` +
+        'Stop that process or rerun with `--with-bundler` if you intend to use live reload.'
+    );
+  }
+
+  console.log(`Stopping Metro on port ${port} so the embedded Debug bundle is used...`);
+  for (const pid of metroPids) {
+    try {
+      process.kill(Number(pid), 'SIGTERM');
+    } catch {
+      // Ignore races where Metro exits between detection and termination.
+    }
+  }
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 5000) {
+    if (!(await isMetroRunning(port))) {
+      console.log('Metro stopped. Launch will use the embedded bundle.');
+      return;
+    }
+    await sleep(250);
+  }
+
+  fail(
+    `Metro is still running on port ${port}, so the device would keep preferring the dev bundle.\n` +
+      'Stop Metro manually or rerun with `--with-bundler` if you want the live-reload flow.'
+  );
 }
 
 async function waitForMetro(port, timeoutMs) {
@@ -400,7 +678,9 @@ async function main() {
   ensureDeviceReady(deviceUdid, deviceName);
 
   fs.mkdirSync(path.dirname(derivedDataPath), { recursive: true });
-  if (options.noBuildCache) {
+  if (options.noBuildCache && options.noBuild) {
+    console.warn('Ignoring --no-build-cache because --no-build was supplied.');
+  } else if (options.noBuildCache) {
     fs.rmSync(derivedDataPath, { recursive: true, force: true });
     if (legacyDerivedDataPath !== derivedDataPath) {
       fs.rmSync(legacyDerivedDataPath, { recursive: true, force: true });
@@ -408,31 +688,6 @@ async function main() {
   }
 
   console.log(`Using device DerivedData at ${derivedDataPath}`);
-
-  const buildArgs = [
-    '-workspace',
-    workspacePath,
-    '-configuration',
-    options.configuration,
-    '-scheme',
-    scheme,
-    '-destination',
-    `id=${deviceUdid}`,
-    '-derivedDataPath',
-    derivedDataPath,
-    '-allowProvisioningUpdates',
-    '-allowProvisioningDeviceRegistration',
-  ];
-
-  if (options.noBuildCache) {
-    buildArgs.push('clean', 'build');
-  } else {
-    buildArgs.push('build');
-  }
-
-  console.log(`Building for ${deviceName}...`);
-  run('xcodebuild', buildArgs);
-
   const appPath = path.join(
     derivedDataPath,
     'Build',
@@ -440,9 +695,65 @@ async function main() {
     `${options.configuration}-iphoneos`,
     'MSMLLifestyle.app'
   );
+  const embeddedMainBundlePath = getEmbeddedMainBundlePath(appPath);
+  const expectsEmbeddedBundle = isDebugConfiguration(options.configuration) && options.noBundler;
+  let buildArgs = null;
+
+  if (!options.noBuild) {
+    syncIosNative(process.env);
+
+    buildArgs = [
+      '-workspace',
+      workspacePath,
+      '-configuration',
+      options.configuration,
+      '-scheme',
+      scheme,
+      '-destination',
+      `id=${deviceUdid}`,
+      '-derivedDataPath',
+      derivedDataPath,
+      '-allowProvisioningUpdates',
+      '-allowProvisioningDeviceRegistration',
+    ];
+
+    const detectedAppleTeamId =
+      process.env.APPLE_TEAM_ID || (process.env.MSML_SKIP_APPLE_TEAM_AUTO_DETECT === '1'
+        ? null
+        : detectAppleTeamId());
+    if (detectedAppleTeamId) {
+      buildArgs.push(`DEVELOPMENT_TEAM=${detectedAppleTeamId}`);
+      buildArgs.push('CODE_SIGN_STYLE=Automatic');
+    }
+
+    if (options.noBuildCache) {
+      buildArgs.push('clean', 'build');
+    } else {
+      buildArgs.push('build');
+    }
+
+    await buildForDevice(deviceUdid, deviceName, buildArgs);
+  }
 
   if (!fs.existsSync(appPath)) {
-    fail(`Build finished but the app bundle was not found at ${appPath}`);
+    fail(
+      options.noBuild
+        ? `No cached app bundle was found at ${appPath}.\nRun \`npm run ios:device\` once to create and install a device build, then use the faster no-build path.`
+        : `Build finished but the app bundle was not found at ${appPath}`
+    );
+  }
+
+  await ensureEmbeddedBundleReady({
+    appPath,
+    buildArgs,
+    deviceName,
+    deviceUdid,
+    embeddedMainBundlePath,
+    options,
+  });
+
+  if (expectsEmbeddedBundle) {
+    await ensureEmbeddedLaunchUsesBundle(options.port);
   }
 
   const needsBundler = isDebugConfiguration(options.configuration) && !options.noLaunch && !options.noBundler;
@@ -451,16 +762,20 @@ async function main() {
   }
 
   if (!options.noInstall) {
-    console.log(`Installing on ${deviceName}...`);
+    console.log(
+      options.noBuild
+        ? `Installing cached build on ${deviceName}...`
+        : `Installing on ${deviceName}...`
+    );
     run('xcrun', ['devicectl', 'device', 'install', 'app', '--device', deviceUdid, appPath]);
   }
 
-  if (!options.noInstall && !options.noLaunch) {
+  if (!options.noLaunch) {
     if (isDeviceLocked(deviceUdid)) {
       fail(
         `${deviceName} is locked, so the app could not be launched automatically.\n` +
           `The app is already installed. Unlock the phone, then either tap the app icon manually or rerun:\n\n` +
-          `npm run ios:device -- --no-install`
+          `${options.noBuild ? 'npm run ios:device:launch' : 'npm run ios:device -- --no-install'}`
       );
     }
 
@@ -471,10 +786,13 @@ async function main() {
   console.log(`Finished for ${deviceName}.`);
   if (needsBundler) {
     console.log(`Debug build is connected to Metro on port ${options.port}.`);
+    if (options.noBuild && options.noInstall) {
+      console.log('Reused the already-installed dev build for a faster launch.');
+    }
   } else if (isDebugConfiguration(options.configuration) && options.noLaunch) {
     console.log('Skipped Metro startup because the app was not launched.');
-  } else if (isDebugConfiguration(options.configuration) && options.noBundler) {
-    console.log('Metro startup was skipped because --no-bundler was supplied.');
+  } else if (expectsEmbeddedBundle) {
+    console.log('Launched from the embedded Debug bundle. Metro is now optional, not required.');
   }
 }
 

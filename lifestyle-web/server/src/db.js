@@ -530,6 +530,11 @@ function ensureActivityTables() {
       vo2max_estimate REAL,
       training_load REAL,
       strava_activity_id INTEGER,
+      route_summary_polyline TEXT,
+      route_start_lat REAL,
+      route_start_lng REAL,
+      route_end_lat REAL,
+      route_end_lng REAL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users (id),
       UNIQUE (user_id, strava_activity_id)
@@ -575,6 +580,26 @@ function ensureActivitySessionMetadataColumns() {
 }
 
 ensureActivitySessionMetadataColumns();
+
+function ensureActivitySessionRouteColumns() {
+  const columns = db.prepare("PRAGMA table_info(activity_sessions)").all();
+  const requiredColumns = [
+    ['route_summary_polyline', 'TEXT'],
+    ['route_start_lat', 'REAL'],
+    ['route_start_lng', 'REAL'],
+    ['route_end_lat', 'REAL'],
+    ['route_end_lng', 'REAL'],
+  ];
+
+  requiredColumns.forEach(([name, type]) => {
+    const exists = columns.some((column) => column.name === name);
+    if (!exists) {
+      db.prepare(`ALTER TABLE activity_sessions ADD COLUMN ${name} ${type}`).run();
+    }
+  });
+}
+
+ensureActivitySessionRouteColumns();
 
 function ensureSleepStagesTable() {
   db.prepare(

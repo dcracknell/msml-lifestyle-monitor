@@ -89,7 +89,12 @@ const sessionsStatement = db.prepare(
           perceived_effort AS perceivedEffort,
           vo2max_estimate  AS vo2maxEstimate,
           training_load    AS trainingLoad,
-          strava_activity_id AS stravaActivityId
+          strava_activity_id AS stravaActivityId,
+          route_summary_polyline AS routeSummaryPolyline,
+          route_start_lat AS routeStartLat,
+          route_start_lng AS routeStartLng,
+          route_end_lat AS routeEndLat,
+          route_end_lng AS routeEndLng
      FROM activity_sessions
     WHERE user_id = ?
     ORDER BY datetime(start_time) DESC
@@ -200,9 +205,14 @@ const upsertStravaSessionStatement = db.prepare(
       perceived_effort,
       vo2max_estimate,
       training_load,
-      strava_activity_id
+      strava_activity_id,
+      route_summary_polyline,
+      route_start_lat,
+      route_start_lng,
+      route_end_lat,
+      route_end_lng
     )
-    VALUES (?, 'strava', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, 'strava', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, strava_activity_id) DO UPDATE SET
       source_id = excluded.source_id,
       name = excluded.name,
@@ -220,7 +230,12 @@ const upsertStravaSessionStatement = db.prepare(
       calories = excluded.calories,
       perceived_effort = excluded.perceived_effort,
       training_load = excluded.training_load,
-      vo2max_estimate = excluded.vo2max_estimate`
+      vo2max_estimate = excluded.vo2max_estimate,
+      route_summary_polyline = excluded.route_summary_polyline,
+      route_start_lat = excluded.route_start_lat,
+      route_start_lng = excluded.route_start_lng,
+      route_end_lat = excluded.route_end_lat,
+      route_end_lng = excluded.route_end_lng`
 );
 
 const sessionByStravaStatement = db.prepare(
@@ -367,6 +382,21 @@ function coerceNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function coercePolyline(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function normalizeLatLngPair(value) {
+  if (!Array.isArray(value) || value.length < 2) {
+    return [null, null];
+  }
+  return [coerceNumber(value[0]), coerceNumber(value[1])];
+}
+
 function hasPersonalStravaConfig(settings = {}) {
   return Boolean(settings?.clientId && settings?.clientSecret && settings?.redirectUri);
 }
@@ -509,6 +539,11 @@ function normalizeSession(row) {
     vo2maxEstimate: coerceNumber(row.vo2maxEstimate),
     trainingLoad: coerceNumber(row.trainingLoad),
     stravaActivityId: row.stravaActivityId,
+    routeSummaryPolyline: coercePolyline(row.routeSummaryPolyline),
+    routeStartLat: coerceNumber(row.routeStartLat),
+    routeStartLng: coerceNumber(row.routeStartLng),
+    routeEndLat: coerceNumber(row.routeEndLat),
+    routeEndLng: coerceNumber(row.routeEndLng),
   };
 }
 
@@ -746,6 +781,23 @@ async function saveStravaActivity(userId, activity, accessToken) {
   const calories = coerceNumber(activity.calories || activity.kilojoules);
   const sourceId = activity.external_id || activity.upload_id || activity.id;
   const startTime = activity.start_date || activity.start_date_local;
+  let detail = null;
+
+  try {
+    detail = await fetchActivityDetails(accessToken, activity.id);
+  } catch (error) {
+    console.error('Unable to refresh Strava activity detail', error.message);
+  }
+
+  const routeSummaryPolyline =
+    coercePolyline(activity?.map?.summary_polyline) ||
+    coercePolyline(detail?.map?.summary_polyline);
+  const [routeStartLat, routeStartLng] = normalizeLatLngPair(
+    activity?.start_latlng || detail?.start_latlng
+  );
+  const [routeEndLat, routeEndLng] = normalizeLatLngPair(
+    activity?.end_latlng || detail?.end_latlng
+  );
 
   upsertStravaSessionStatement.run(
     userId,
@@ -766,7 +818,12 @@ async function saveStravaActivity(userId, activity, accessToken) {
     perceivedEffort,
     null,
     trainingLoad,
-    activity.id
+    activity.id,
+    routeSummaryPolyline,
+    routeStartLat,
+    routeStartLng,
+    routeEndLat,
+    routeEndLng
   );
 
   const sessionRow = sessionByStravaStatement.get(userId, activity.id);
@@ -774,30 +831,25 @@ async function saveStravaActivity(userId, activity, accessToken) {
     return null;
   }
 
-  try {
-    const detail = await fetchActivityDetails(accessToken, activity.id);
-    if (detail && Array.isArray(detail.splits_metric) && detail.splits_metric.length) {
-      const splits = detail.splits_metric
-        .map((split, index) => {
-          const distanceMeters = coerceNumber(split.distance) ? Number(split.distance) * 1000 : null;
-          const moving = coerceNumber(split.moving_time);
-          const paceSeconds = computePace(distanceMeters, moving) || coerceNumber(split.pace);
-          return {
-            splitIndex: split.split || index + 1,
-            distance: distanceMeters,
-            movingTime: moving,
-            pace: paceSeconds ? Math.round(paceSeconds) : null,
-            elevation: coerceNumber(split.elevation_difference),
-            heartRate: coerceNumber(split.average_heartrate),
-          };
-        })
-        .filter((split) => split.distance && split.movingTime);
-      if (splits.length) {
-        replaceSplitsTransaction(sessionRow.id, splits);
-      }
+  if (detail && Array.isArray(detail.splits_metric) && detail.splits_metric.length) {
+    const splits = detail.splits_metric
+      .map((split, index) => {
+        const distanceMeters = coerceNumber(split.distance) ? Number(split.distance) * 1000 : null;
+        const moving = coerceNumber(split.moving_time);
+        const paceSeconds = computePace(distanceMeters, moving) || coerceNumber(split.pace);
+        return {
+          splitIndex: split.split || index + 1,
+          distance: distanceMeters,
+          movingTime: moving,
+          pace: paceSeconds ? Math.round(paceSeconds) : null,
+          elevation: coerceNumber(split.elevation_difference),
+          heartRate: coerceNumber(split.average_heartrate),
+        };
+      })
+      .filter((split) => split.distance && split.movingTime);
+    if (splits.length) {
+      replaceSplitsTransaction(sessionRow.id, splits);
     }
-  } catch (error) {
-    console.error('Unable to refresh Strava splits', error.message);
   }
 
   return sessionRow.id;

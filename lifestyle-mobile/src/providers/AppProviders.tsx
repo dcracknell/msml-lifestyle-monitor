@@ -10,6 +10,7 @@ import { SubjectProvider } from './SubjectProvider';
 import { SyncProvider } from './SyncProvider';
 import { BluetoothProvider } from './BluetoothProvider';
 import { ApiConfigProvider } from './ApiConfigProvider';
+import { WidgetBootstrap } from '../widgets/WidgetBootstrap';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const queryClientRef = useRef(
@@ -29,6 +30,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
       client={queryClientRef.current}
       persistOptions={{ persister: persister.current }}
     >
+      <WidgetBootstrap />
       <ConnectivityProvider>
         <ApiConfigProvider>
           <AuthProvider>

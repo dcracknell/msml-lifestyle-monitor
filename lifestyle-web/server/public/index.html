@@ -10,8 +10,25 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=19" />
+  <link rel="stylesheet" href="/styles.css?v=20" />
   <script src="/vendor/chart.umd.js" defer></script>
+  <style>
+    /* Critical: shown before external CSS loads to prevent white flash */
+    html, body { background: #080f18; margin: 0; }
+    #appLoadingScreen {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+      background: #080f18;
+    }
+    .startup-loading-content { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .startup-loading-spinner {
+      display: block; width: 24px; height: 24px;
+      border: 2px solid #1e3048; border-top-color: #2dd4bf;
+      border-radius: 50%; animation: _spin .7s linear infinite;
+    }
+    @keyframes _spin { to { transform: rotate(360deg); } }
+    .startup-loading-label { font-size: 13px; color: #5a7a99; letter-spacing: .03em; margin: 0; }
+  </style>
 </head>
 
 <body class="app-loading" aria-busy="true">
@@ -105,9 +122,8 @@
           </button>
         </div>
         <div class="nav-divider" role="presentation"></div>
-        <div class="nav-group">
-          <p class="nav-group-label">Account</p>
-        </div>
+
+        
 
         <!-- Nav spacer + footer inside sideNav so data-page clicks are handled -->
         <div class="nav-spacer"></div>
@@ -386,7 +402,7 @@
         </div><!-- /overview subpage -->
 
         <!-- ── Activity subpage ───────────────────────────────────────── -->
-        <div class="subpage hidden" data-subpage="activity">
+        <div class="subpage hidden activity-stream-page" data-subpage="activity">
 
           <!-- 1 · Training Pulse — 6 metric cards -->
           <div class="pulse-row" id="activitySummaryGrid">
@@ -422,11 +438,173 @@
             </article>
           </div>
 
+          <div class="activity-focus-row">
+            <article class="card activity-focus-card">
+              <div class="activity-focus-grid">
+                <div class="activity-focus-map-panel">
+                  <div class="activity-focus-head">
+                    <div>
+                      <p class="section-eyebrow">Run Overview</p>
+                      <h3 class="activity-focus-title" id="activityFocusTitle">Select a run</h3>
+                    </div>
+                    <div class="activity-focus-badges">
+                      <span class="status-chip hidden" id="activityFocusSourceChip"></span>
+                      <span class="status-chip hidden" id="activityFocusRouteChip"></span>
+                    </div>
+                  </div>
+                  <p class="activity-focus-subtitle" id="activityFocusSubtitle">
+                    Choose a run to inspect route shape, pacing behaviour, and training context.
+                  </p>
+
+                  <div class="activity-route-stage" id="activityRouteStage">
+                    <div class="activity-route-grid" aria-hidden="true"></div>
+                    <svg
+                      id="activityRouteSvg"
+                      class="activity-route-svg"
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="xMidYMid meet"
+                      role="img"
+                      aria-label="Selected run route preview">
+                      <defs>
+                        <linearGradient id="activityRouteGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stop-color="#ffb08a"></stop>
+                          <stop offset="100%" stop-color="#fc4c02"></stop>
+                        </linearGradient>
+                        <filter id="activityRouteGlow" x="-50%" y="-50%" width="200%" height="200%">
+                          <feGaussianBlur stdDeviation="2.2" result="blur"></feGaussianBlur>
+                          <feMerge>
+                            <feMergeNode in="blur"></feMergeNode>
+                            <feMergeNode in="SourceGraphic"></feMergeNode>
+                          </feMerge>
+                        </filter>
+                      </defs>
+                      <path id="activityRouteShadow" class="activity-route-shadow" d=""></path>
+                      <path id="activityRoutePath" class="activity-route-path" d=""></path>
+                      <circle id="activityRouteStart" class="activity-route-marker start" cx="0" cy="0" r="0"></circle>
+                      <circle id="activityRouteEnd" class="activity-route-marker end" cx="0" cy="0" r="0"></circle>
+                    </svg>
+                    <div class="activity-route-empty" id="activityRouteEmpty">
+                      <strong>GPS route unavailable</strong>
+                      <span>Sync Strava or log a GPS workout to unlock route mapping.</span>
+                    </div>
+                    <div class="activity-route-legend" id="activityRouteLegend">
+                      <span><i class="activity-route-dot start" aria-hidden="true"></i>Start</span>
+                      <span><i class="activity-route-dot end" aria-hidden="true"></i>Finish</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="activity-focus-side">
+                  <div class="activity-focus-metrics" id="activityFocusMetrics"></div>
+
+                  <div class="activity-focus-insight-card">
+                    <div class="activity-focus-insight-head">
+                      <div>
+                        <p class="section-eyebrow">Run Intelligence</p>
+                        <h4 class="activity-focus-insight-title" id="activityFocusInsightTitle">Ready for analysis</h4>
+                      </div>
+                    </div>
+                    <p class="activity-focus-insight-body" id="activityFocusInsightBody">
+                      Choose a run to see pacing, load, and route context.
+                    </p>
+                    <ul class="activity-focus-highlights" id="activityFocusHighlights">
+                      <li>No run selected yet.</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="activity-widget-row">
+            <article class="card activity-widget-card">
+              <div class="card-header split">
+                <div>
+                  <p class="section-eyebrow">Weekly Goals</p>
+                  <h3 class="card-title">Weekly momentum</h3>
+                </div>
+              </div>
+              <p class="field-hint">
+                Progress toward your weekly running targets based on the sessions currently synced here.
+              </p>
+              <div class="activity-widget-shell">
+                <div class="activity-widget-top">
+                  <div class="activity-widget-dial">
+                    <strong id="activityWidgetPercent">0%</strong>
+                    <span>complete</span>
+                  </div>
+                  <div class="activity-widget-copy">
+                    <p class="section-eyebrow">Current Week</p>
+                    <h4 class="activity-widget-title">Training progress</h4>
+                    <p class="activity-widget-status" id="activityWidgetStatus" aria-live="polite">Awaiting activity data.</p>
+                    <p class="activity-widget-load" id="activityWidgetLoad" aria-live="polite">Training load will appear here.</p>
+                  </div>
+                </div>
+
+                <div class="activity-widget-metric">
+                  <div class="activity-widget-metric-header">
+                    <span class="activity-widget-metric-label">Distance</span>
+                    <span class="activity-widget-metric-value" id="activityWidgetDistance">0.0 / 25.0 km</span>
+                  </div>
+                  <div class="activity-widget-bar">
+                    <span
+                      id="activityWidgetDistanceBar"
+                      role="progressbar"
+                      aria-label="Distance goal progress"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="0"></span>
+                  </div>
+                </div>
+
+                <div class="activity-widget-metric">
+                  <div class="activity-widget-metric-header">
+                    <span class="activity-widget-metric-label">Duration</span>
+                    <span class="activity-widget-metric-value" id="activityWidgetDuration">0m / 2h 30m</span>
+                  </div>
+                  <div class="activity-widget-bar activity-widget-bar-alt">
+                    <span
+                      id="activityWidgetDurationBar"
+                      role="progressbar"
+                      aria-label="Duration goal progress"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="0"></span>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="card activity-widget-settings">
+              <div class="card-header split">
+                <div>
+                  <p class="section-eyebrow">Target Controls</p>
+                  <h3 class="card-title">Set weekly volume goals</h3>
+                </div>
+              </div>
+              <p class="field-hint">Adjust the weekly distance and duration goals used for this browser view.</p>
+              <div class="activity-widget-target-grid">
+                <label class="activity-widget-field">
+                  <span>Distance target (km)</span>
+                  <input type="number" id="activityWidgetDistanceGoal" min="1" step="0.5" value="25" inputmode="decimal" />
+                </label>
+                <label class="activity-widget-field">
+                  <span>Duration target (min)</span>
+                  <input type="number" id="activityWidgetDurationGoal" min="1" step="5" value="150" inputmode="decimal" />
+                </label>
+              </div>
+              <div class="activity-widget-actions">
+                <button type="button" class="outline-btn secondary" id="activityWidgetSaveGoals">Save targets</button>
+                <p class="field-hint" id="activityWidgetGoalNote" aria-live="polite">These targets are saved in this browser.</p>
+              </div>
+            </article>
+          </div>
+
           <!-- 2 · Recent Sessions + Splits -->
           <div class="act-sessions-row">
             <article class="card sessions-card">
               <div class="sessions-header">
-                <p class="section-eyebrow">Recent Sessions</p>
+                <p class="section-eyebrow">Recent Runs</p>
                 <p class="card-meta" id="activitySessionHint">Click a run to inspect details →</p>
               </div>
               <!-- app.js populates both lists; sessionsList is the primary feed -->
@@ -437,7 +615,7 @@
             <article class="card splits-card">
               <div class="card-header split">
                 <div>
-                  <p class="section-eyebrow">Run Details</p>
+                  <p class="section-eyebrow">Run Breakdown</p>
                   <h3 class="card-title" id="activitySplitTitle">Select a run</h3>
                 </div>
                 <button type="button" class="outline-btn secondary hidden" id="stravaExportButton">Export ↗</button>
@@ -468,6 +646,15 @@
                 <canvas id="activityLoadChart"></canvas>
               </div>
             </article>
+            <article class="card chart-card">
+              <div class="act-chart-header">
+                <p class="section-eyebrow">Split Breakdown</p>
+                <span class="chart-legend-dot blue"></span>
+              </div>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="activitySplitChart"></canvas>
+              </div>
+            </article>
           </div>
 
           <!-- Canvas used by JS but not shown in activity layout -->
@@ -478,7 +665,7 @@
             <article class="card efforts-card">
               <div class="card-header split efforts-header">
                 <div>
-                  <p class="section-eyebrow">Best Efforts</p>
+                  <p class="section-eyebrow">Best Performances</p>
                   <h3 class="card-title">Personal markers</h3>
                 </div>
                 <span class="status-chip hidden" id="activityBestEffortsBadge"></span>
@@ -1222,6 +1409,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=11" type="module"></script>
+  <script src="/app.js?v=12" type="module"></script>
 </body>
 </html>

@@ -621,6 +621,11 @@ CREATE TABLE activity_sessions (
   vo2max_estimate REAL,
   training_load REAL,
   strava_activity_id INTEGER,
+  route_summary_polyline TEXT,
+  route_start_lat REAL,
+  route_start_lng REAL,
+  route_end_lat REAL,
+  route_end_lng REAL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users (id),
   UNIQUE (user_id, strava_activity_id)

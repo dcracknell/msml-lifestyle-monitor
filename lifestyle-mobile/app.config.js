@@ -1,6 +1,6 @@
 try {
   // eslint-disable-next-line global-require, import/no-extraneous-dependencies
-  require('dotenv').config();
+  require('dotenv').config({ quiet: true });
 } catch (error) {
   if (error && error.code !== 'MODULE_NOT_FOUND') {
     console.warn('Failed to load .env file:', error);
@@ -65,6 +65,8 @@ export default ({ config }) => ({
         'Allow MSML Lifestyle to write approved training metrics to Apple Health if enabled.',
       NSSensorKitUsageDescription:
         'Allow MSML Lifestyle to access supported sensor data when available.',
+      NSUserNotificationUsageDescription:
+        'Allow MSML Lifestyle to show live workout stats on your lock screen while recording.',
     },
   },
   android: {
@@ -95,6 +97,57 @@ export default ({ config }) => ({
     'expo-secure-store',
     'expo-font',
     'expo-web-browser',
+    [
+      'expo-widgets',
+      {
+        widgets: [
+          {
+            name: 'ActivityProgressWidget',
+            displayName: 'Weekly Progress',
+            description: 'See weekly activity goal progress on your Lock Screen.',
+            supportedFamilies: [
+              'systemSmall',
+              'systemMedium',
+              'accessoryCircular',
+              'accessoryRectangular',
+              'accessoryInline',
+            ],
+          },
+          {
+            name: 'CurrentRunWidget',
+            displayName: 'Current Run',
+            description: 'See live distance, pace, and elapsed time for your current or latest run.',
+            supportedFamilies: [
+              'systemSmall',
+              'systemMedium',
+              'accessoryCircular',
+              'accessoryRectangular',
+              'accessoryInline',
+            ],
+          },
+          {
+            name: 'DailyCaloriesWidget',
+            displayName: 'Daily Calories',
+            description: 'Track today’s calorie progress from the Home or Lock Screen.',
+            supportedFamilies: [
+              'systemSmall',
+              'systemMedium',
+              'accessoryCircular',
+              'accessoryRectangular',
+              'accessoryInline',
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      'expo-notifications',
+      {
+        icon: './assets/icon.png',
+        color: '#00d2a5',
+        sounds: [],
+      },
+    ],
     [
       'expo-location',
       {

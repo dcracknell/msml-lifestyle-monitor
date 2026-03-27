@@ -26,6 +26,8 @@ lifestyle-web/k8s/secrets.env
 lifestyle-mobile/.expo/
 lifestyle-mobile/android/
 lifestyle-mobile/ios/
+.codex-stale-native-cache/
+lifestyle-mobile-ios-stale-*/
 
 # Python cache and local model artifacts
 __pycache__/

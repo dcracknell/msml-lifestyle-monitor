@@ -49,6 +49,7 @@ import {
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { NutritionEntry, NutritionLookupProduct, NutritionSuggestion } from '../../api/types';
 import { fetchSuggestionsWithCache, readSuggestionCache } from './suggestionCache';
+import { createDailyCaloriesWidgetSnapshot, syncDailyCaloriesWidget } from './dailyCaloriesWidget';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -452,6 +453,19 @@ export function NutritionScreen() {
     enabled: Boolean(user?.id),
   });
   const isToday = selectedDate === todayIso;
+
+  useEffect(() => {
+    if (!data || !isToday) {
+      return;
+    }
+    syncDailyCaloriesWidget(
+      createDailyCaloriesWidgetSnapshot({
+        titleLabel: 'Daily calories',
+        consumedCalories: data.dailyTotals?.calories,
+        targetCalories: data.goals?.targetCalories ?? data.goals?.calories,
+      })
+    );
+  }, [data, isToday]);
 
   useEffect(() => {
     if (!data) {

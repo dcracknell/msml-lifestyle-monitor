@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, StyleSheet, View, Pressable, ScrollView, Platform } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Svg, { Circle, Defs, FeBlend, FeGaussianBlur, Filter, Line, Polyline, Rect, Text as SvgText } from 'react-native-svg';
@@ -57,6 +58,24 @@ import {
   stopExerciseBackgroundLocationUpdates,
 } from './backgroundTracking';
 import {
+  dismissWorkoutNotification,
+  requestWorkoutNotificationPermission,
+  updateWorkoutNotification,
+} from './workoutNotification';
+import {
+  buildCurrentRunWidgetPropsFromSession,
+  buildCurrentRunWidgetPropsFromTracking,
+  createCurrentRunWidgetSnapshot,
+  syncCurrentRunWidget,
+  type CurrentRunWidgetProps,
+} from './currentRunWidget';
+import {
+  endWorkoutLiveActivity,
+  startWorkoutLiveActivity,
+  updateWorkoutLiveActivity,
+  type WorkoutLiveActivityProps,
+} from './workoutLiveActivity';
+import {
   applyLocationPointToTrackingSnapshot,
   clearStoredExerciseTrackingSnapshot,
   createExerciseTrackingSnapshot,
@@ -97,27 +116,31 @@ const DEVICE_METRICS = {
 };
 
 // ── Design tokens ────────────────────────────────────────────────────────────
-const TEAL = '#00d2a5';
-const ORANGE = '#ff9132';
-const PURPLE = '#a080ff';
-const GRAY = 'rgba(255,255,255,0.25)';
+const TEAL = '#fc4c02';
+const ORANGE = '#ff9b54';
+const PURPLE = '#78a7ff';
+const GRAY = '#a2aab3';
+const SURFACE = '#111315';
+const SURFACE_ALT = '#191c20';
+const SURFACE_SOFT = '#0c0f13';
+const TEXT_MUTED = '#a9b0b8';
 
 // ── Google Maps dark style (Android) ─────────────────────────────────────────
 // Matches the app's navy night theme so the teal route line pops clearly.
 const DARK_MAP_STYLE = [
-  { elementType: 'geometry',                                      stylers: [{ color: '#1a2534' }] },
-  { elementType: 'labels.text.fill',                              stylers: [{ color: '#8496b0' }] },
-  { elementType: 'labels.text.stroke',                            stylers: [{ color: '#0d1927' }] },
+  { elementType: 'geometry',                                      stylers: [{ color: '#17191d' }] },
+  { elementType: 'labels.text.fill',                              stylers: [{ color: '#8d949d' }] },
+  { elementType: 'labels.text.stroke',                            stylers: [{ color: '#0f1114' }] },
   { featureType: 'administrative', elementType: 'geometry',       stylers: [{ visibility: 'off' }] },
   { featureType: 'poi',                                           stylers: [{ visibility: 'off' }] },
-  { featureType: 'road', elementType: 'geometry.fill',            stylers: [{ color: '#253649' }] },
-  { featureType: 'road', elementType: 'geometry.stroke',          stylers: [{ color: '#1a2a3e' }] },
+  { featureType: 'road', elementType: 'geometry.fill',            stylers: [{ color: '#25282d' }] },
+  { featureType: 'road', elementType: 'geometry.stroke',          stylers: [{ color: '#1b1e22' }] },
   { featureType: 'road', elementType: 'labels.icon',              stylers: [{ visibility: 'off' }] },
-  { featureType: 'road.highway', elementType: 'geometry.fill',    stylers: [{ color: '#2f4665' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke',  stylers: [{ color: '#1e3452' }] },
+  { featureType: 'road.highway', elementType: 'geometry.fill',    stylers: [{ color: '#2e333a' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke',  stylers: [{ color: '#20242a' }] },
   { featureType: 'transit',                                       stylers: [{ visibility: 'off' }] },
-  { featureType: 'water', elementType: 'geometry',                stylers: [{ color: '#0d1b2a' }] },
-  { featureType: 'water', elementType: 'labels.text.fill',        stylers: [{ color: '#3d5a7a' }] },
+  { featureType: 'water', elementType: 'geometry',                stylers: [{ color: '#0f1217' }] },
+  { featureType: 'water', elementType: 'labels.text.fill',        stylers: [{ color: '#555d67' }] },
 ];
 
 const WATCH_COMMAND_TIMEOUT_MS = 3500;
@@ -126,10 +149,12 @@ const PHONE_UPLOAD_INTERVAL_MS = 15_000;
 const PHONE_UPLOAD_DISTANCE_DELTA_KM = 0.05;
 const WATCH_AUTO_START_FRESH_WINDOW_MS = 15_000;
 const EXERCISE_STREAM_WINDOW_MS = 21 * 24 * 60 * 60 * 1000;
+const RUN_WIDGET_UPDATE_INTERVAL_TICKS = 60;
 const CALORIE_FACTORS: Record<SportId, number> = { run: 1.0, ride: 0.4, walk: 0.7 }; // kcal/kg/km
 const CALORIE_BODY_WEIGHT_KG = 70; // default body weight estimate
 const WORKOUT_NAME_MAX_LENGTH = 96;
 const WORKOUT_NOTES_MAX_LENGTH = 500;
+const LIVE_ACTIVITY_UPDATE_INTERVAL_TICKS = 10;
 
 export function ExerciseScreen() {
   const navigation = useNavigation();
@@ -200,12 +225,16 @@ export function ExerciseScreen() {
   const workoutStartedAtRef = useRef<number | null>(null);
   const workoutSourceIdRef = useRef<string | null>(null);
   const trackingSnapshotRef = useRef<ExerciseTrackingSnapshot | null>(null);
+  const workoutLiveActivityPropsRef = useRef<WorkoutLiveActivityProps | null>(null);
+  const currentRunWidgetPropsRef = useRef<CurrentRunWidgetProps | null>(null);
   const sessionStateRef = useRef<SessionState>('idle');
   const locationWatcherRef = useRef<null | { stop: () => void }>(null);
   const lastPhoneUploadRef = useRef({ ts: 0, distanceKm: 0 });
   const phoneDistanceRef = useRef<number | null>(null);
   const phonePaceRef = useRef<number | null>(null);
   const elevationGainRef = useRef(0);
+  // Counts 1-second timer ticks to throttle notification updates to every 30 s
+  const notificationTickRef = useRef(0);
 
   const sportConfig = useMemo(() => {
     return SPORT_OPTIONS.find((option) => option.id === selectedSport) ?? SPORT_OPTIONS[0];
@@ -244,6 +273,89 @@ export function ExerciseScreen() {
       deactivateKeepAwakeAsync?.().catch(() => {});
     };
   }, [sessionState]);
+
+  // Request notification permission early so it doesn't interrupt mid-workout
+  useEffect(() => {
+    void requestWorkoutNotificationPermission();
+  }, []);
+
+  // Crash / app-restart recovery: if there is an in-progress tracking session in
+  // storage from a previous run, restore it so the user can continue or finish it.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (sessionStateRef.current !== 'idle') {
+        return;
+      }
+      const snapshot = await loadStoredExerciseTrackingSnapshot().catch(() => null);
+      if (cancelled || !snapshot) {
+        return;
+      }
+      if (snapshot.status !== 'recording' && snapshot.status !== 'paused') {
+        return;
+      }
+      // Ignore sessions that are more than 4 hours stale
+      if (Date.now() - snapshot.updatedAt > 4 * 60 * 60 * 1000) {
+        return;
+      }
+
+      workoutSourceIdRef.current = snapshot.workoutSourceId;
+      workoutStartedAtRef.current = snapshot.startedAt;
+      setSelectedSport(snapshot.sportId);
+      applyTrackingSnapshot(snapshot);
+
+      const restoredStatus = snapshot.status;
+      setSessionState(restoredStatus);
+      sessionStateRef.current = restoredStatus;
+
+      if (restoredStatus === 'recording') {
+        void startPhoneTracking();
+        void maybeStartBackgroundTracking(snapshot);
+        void updateWorkoutNotification(snapshot);
+        void updateWorkoutLiveActivity(
+          buildWorkoutLiveActivityProps({
+            sportLabel: titleCase(snapshot.sportId),
+            status: snapshot.isAutoPaused ? 'auto-paused' : 'active',
+            distanceKm: getTrackingDistanceKm(snapshot),
+            elapsedMs: getTrackingElapsedMs(snapshot),
+            paceSeconds: snapshot.phoneCurrentPaceSeconds ?? snapshot.phonePaceSeconds,
+            heartRate: null,
+          })
+        );
+        syncCurrentRunWidget(
+          buildCurrentRunWidgetPropsFromTracking(snapshot, {
+            sportLabel: titleCase(snapshot.sportId),
+            paceSeconds: snapshot.phoneCurrentPaceSeconds ?? snapshot.phonePaceSeconds,
+            calories: null,
+          })
+        );
+      } else if (restoredStatus === 'paused') {
+        void updateWorkoutLiveActivity(
+          buildWorkoutLiveActivityProps({
+            sportLabel: titleCase(snapshot.sportId),
+            status: 'paused',
+            distanceKm: getTrackingDistanceKm(snapshot),
+            elapsedMs: getTrackingElapsedMs(snapshot),
+            paceSeconds: snapshot.phonePaceSeconds,
+            heartRate: null,
+          })
+        );
+        syncCurrentRunWidget(
+          buildCurrentRunWidgetPropsFromTracking(snapshot, {
+            sportLabel: titleCase(snapshot.sportId),
+            paceSeconds: snapshot.phonePaceSeconds,
+            calories: null,
+          })
+        );
+      }
+
+      setFeedback('Previous workout restored. Resume or finish when ready.');
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const applyTrackingSnapshot = useCallback((snapshot: ExerciseTrackingSnapshot | null) => {
     trackingSnapshotRef.current = snapshot;
@@ -602,6 +714,30 @@ export function ExerciseScreen() {
       : null;
   const displayHeartRate =
     watchMetrics.heartRate !== null ? watchMetrics.heartRate : lastSessionForSport?.averageHr ?? null;
+  const currentRunWidgetPreview = useMemo(() => {
+    if (sessionState === 'idle') {
+      return buildCurrentRunWidgetPropsFromSession(lastSessionForSport, sportConfig.label);
+    }
+
+    return createCurrentRunWidgetSnapshot({
+      titleLabel: 'Current run',
+      statusLabel: `${sportConfig.label} · ${isAutoPaused ? 'Auto-paused' : sessionState === 'paused' ? 'Paused' : 'Active'}`,
+      compactStatusLabel: isAutoPaused ? 'Auto' : sessionState === 'paused' ? 'Paused' : 'Active',
+      distanceKm: liveDistanceKm,
+      elapsedMs,
+      paceSeconds: displayPaceSeconds,
+      calories: liveCalories,
+    });
+  }, [
+    displayPaceSeconds,
+    elapsedMs,
+    isAutoPaused,
+    lastSessionForSport,
+    liveCalories,
+    liveDistanceKm,
+    sessionState,
+    sportConfig.label,
+  ]);
   const heartRateTrend = useMemo(
     () =>
       (exerciseHrStreamData?.points || [])
@@ -680,6 +816,71 @@ export function ExerciseScreen() {
     { label: 'Load', value: formatWholeNumber(data?.summary?.trainingLoad) },
     { label: 'Avg pace', value: formatPace(data?.summary?.avgPaceSeconds) },
   ];
+  const weeklyLoadValue = data?.summary?.trainingLoad ?? null;
+  const loadBadgeColor =
+    weeklyLoadValue == null
+      ? GRAY
+      : weeklyLoadValue >= 350
+      ? '#39d98a'
+      : weeklyLoadValue >= 120
+      ? TEAL
+      : ORANGE;
+  const loadBadgeLabel =
+    weeklyLoadValue == null
+      ? 'Awaiting sync'
+      : weeklyLoadValue >= 350
+      ? 'Big week'
+      : weeklyLoadValue >= 120
+      ? 'On track'
+      : 'Easy week';
+
+  useEffect(() => {
+    workoutLiveActivityPropsRef.current = buildWorkoutLiveActivityProps({
+      sportLabel: sportConfig.label,
+      status:
+        isAutoPaused
+          ? 'auto-paused'
+          : sessionState === 'paused'
+          ? 'paused'
+          : sessionState === 'idle'
+          ? 'finished'
+          : 'active',
+      distanceKm: liveDistanceKm,
+      elapsedMs,
+      paceSeconds: displayPaceSeconds,
+      heartRate: displayHeartRate,
+    });
+  }, [displayHeartRate, displayPaceSeconds, elapsedMs, isAutoPaused, liveDistanceKm, sessionState, sportConfig.label]);
+
+  useEffect(() => {
+    currentRunWidgetPropsRef.current = currentRunWidgetPreview;
+  }, [currentRunWidgetPreview]);
+
+  useEffect(() => {
+    if (sessionState !== 'idle') {
+      return;
+    }
+    syncCurrentRunWidget(currentRunWidgetPreview);
+  }, [currentRunWidgetPreview, sessionState]);
+
+  const syncWorkoutLiveActivity = useCallback(
+    async (mode: 'start' | 'update' | 'end') => {
+      const props = workoutLiveActivityPropsRef.current;
+      if (!props) {
+        return;
+      }
+      if (mode === 'start') {
+        await startWorkoutLiveActivity(props);
+        return;
+      }
+      if (mode === 'end') {
+        await endWorkoutLiveActivity(props);
+        return;
+      }
+      await updateWorkoutLiveActivity(props);
+    },
+    []
+  );
 
   useEffect(() => {
     sessionStateRef.current = sessionState;
@@ -689,13 +890,17 @@ export function ExerciseScreen() {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         void restorePersistedTrackingSnapshot();
+        // If recording and the foreground watcher was dropped while backgrounded, restart it
+        if (sessionStateRef.current === 'recording' && !locationWatcherRef.current) {
+          void startPhoneTracking();
+        }
       }
     });
 
     return () => {
       subscription.remove();
     };
-  }, [restorePersistedTrackingSnapshot]);
+  }, [restorePersistedTrackingSnapshot, startPhoneTracking]);
 
   useFocusEffect(
     useCallback(() => {
@@ -812,8 +1017,20 @@ export function ExerciseScreen() {
     void persistTrackingSnapshot(snapshot);
     setElapsedMs(0);
     setSessionState('recording');
-    sessionStateRef.current = 'recording';
+   sessionStateRef.current = 'recording';
     setFeedback('Workout data detected from watch. Recording started automatically.');
+    void syncWorkoutLiveActivity('start');
+    syncCurrentRunWidget(
+      createCurrentRunWidgetSnapshot({
+        titleLabel: 'Current run',
+        statusLabel: `${sportConfig.label} · Active`,
+        compactStatusLabel: 'Active',
+        distanceKm: 0,
+        elapsedMs: 0,
+        paceSeconds: null,
+        calories: null,
+      })
+    );
     void startPhoneTracking();
     void maybeStartBackgroundTracking(snapshot);
   }, [
@@ -823,6 +1040,7 @@ export function ExerciseScreen() {
     sessionState,
     sportConfig.id,
     startPhoneTracking,
+    syncWorkoutLiveActivity,
   ]);
 
   useEffect(() => {
@@ -831,11 +1049,28 @@ export function ExerciseScreen() {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+      notificationTickRef.current = 0;
       return;
     }
+    notificationTickRef.current = 0;
     timerRef.current = setInterval(() => {
       const startTs = sessionStartRef.current || Date.now();
       setElapsedMs(elapsedBeforePauseRef.current + (Date.now() - startTs));
+
+      // Update the live notification every 30 seconds while the screen is on
+      notificationTickRef.current += 1;
+      if (notificationTickRef.current % 30 === 0 && trackingSnapshotRef.current) {
+        void updateWorkoutNotification(trackingSnapshotRef.current);
+      }
+      if (notificationTickRef.current % LIVE_ACTIVITY_UPDATE_INTERVAL_TICKS === 0) {
+        void syncWorkoutLiveActivity('update');
+      }
+      if (notificationTickRef.current % RUN_WIDGET_UPDATE_INTERVAL_TICKS === 0) {
+        const snapshot = currentRunWidgetPropsRef.current;
+        if (snapshot) {
+          syncCurrentRunWidget(snapshot);
+        }
+      }
     }, 1000);
     return () => {
       if (timerRef.current) {
@@ -843,7 +1078,7 @@ export function ExerciseScreen() {
         timerRef.current = null;
       }
     };
-  }, [sessionState]);
+  }, [sessionState, syncWorkoutLiveActivity]);
 
   const sendExerciseCommand = async (action: ExerciseAction, nextState: SessionState, resetTimer?: boolean) => {
     setControlLoading(true);
@@ -926,6 +1161,26 @@ export function ExerciseScreen() {
           workoutSourceId: sourceId,
         });
         void persistTrackingSnapshot(snapshot);
+        void updateWorkoutNotification(snapshot);
+        void startWorkoutLiveActivity(buildWorkoutLiveActivityProps({
+          sportLabel: sportConfig.label,
+          status: 'active',
+          distanceKm: 0,
+          elapsedMs: 0,
+          paceSeconds: null,
+          heartRate: watchMetrics.heartRate,
+        }));
+        syncCurrentRunWidget(
+          createCurrentRunWidgetSnapshot({
+            titleLabel: 'Current run',
+            statusLabel: `${sportConfig.label} · Active`,
+            compactStatusLabel: 'Active',
+            distanceKm: 0,
+            elapsedMs: 0,
+            paceSeconds: null,
+            calories: null,
+          })
+        );
         setElapsedMs(0);
       } else if (nextState === 'recording') {
         const resumedAt = Date.now();
@@ -948,16 +1203,83 @@ export function ExerciseScreen() {
           resumedAt
         );
         void persistTrackingSnapshot(snapshot);
+        if (snapshot) {
+          void updateWorkoutNotification(snapshot);
+        }
+        void updateWorkoutLiveActivity(buildWorkoutLiveActivityProps({
+          sportLabel: sportConfig.label,
+          status: 'active',
+          distanceKm: liveDistanceKm,
+          elapsedMs: getTrackingElapsedMs(snapshot, resumedAt),
+          paceSeconds: displayPaceSeconds,
+          heartRate: displayHeartRate,
+        }));
+        syncCurrentRunWidget(
+          createCurrentRunWidgetSnapshot({
+            titleLabel: 'Current run',
+            statusLabel: `${sportConfig.label} · Active`,
+            compactStatusLabel: 'Active',
+            distanceKm: liveDistanceKm,
+            elapsedMs: getTrackingElapsedMs(snapshot, resumedAt),
+            paceSeconds: displayPaceSeconds,
+            calories: liveCalories,
+          })
+        );
       } else if (nextState === 'paused') {
         const pausedAt = Date.now();
         elapsedBeforePauseRef.current += pausedAt - (sessionStartRef.current || pausedAt);
         sessionStartRef.current = null;
         const snapshot = pauseExerciseTrackingSnapshot(trackingSnapshotRef.current, pausedAt);
         void persistTrackingSnapshot(snapshot);
+        if (snapshot) {
+          void updateWorkoutNotification(snapshot);
+        }
+        void updateWorkoutLiveActivity(buildWorkoutLiveActivityProps({
+          sportLabel: sportConfig.label,
+          status: 'paused',
+          distanceKm: liveDistanceKm,
+          elapsedMs: getTrackingElapsedMs(snapshot, pausedAt),
+          paceSeconds: displayPaceSeconds,
+          heartRate: displayHeartRate,
+        }));
+        syncCurrentRunWidget(
+          createCurrentRunWidgetSnapshot({
+            titleLabel: 'Current run',
+            statusLabel: `${sportConfig.label} · ${isAutoPaused ? 'Auto-paused' : 'Paused'}`,
+            compactStatusLabel: isAutoPaused ? 'Auto' : 'Paused',
+            distanceKm: liveDistanceKm,
+            elapsedMs: getTrackingElapsedMs(snapshot, pausedAt),
+            paceSeconds: displayPaceSeconds,
+            calories: liveCalories,
+          })
+        );
       } else {
         sessionStartRef.current = null;
         setElapsedMs(0);
         void persistTrackingSnapshot(stoppedTrackingSnapshot);
+        void dismissWorkoutNotification();
+        void endWorkoutLiveActivity(buildWorkoutLiveActivityProps({
+          sportLabel: sportConfig.label,
+          status: 'finished',
+          distanceKm: finalDistance,
+          elapsedMs: elapsedAtStop,
+          paceSeconds: finalPace,
+          heartRate: finalHeartRate,
+        }));
+        syncCurrentRunWidget(
+          createCurrentRunWidgetSnapshot({
+            titleLabel: 'Last run',
+            statusLabel: normalizeWorkoutName(workoutName, sportConfig.label),
+            compactStatusLabel: 'Last',
+            distanceKm: finalDistance,
+            elapsedMs: elapsedAtStop,
+            paceSeconds: finalPace,
+            calories:
+              finalDistance !== null && finalDistance > 0
+                ? Math.round(finalDistance * CALORIE_BODY_WEIGHT_KG * CALORIE_FACTORS[sportConfig.id])
+                : null,
+          })
+        );
       }
 
       if (nextState === 'recording') {
@@ -1071,6 +1393,46 @@ export function ExerciseScreen() {
     isAutoPaused ? 'Auto-paused' : sessionState === 'recording' ? 'Active' : sessionState === 'paused' ? 'Paused' : 'Ready';
   const sessionPillColor =
     isAutoPaused ? ORANGE : sessionState === 'recording' ? TEAL : sessionState === 'paused' ? ORANGE : TEAL;
+  const heroMetrics = [
+    {
+      label: 'Distance',
+      value: displayDistanceKm != null ? displayDistanceKm.toFixed(2) : '--',
+      helper: 'km',
+      tone: 'accent' as const,
+    },
+    {
+      label: 'Time',
+      value: timerLabel,
+      helper: sessionState === 'idle' ? 'ready to start' : 'elapsed',
+      tone: 'neutral' as const,
+    },
+    {
+      label: sessionState === 'recording' ? 'Current pace' : 'Pace',
+      value: formatPace(displayPaceSeconds),
+      helper:
+        sessionState === 'recording' && avgPaceSeconds != null
+          ? `avg ${formatPace(avgPaceSeconds)}`
+          : 'per km',
+      tone: 'accent' as const,
+    },
+    {
+      label: 'Heart rate',
+      value: displayHeartRate != null ? String(Math.round(displayHeartRate)) : '--',
+      helper: displayHeartRate != null ? 'bpm' : 'no sensor',
+      tone: 'neutral' as const,
+    },
+  ];
+  const watchConnectionLabel = connectedDevice ? 'Wearable connected' : 'No wearable connected';
+  const stravaStatusLabel = data?.strava?.connected ? 'Strava linked' : 'Strava not linked';
+
+  useEffect(() => {
+    if (sessionState === 'idle') {
+      return;
+    }
+    if (trackingSnapshotRef.current) {
+      void syncWorkoutLiveActivity('update');
+    }
+  }, [isAutoPaused, sessionState, syncWorkoutLiveActivity]);
 
   return (
     <ScrollView
@@ -1079,25 +1441,143 @@ export function ExerciseScreen() {
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      {/* ── EXERCISE hero card ── */}
-      <View style={styles.card}>
-        <EyebrowLabel>EXERCISE</EyebrowLabel>
-        <View style={styles.heroTopRow}>
-          <IconCircle color={TEAL}>
-            <AppText style={styles.iconGlyph}>▶</AppText>
-          </IconCircle>
-          <View style={styles.heroTopMeta}>
-            <AppText style={styles.heroTitle}>{sportConfig.label}</AppText>
-            <StatusPill label={sessionPillLabel} color={sessionPillColor} />
+      <View style={[styles.card, styles.heroCard]}>
+        <LinearGradient
+          colors={['#2b1a12', '#17191d', '#121316']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.heroGradient}
+        >
+          <View style={styles.heroHeaderRow}>
+            <View style={styles.heroHeaderCopy}>
+              <EyebrowLabel>LIVE TRACKING</EyebrowLabel>
+              <AppText style={styles.heroTitle}>{sportConfig.label}</AppText>
+              <AppText style={styles.heroSubtitle}>{heroStatusCopy}</AppText>
+            </View>
+            <View style={styles.heroStatusStack}>
+              <StatusPill label={sessionPillLabel} color={sessionPillColor} />
+              <StatusPill
+                label={liveSourceLabel}
+                color={liveSourceLabel === 'Last session' ? '#aab1ba' : '#ffd1bf'}
+                dot
+              />
+            </View>
           </View>
+
+          <View style={styles.heroMetricsGrid}>
+            {heroMetrics.map((item) => (
+              <HeroMetricCard
+                key={item.label}
+                label={item.label}
+                value={item.value}
+                helper={item.helper}
+                tone={item.tone}
+              />
+            ))}
+          </View>
+
+          {isAutoPaused ? (
+            <View style={styles.autoPauseBanner}>
+              <AppText style={styles.autoPauseBannerText}>Auto-paused — start moving to resume</AppText>
+            </View>
+          ) : null}
+
+          <View style={styles.heroMapSection}>
+            <View style={styles.inlineHeadingRow}>
+              <View style={styles.inlineHeadingCopy}>
+                <AppText style={styles.inlineSectionTitle}>{routeTitle}</AppText>
+                <AppText style={styles.inlineSectionSubtitle}>{routeSubtitle}</AppText>
+              </View>
+              <StatusPill
+                label={
+                  routePoints.length >= 2
+                    ? 'GPS locked'
+                    : sessionState === 'idle'
+                    ? 'Standby'
+                    : 'Waiting for GPS'
+                }
+                color={routePoints.length >= 2 ? '#39d98a' : ORANGE}
+              />
+            </View>
+
+            <RouteMapCard
+              points={routePoints}
+              active={sessionState === 'recording'}
+              distanceKm={displayDistanceKm}
+              elevationGainMeters={elevationGainMeters}
+              gpsAccuracyMeters={gpsAccuracyMeters}
+            />
+          </View>
+
+          <View style={styles.routeFactGrid}>
+            {routeSummary.map((item) => (
+              <RouteFactChip key={item.label} label={item.label} value={item.value} />
+            ))}
+          </View>
+
+          {kmSplits.length > 0 ? (
+            <View style={styles.splitsTable}>
+              <AppText style={styles.splitsTitle}>Live kilometre splits</AppText>
+              {kmSplits.map((split) => (
+                <View key={split.km} style={styles.splitRow}>
+                  <AppText style={styles.splitKmLabel}>KM {split.km}</AppText>
+                  <AppText style={styles.splitPaceValue}>{formatPace(split.paceSeconds)}</AppText>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
+
+          {sessionState === 'idle' ? (
+            <Pressable
+              style={[styles.ctaButton, controlLoading ? styles.ctaButtonDisabled : null]}
+              onPress={handleStart}
+              disabled={controlLoading}
+            >
+              <AppText style={styles.ctaText}>Start {sportConfig.label.toLowerCase()}</AppText>
+            </Pressable>
+          ) : (
+            <View style={styles.controlPair}>
+              <Pressable
+                style={styles.secondaryButton}
+                onPress={sessionState === 'recording' ? handlePause : handleResume}
+                disabled={controlLoading}
+              >
+                <AppText style={styles.secondaryButtonText}>
+                  {sessionState === 'recording' ? 'Pause' : 'Resume'}
+                </AppText>
+              </Pressable>
+              <Pressable style={styles.ghostButton} onPress={handleFinish} disabled={controlLoading}>
+                <AppText style={styles.ghostButtonText}>Finish</AppText>
+              </Pressable>
+            </View>
+          )}
+
+          {feedback ? (
+            <View style={styles.feedbackBanner}>
+              <AppText style={styles.feedbackText}>{feedback}</AppText>
+            </View>
+          ) : null}
+        </LinearGradient>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.sectionIntro}>
+          <EyebrowLabel>WORKOUT SETUP</EyebrowLabel>
+          <AppText style={styles.cardTitle}>Name, sport, and notes</AppText>
+          <AppText style={styles.mutedText}>
+            Set up the run the way it should appear once it lands in your activity history.
+          </AppText>
         </View>
 
-        {/* Sport selector */}
         <View style={styles.sportGrid}>
           {SPORT_OPTIONS.map((option) => (
             <Pressable
               key={option.id}
-              onPress={() => { if (!isSportSelectionDisabled) setSelectedSport(option.id); }}
+              onPress={() => {
+                if (!isSportSelectionDisabled) setSelectedSport(option.id);
+              }}
               disabled={isSportSelectionDisabled && option.id !== selectedSport}
               style={[
                 styles.sportCell,
@@ -1105,35 +1585,18 @@ export function ExerciseScreen() {
                 isSportSelectionDisabled && option.id !== selectedSport ? styles.sportCellDisabled : null,
               ]}
             >
-              <AppText style={[styles.sportCellLabel, option.id === selectedSport ? styles.sportCellLabelActive : null]}>
+              <AppText
+                style={[
+                  styles.sportCellLabel,
+                  option.id === selectedSport ? styles.sportCellLabelActive : null,
+                ]}
+              >
                 {option.label}
               </AppText>
               <AppText style={styles.sportCellTagline}>{option.tagline}</AppText>
             </Pressable>
           ))}
         </View>
-
-        {/* 4-stat strip */}
-        <View style={styles.statStrip}>
-          <StatStripItem label="DURATION" value={timerLabel} />
-          <View style={styles.stripDivider} />
-          <StatStripItem label="KM" value={displayDistanceKm != null ? displayDistanceKm.toFixed(2) : '--'} />
-          <View style={styles.stripDivider} />
-          <StatStripItem label="BPM" value={displayHeartRate != null ? String(Math.round(displayHeartRate)) : '--'} />
-          <View style={styles.stripDivider} />
-          <StatStripItem
-            label={sessionState === 'recording' ? 'CURR PACE' : 'PACE'}
-            value={formatPace(displayPaceSeconds)}
-            sublabel={sessionState === 'recording' && avgPaceSeconds != null ? `avg ${formatPace(avgPaceSeconds)}` : undefined}
-          />
-        </View>
-
-        {/* Auto-pause banner */}
-        {isAutoPaused ? (
-          <View style={styles.autoPauseBanner}>
-            <AppText style={styles.autoPauseBannerText}>Auto-paused — start moving to resume</AppText>
-          </View>
-        ) : null}
 
         <View style={styles.workoutDetailsForm}>
           <AppInput
@@ -1156,44 +1619,21 @@ export function ExerciseScreen() {
             editable={!controlLoading}
           />
         </View>
-
-        {/* CTA */}
-        {sessionState === 'idle' ? (
-          <Pressable style={[styles.ctaButton, controlLoading ? styles.ctaButtonDisabled : null]} onPress={handleStart} disabled={controlLoading}>
-            <AppText style={styles.ctaText}>Start {sportConfig.label.toLowerCase()}</AppText>
-          </Pressable>
-        ) : (
-          <View style={styles.controlPair}>
-            <Pressable
-              style={styles.secondaryButton}
-              onPress={sessionState === 'recording' ? handlePause : handleResume}
-              disabled={controlLoading}
-            >
-              <AppText style={styles.secondaryButtonText}>
-                {sessionState === 'recording' ? 'Pause' : 'Resume'}
-              </AppText>
-            </Pressable>
-            <Pressable style={styles.ghostButton} onPress={handleFinish} disabled={controlLoading}>
-              <AppText style={styles.ghostButtonText}>Finish</AppText>
-            </Pressable>
-          </View>
-        )}
-
-        {feedback ? <AppText style={styles.feedbackText}>{feedback}</AppText> : null}
       </View>
 
-      {/* ── LAST SESSION card ── */}
       <View style={styles.card}>
-        <EyebrowLabel>LAST SESSION</EyebrowLabel>
         <View style={styles.cardTitleRow}>
-          <AppText style={styles.cardTitle}>Last effort</AppText>
+          <View style={styles.titleStack}>
+            <EyebrowLabel>RECENT EFFORT</EyebrowLabel>
+            <AppText style={styles.cardTitle}>Last {sportConfig.label.toLowerCase()}</AppText>
+          </View>
           {lastSessionForSport ? (
             <AppText style={styles.cardSubtitle}>
               {formatDateTime(lastSessionForSport.startTime, 'MMM D · HH:mm')}
             </AppText>
           ) : null}
-          <Pressable onPress={() => navigation.navigate('Sessions' as never)} disabled={isFetching}>
-            <AppText style={styles.linkText}>See all</AppText>
+          <Pressable onPress={() => navigation.navigate('Activity' as never)} disabled={isFetching}>
+            <AppText style={styles.linkText}>History</AppText>
           </Pressable>
         </View>
 
@@ -1201,97 +1641,57 @@ export function ExerciseScreen() {
           <AppText style={styles.mutedText}>Syncing activity…</AppText>
         ) : lastSessionForSport ? (
           <View style={styles.sixGrid}>
-            <MetricSubCard label="DISTANCE" value={formatDistance(lastSessionForSport.distance)} />
-            <MetricSubCard label="PACE" value={formatPace(lastSessionForSport.averagePace)} />
-            <MetricSubCard label="AVG HR" value={formatHeartRate(lastSessionForSport.averageHr)} sublabel="bpm" />
+            <MetricSubCard label="Distance" value={formatDistance(lastSessionForSport.distance)} />
+            <MetricSubCard label="Pace" value={formatPace(lastSessionForSport.averagePace)} />
+            <MetricSubCard label="Avg HR" value={formatHeartRate(lastSessionForSport.averageHr)} />
             <MetricSubCard
-              label="ELEVATION"
-              value={lastSessionForSport?.elevationGain != null ? String(Math.round(lastSessionForSport.elevationGain)) : '--'}
-              sublabel="m"
+              label="Elevation"
+              value={
+                lastSessionForSport?.elevationGain != null
+                  ? `${Math.round(lastSessionForSport.elevationGain)} m`
+                  : '--'
+              }
             />
             <MetricSubCard
-              label="CALORIES"
-              value={lastSessionForSport?.calories != null ? String(Math.round(lastSessionForSport.calories)) : '--'}
-              sublabel="kcal"
+              label="Calories"
+              value={
+                lastSessionForSport?.calories != null
+                  ? `${Math.round(lastSessionForSport.calories)} kcal`
+                  : '--'
+              }
             />
             <MetricSubCard
-              label="DURATION"
+              label="Duration"
               value={formatDurationSeconds(lastSessionForSport.elapsedTime || lastSessionForSport.movingTime)}
             />
           </View>
         ) : !isFetching ? (
           <AppText style={styles.mutedText}>No {sportConfig.label.toLowerCase()} recorded yet.</AppText>
         ) : null}
-
-        <View style={styles.cardTitleRow}>
-          <AppText style={styles.cardTitle}>{routeTitle}</AppText>
-        </View>
-        <AppText style={styles.mutedText}>{routeSubtitle}</AppText>
-        <RouteMapCard
-          points={routePoints}
-          active={sessionState === 'recording'}
-          distanceKm={displayDistanceKm}
-          elevationGainMeters={elevationGainMeters}
-          gpsAccuracyMeters={gpsAccuracyMeters}
-        />
-        <View style={styles.twoColGrid}>
-          {routeSummary.map((item) => (
-            <MetricSubCard key={item.label} label={item.label.toUpperCase()} value={item.value} />
-          ))}
-        </View>
-
-        {kmSplits.length > 0 ? (
-          <View style={styles.splitsTable}>
-            <AppText style={styles.splitsTitle}>Km splits</AppText>
-            {kmSplits.map((split) => (
-              <View key={split.km} style={styles.splitRow}>
-                <AppText style={styles.splitKmLabel}>KM {split.km}</AppText>
-                <AppText style={styles.splitPaceValue}>{formatPace(split.paceSeconds)}</AppText>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        {phoneTrackingError ? <AppText style={styles.errorText}>{phoneTrackingError}</AppText> : null}
       </View>
 
-      {/* ── TRAINING card ── */}
       <View style={styles.card}>
-        <EyebrowLabel>TRAINING</EyebrowLabel>
         <View style={styles.cardTitleRow}>
-          <IconCircle color={ORANGE}>
-            <AppText style={styles.iconGlyph}>◈</AppText>
-          </IconCircle>
-          <AppText style={[styles.cardTitle, { flex: 1 }]}>Training snapshot</AppText>
-          <StatusPill label="Low activity" color={ORANGE} />
+          <View style={styles.titleStack}>
+            <EyebrowLabel>TRAINING BLOCK</EyebrowLabel>
+            <AppText style={styles.cardTitle}>This week</AppText>
+          </View>
+          <StatusPill label={loadBadgeLabel} color={loadBadgeColor} />
         </View>
         <View style={styles.twoColGrid}>
           {trainingSnapshot.map((item) => (
-            <MetricSubCard key={item.label} label={item.label.toUpperCase()} value={item.value} />
+            <MetricSubCard key={item.label} label={item.label} value={item.value} />
           ))}
         </View>
       </View>
 
-      {/* ── STRAVA card ── */}
       <View style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <AppText style={[styles.cardTitle, { flex: 1 }]}>Strava</AppText>
-          <StatusPill label="Setup required" color={ORANGE} />
-          <View style={styles.toggleDisabled}>
-            <View style={styles.toggleThumb} />
-          </View>
+        <View style={styles.sectionIntroCompact}>
+          <EyebrowLabel>RECENT TRENDS</EyebrowLabel>
+          <AppText style={styles.cardTitle}>Heart rate and distance</AppText>
         </View>
-        <AppText style={styles.fineprint}>
-          Connect Strava to automatically sync workouts and activity data. Requires an active Strava account.
-        </AppText>
-      </View>
-
-      {/* ── EXERCISE TRENDS card ── */}
-      <View style={styles.card}>
-        <EyebrowLabel>EXERCISE TRENDS</EyebrowLabel>
-        <AppText style={styles.cardTitle}>Heart rate & distance</AppText>
         <View style={styles.pillRow}>
-          <StatusPill label="Heart rate" color={ORANGE} dot />
+          <StatusPill label="Heart rate" color={TEAL} dot />
           <StatusPill label="Distance" color={ORANGE} dot />
         </View>
         {heartRateTrend.length ? (
@@ -1310,32 +1710,54 @@ export function ExerciseScreen() {
         )}
       </View>
 
-      {/* ── WATCH LINK card ── */}
       <View style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <IconCircle color={PURPLE}>
-            <AppText style={styles.iconGlyph}>◎</AppText>
-          </IconCircle>
-          <View style={{ flex: 1 }}>
-            <AppText style={styles.cardTitle}>Watch link</AppText>
-            <StatusPill
-              label={connectedDevice ? 'Connected' : 'No watch connected'}
-              color={connectedDevice ? TEAL : GRAY}
-            />
+        <View style={styles.sectionIntroCompact}>
+          <EyebrowLabel>SYNC SOURCES</EyebrowLabel>
+          <AppText style={styles.cardTitle}>Devices and Strava</AppText>
+        </View>
+        <View style={styles.syncGrid}>
+          <View style={styles.syncPanel}>
+            <View style={styles.syncPanelHead}>
+              <IconCircle color={PURPLE}>
+                <AppText style={styles.iconGlyph}>◎</AppText>
+              </IconCircle>
+              <View style={styles.syncPanelCopy}>
+                <AppText style={styles.syncPanelTitle}>Wearable</AppText>
+                <StatusPill label={watchConnectionLabel} color={connectedDevice ? '#39d98a' : GRAY} />
+              </View>
+            </View>
+            <AppText style={styles.fineprint}>
+              Use phone GPS with a watch for the closest match to a proper Strava live run screen.
+            </AppText>
+            <Pressable
+              style={styles.syncActionButton}
+              onPress={() => navigation.navigate('Settings' as never)}
+            >
+              <AppText style={styles.syncActionText}>Open device settings</AppText>
+            </Pressable>
+          </View>
+
+          <View style={styles.syncPanel}>
+            <View style={styles.syncPanelHead}>
+              <IconCircle color={ORANGE}>
+                <AppText style={styles.iconGlyph}>S</AppText>
+              </IconCircle>
+              <View style={styles.syncPanelCopy}>
+                <AppText style={styles.syncPanelTitle}>Strava</AppText>
+                <StatusPill label={stravaStatusLabel} color={data?.strava?.connected ? '#39d98a' : ORANGE} />
+              </View>
+            </View>
+            <AppText style={styles.fineprint}>
+              Sync your finished runs into the activity feed for deeper pace, load, and route review.
+            </AppText>
+            <Pressable
+              style={styles.syncActionGhost}
+              onPress={() => navigation.navigate('Activity' as never)}
+            >
+              <AppText style={styles.syncActionGhostText}>Open activity page</AppText>
+            </Pressable>
           </View>
         </View>
-        <Pressable
-          style={styles.purpleScanButton}
-          onPress={() => navigation.navigate('Devices' as never)}
-        >
-          <AppText style={styles.purpleScanText}>Scan for devices</AppText>
-        </Pressable>
-        <Pressable
-          style={styles.ghostDevicesButton}
-          onPress={() => navigation.navigate('Devices' as never)}
-        >
-          <AppText style={styles.ghostDevicesText}>View all devices</AppText>
-        </Pressable>
       </View>
     </ScrollView>
   );
@@ -1384,6 +1806,51 @@ function formatDurationSeconds(value?: number | null) {
     return '--';
   }
   return formatElapsed(Math.round(value * 1000));
+}
+
+function formatCompactDistanceKilometers(value?: number | null) {
+  if (value === null || value === undefined || Number.isNaN(value) || value <= 0) {
+    return '0.00 km';
+  }
+  return `${value.toFixed(2)} km`;
+}
+
+function buildWorkoutLiveActivityProps({
+  sportLabel,
+  status,
+  distanceKm,
+  elapsedMs,
+  paceSeconds,
+  heartRate,
+}: {
+  sportLabel: string;
+  status: 'active' | 'paused' | 'auto-paused' | 'finished';
+  distanceKm: number | null;
+  elapsedMs: number;
+  paceSeconds: number | null;
+  heartRate: number | null;
+}): WorkoutLiveActivityProps {
+  const statusLabel =
+    status === 'auto-paused'
+      ? 'Auto-paused'
+      : status.charAt(0).toUpperCase() + status.slice(1);
+  const elapsedLabel = formatElapsed(Math.max(0, elapsedMs));
+  const distanceLabel = formatCompactDistanceKilometers(distanceKm);
+  const paceText = formatPace(paceSeconds);
+  const heartRateText = formatHeartRate(heartRate);
+
+  return {
+    sportLabel,
+    statusLabel,
+    distanceLabel,
+    elapsedLabel,
+    paceLabel: paceText === '--' ? 'Pace --' : `Pace ${paceText}`,
+    heartRateLabel: heartRateText === '--' ? 'Heart rate --' : `Heart rate ${heartRateText}`,
+    compactDistanceLabel: distanceKm !== null && Number.isFinite(distanceKm) && distanceKm > 0
+      ? `${distanceKm.toFixed(1)}k`
+      : '0.0k',
+    compactElapsedLabel: elapsedLabel,
+  };
 }
 
 function formatWholeNumber(value?: number | null) {
@@ -1566,12 +2033,31 @@ function StatusPill({ label, color, dot }: { label: string; color: string; dot?:
   );
 }
 
-function StatStripItem({ label, value, sublabel }: { label: string; value: string; sublabel?: string }) {
+function HeroMetricCard({
+  label,
+  value,
+  helper,
+  tone,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+  tone: 'accent' | 'neutral';
+}) {
   return (
-    <View style={styles.statStripItem}>
-      <AppText style={styles.statStripLabel}>{label}</AppText>
-      <AppText style={styles.statStripValue}>{value}</AppText>
-      {sublabel ? <AppText style={styles.statStripSublabel}>{sublabel}</AppText> : null}
+    <View style={[styles.heroMetricCard, tone === 'accent' ? styles.heroMetricCardAccent : null]}>
+      <AppText style={styles.heroMetricLabel}>{label}</AppText>
+      <AppText style={styles.heroMetricValue}>{value}</AppText>
+      <AppText style={styles.heroMetricHelper}>{helper}</AppText>
+    </View>
+  );
+}
+
+function RouteFactChip({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.routeFactChip}>
+      <AppText style={styles.routeFactLabel}>{label}</AppText>
+      <AppText style={styles.routeFactValue}>{value}</AppText>
     </View>
   );
 }
@@ -1835,60 +2321,86 @@ function clampMapValue(value: number) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#05080f',
+    backgroundColor: '#0b0c0f',
   },
   container: {
     padding: spacing.lg,
-    gap: spacing.lg,
-    paddingBottom: spacing.lg * 2,
+    gap: spacing.lg + 2,
+    paddingBottom: spacing.xl * 2,
   },
 
   // ── Card shell ───────────────────────────────────────────────────────────────
   card: {
-    backgroundColor: '#0c1222',
-    borderRadius: 18,
+    backgroundColor: SURFACE,
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.07)',
+    borderColor: 'rgba(255,255,255,0.08)',
     padding: spacing.lg,
     gap: spacing.md,
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
+  heroCard: {
+    padding: 0,
+    overflow: 'hidden',
+  },
+  heroGradient: {
+    padding: spacing.lg,
+    gap: spacing.lg,
   },
 
   // ── Eyebrow ──────────────────────────────────────────────────────────────────
   eyebrow: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
     letterSpacing: 1.8,
-    color: colors.muted,
+    color: '#ffb08a',
     textTransform: 'uppercase',
   },
 
   // ── Hero card ────────────────────────────────────────────────────────────────
-  heroTopRow: {
+  heroHeaderRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
     gap: spacing.md,
+    flexWrap: 'wrap',
   },
-  heroTopMeta: {
+  heroHeaderCopy: {
     flex: 1,
-    gap: 6,
+    minWidth: 220,
+    gap: 8,
+  },
+  heroStatusStack: {
+    alignItems: 'flex-start',
+    gap: 8,
   },
   heroTitle: {
-    fontSize: 32,
+    fontSize: 38,
     fontWeight: '700',
     color: colors.text,
-    letterSpacing: -0.3,
+    letterSpacing: -1.1,
+  },
+  heroSubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: TEXT_MUTED,
   },
   iconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
   iconGlyph: {
-    fontSize: 18,
+    fontSize: 17,
     color: colors.text,
+    fontWeight: '700',
   },
 
   // ── Status pill ──────────────────────────────────────────────────────────────
@@ -1898,8 +2410,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: 100,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
     gap: 5,
   },
   pillDot: {
@@ -1908,22 +2420,118 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   pillText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     letterSpacing: 0.2,
+  },
+
+  // ── Hero metrics ─────────────────────────────────────────────────────────────
+  heroMetricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  heroMetricCard: {
+    width: '48%',
+    minWidth: 148,
+    flexGrow: 1,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 6,
+  },
+  heroMetricCardAccent: {
+    backgroundColor: 'rgba(252,76,2,0.1)',
+    borderColor: 'rgba(252,76,2,0.18)',
+  },
+  heroMetricLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.3,
+    color: TEXT_MUTED,
+    textTransform: 'uppercase',
+  },
+  heroMetricValue: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.8,
+  },
+  heroMetricHelper: {
+    fontSize: 12,
+    color: TEXT_MUTED,
+  },
+  heroMapSection: {
+    gap: spacing.sm,
+  },
+  inlineHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  inlineHeadingCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: 4,
+  },
+  inlineSectionTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  inlineSectionSubtitle: {
+    fontSize: 13,
+    color: TEXT_MUTED,
+    lineHeight: 18,
+  },
+  routeFactGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  routeFactChip: {
+    minWidth: '30%',
+    flexGrow: 1,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    gap: 4,
+  },
+  routeFactLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    color: TEXT_MUTED,
+    textTransform: 'uppercase',
+  },
+  routeFactValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
   },
 
   // ── Sport selector ───────────────────────────────────────────────────────────
   sportGrid: {
     flexDirection: 'row',
     gap: spacing.sm,
+    flexWrap: 'wrap',
   },
   sportCell: {
     flex: 1,
-    borderRadius: 13,
+    minWidth: 96,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
-    backgroundColor: '#060b16',
+    backgroundColor: SURFACE_SOFT,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.sm,
     alignItems: 'center',
@@ -1931,7 +2539,7 @@ const styles = StyleSheet.create({
   },
   sportCellActive: {
     borderColor: TEAL,
-    backgroundColor: `${TEAL}14`,
+    backgroundColor: `${TEAL}12`,
   },
   sportCellDisabled: {
     opacity: 0.4,
@@ -1939,63 +2547,23 @@ const styles = StyleSheet.create({
   sportCellLabel: {
     fontSize: 15,
     fontWeight: '700',
-    color: colors.muted,
+    color: TEXT_MUTED,
     letterSpacing: -0.2,
   },
   sportCellLabelActive: {
     color: TEAL,
   },
   sportCellTagline: {
-    fontSize: 9,
-    color: 'rgba(142,162,200,0.6)',
+    fontSize: 10,
+    color: 'rgba(169,176,184,0.68)',
     letterSpacing: 0.3,
-  },
-
-  // ── 4-stat strip ─────────────────────────────────────────────────────────────
-  statStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#060b16',
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-  },
-  statStripItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 3,
-  },
-  statStripLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    color: colors.muted,
-    textTransform: 'uppercase',
-  },
-  statStripValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    letterSpacing: -0.3,
-  },
-  statStripSublabel: {
-    fontSize: 9,
-    color: colors.muted,
-    letterSpacing: 0.2,
-  },
-  stripDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor: 'rgba(255,255,255,0.07)',
   },
 
   // ── CTA / controls ───────────────────────────────────────────────────────────
   ctaButton: {
     backgroundColor: TEAL,
-    borderRadius: 13,
-    paddingVertical: 15,
+    borderRadius: 18,
+    paddingVertical: 16,
     alignItems: 'center',
   },
   ctaButtonDisabled: {
@@ -2011,7 +2579,7 @@ const styles = StyleSheet.create({
   ctaText: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#05080f',
+    color: '#fff7f2',
     letterSpacing: 0.2,
   },
   controlPair: {
@@ -2020,11 +2588,11 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 13,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
-    paddingVertical: 13,
+    paddingVertical: 14,
     alignItems: 'center',
   },
   secondaryButtonText: {
@@ -2034,44 +2602,66 @@ const styles = StyleSheet.create({
   },
   ghostButton: {
     flex: 1,
-    borderRadius: 13,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    paddingVertical: 13,
+    borderColor: 'rgba(252,76,2,0.18)',
+    backgroundColor: 'rgba(252,76,2,0.05)',
+    paddingVertical: 14,
     alignItems: 'center',
   },
   ghostButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.muted,
+    color: '#ffd1bf',
+  },
+  feedbackBanner: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   feedbackText: {
     fontSize: 12,
-    color: colors.muted,
+    color: TEXT_MUTED,
     textAlign: 'center',
+    lineHeight: 18,
   },
 
   // ── Card header row ───────────────────────────────────────────────────────────
+  sectionIntro: {
+    gap: 6,
+  },
+  sectionIntroCompact: {
+    gap: 4,
+  },
   cardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     flexWrap: 'wrap',
   },
+  titleStack: {
+    gap: 4,
+    flex: 1,
+    minWidth: 160,
+  },
   cardTitle: {
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '700',
     color: colors.text,
-    letterSpacing: -0.2,
+    letterSpacing: -0.4,
   },
   cardSubtitle: {
     fontSize: 12,
-    color: colors.muted,
+    color: TEXT_MUTED,
   },
   linkText: {
     fontSize: 12,
-    color: TEAL,
+    color: '#ffd1bf',
     marginLeft: 'auto',
+    fontWeight: '700',
   },
 
   // ── 6-stat grid ──────────────────────────────────────────────────────────────
@@ -2090,43 +2680,43 @@ const styles = StyleSheet.create({
 
   // ── Metric sub-card ───────────────────────────────────────────────────────────
   metricSubCard: {
-    width: '30%',
+    width: '48%',
     flexGrow: 1,
-    backgroundColor: '#060b16',
-    borderRadius: 13,
+    backgroundColor: SURFACE_ALT,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    gap: 2,
+    borderColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    gap: 4,
   },
   metricSubLabel: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 1.4,
-    color: colors.muted,
+    letterSpacing: 1.2,
+    color: TEXT_MUTED,
     textTransform: 'uppercase',
   },
   metricSubValue: {
-    fontSize: 21,
+    fontSize: 22,
     fontWeight: '700',
     color: colors.text,
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
   },
   metricSubSublabel: {
-    fontSize: 9,
-    color: colors.muted,
+    fontSize: 10,
+    color: TEXT_MUTED,
     letterSpacing: 0.3,
   },
 
   // ── Route map card ────────────────────────────────────────────────────────────
   routeMapCard: {
-    height: 260,
-    borderRadius: 13,
+    height: 320,
+    borderRadius: 20,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.07)',
-    backgroundColor: '#0a1420',
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: '#13161a',
   },
   mapView: {
     flex: 1,
@@ -2154,13 +2744,13 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(5,8,15,0.82)',
-    paddingVertical: 8,
+    backgroundColor: 'rgba(10,11,13,0.82)',
+    paddingVertical: 10,
     paddingHorizontal: 14,
     gap: 12,
   },
   routeBottomItem: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: colors.text,
   },
@@ -2188,9 +2778,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.3)',
   },
   fineprint: {
-    fontSize: 11,
-    color: colors.muted,
-    lineHeight: 16,
+    fontSize: 12,
+    color: TEXT_MUTED,
+    lineHeight: 18,
   },
 
   // ── Trends card ───────────────────────────────────────────────────────────────
@@ -2233,8 +2823,8 @@ const styles = StyleSheet.create({
   // ── Misc ──────────────────────────────────────────────────────────────────────
   mutedText: {
     fontSize: 13,
-    color: colors.muted,
-    lineHeight: 18,
+    color: TEXT_MUTED,
+    lineHeight: 19,
   },
   errorText: {
     marginTop: spacing.sm,
@@ -2244,11 +2834,11 @@ const styles = StyleSheet.create({
 
   // ── Auto-pause banner ─────────────────────────────────────────────────────────
   autoPauseBanner: {
-    backgroundColor: `${ORANGE}18`,
-    borderRadius: 10,
+    backgroundColor: `${ORANGE}16`,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: `${ORANGE}44`,
-    paddingVertical: 8,
+    borderColor: `${ORANGE}55`,
+    paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: 'center',
   },
@@ -2261,12 +2851,13 @@ const styles = StyleSheet.create({
 
   // ── Km splits table ───────────────────────────────────────────────────────────
   splitsTable: {
-    gap: 5,
+    gap: 8,
+    paddingTop: 2,
   },
   splitsTitle: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.muted,
+    color: '#ffb08a',
     textTransform: 'uppercase',
     letterSpacing: 1.4,
     marginBottom: 2,
@@ -2275,21 +2866,77 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: '#060b16',
-    borderRadius: 8,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   splitKmLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
-    color: colors.muted,
+    color: TEXT_MUTED,
     letterSpacing: 0.8,
   },
   splitPaceValue: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '700',
     color: TEAL,
+    letterSpacing: -0.3,
+  },
+
+  // ── Sync sources ─────────────────────────────────────────────────────────────
+  syncGrid: {
+    gap: spacing.sm,
+  },
+  syncPanel: {
+    gap: spacing.sm,
+    backgroundColor: SURFACE_ALT,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    padding: spacing.md,
+  },
+  syncPanelHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  syncPanelCopy: {
+    flex: 1,
+    gap: 6,
+  },
+  syncPanelTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
     letterSpacing: -0.2,
+  },
+  syncActionButton: {
+    backgroundColor: `${PURPLE}16`,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: `${PURPLE}48`,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  syncActionText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: PURPLE,
+  },
+  syncActionGhost: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: `${ORANGE}40`,
+    backgroundColor: `${ORANGE}10`,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  syncActionGhostText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ffd1bf',
   },
 });

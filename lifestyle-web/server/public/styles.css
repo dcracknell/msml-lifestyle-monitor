@@ -717,6 +717,406 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 }
 .pulse-unit { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+.activity-focus-row {
+  margin-top: var(--gap);
+}
+.activity-focus-card {
+  padding: 20px;
+  overflow: hidden;
+}
+.activity-focus-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+  gap: 20px;
+}
+.activity-focus-map-panel,
+.activity-focus-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.activity-focus-map-panel {
+  gap: 14px;
+}
+.activity-focus-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.activity-focus-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.activity-focus-title {
+  font-size: clamp(26px, 2.4vw, 34px);
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.04em;
+}
+.activity-focus-subtitle {
+  max-width: 64ch;
+  font-size: 13px;
+  color: var(--label);
+}
+.activity-route-stage {
+  position: relative;
+  min-height: 360px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 28px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.16), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(96, 165, 250, 0.14), transparent 34%),
+    linear-gradient(160deg, rgba(6, 12, 20, 0.98), rgba(9, 18, 30, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 20px 40px rgba(0,0,0,0.28);
+}
+.activity-route-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 56px 56px;
+  opacity: 0.35;
+}
+.activity-route-svg {
+  position: absolute;
+  inset: 18px;
+  width: calc(100% - 36px);
+  height: calc(100% - 36px);
+}
+.activity-route-shadow,
+.activity-route-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.activity-route-shadow {
+  stroke: rgba(103, 232, 249, 0.16);
+  stroke-width: 9;
+}
+.activity-route-path {
+  stroke: url(#activityRouteGradient);
+  stroke-width: 4.2;
+  filter: url(#activityRouteGlow);
+}
+.activity-route-marker {
+  stroke-width: 2.4;
+}
+.activity-route-marker.start {
+  fill: #7de3ff;
+  stroke: rgba(125, 227, 255, 0.35);
+}
+.activity-route-marker.end {
+  fill: #fb7185;
+  stroke: rgba(251, 113, 133, 0.34);
+}
+.activity-route-empty {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 18px;
+  background: rgba(8, 15, 24, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--label);
+  font-size: 12px;
+}
+.activity-route-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+.activity-route-legend {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  background: rgba(8, 15, 24, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--label);
+  font-size: 11px;
+  font-weight: 600;
+}
+.activity-route-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.activity-route-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.activity-route-dot.start {
+  background: #7de3ff;
+  box-shadow: 0 0 12px rgba(125, 227, 255, 0.5);
+}
+.activity-route-dot.end {
+  background: #fb7185;
+  box-shadow: 0 0 12px rgba(251, 113, 133, 0.45);
+}
+.activity-focus-side {
+  gap: 14px;
+}
+.activity-focus-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.activity-focus-metric {
+  min-width: 0;
+  min-height: 94px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(17, 30, 46, 0.96), rgba(12, 22, 34, 0.94));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.activity-focus-metric-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.activity-focus-metric-value {
+  display: block;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.activity-focus-metric-copy {
+  display: block;
+  margin-top: 8px;
+  color: var(--label);
+  font-size: 11px;
+}
+.activity-focus-insight-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.12), transparent 34%),
+    linear-gradient(150deg, rgba(17, 30, 46, 0.98), rgba(10, 18, 28, 0.94));
+}
+.activity-focus-insight-head .section-eyebrow {
+  margin-bottom: 6px;
+}
+.activity-focus-insight-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.03em;
+}
+.activity-focus-insight-body {
+  font-size: 13px;
+  color: var(--label);
+}
+.activity-focus-highlights {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.activity-focus-highlights li {
+  padding: 12px 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 16px;
+  background: rgba(8, 15, 24, 0.42);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  border-left: 3px solid rgba(45, 212, 191, 0.45);
+}
+
+.activity-widget-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 1fr);
+  gap: var(--gap);
+  margin-top: var(--gap);
+}
+.activity-widget-card,
+.activity-widget-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.activity-widget-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.12), transparent 38%),
+    linear-gradient(145deg, rgba(17, 30, 46, 0.98), rgba(10, 18, 28, 0.96));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.activity-widget-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.activity-widget-dial {
+  width: 104px;
+  height: 104px;
+  border-radius: 24px;
+  border: 1px solid rgba(45,212,191,0.24);
+  background: rgba(45,212,191,0.1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.activity-widget-dial strong {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -.04em;
+  line-height: 1;
+}
+.activity-widget-dial span {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.activity-widget-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.activity-widget-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -.02em;
+}
+.activity-widget-status {
+  font-size: 13px;
+  color: var(--label);
+}
+.activity-widget-load {
+  font-size: 12px;
+  color: var(--muted);
+}
+.activity-widget-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.activity-widget-metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.activity-widget-metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--label);
+}
+.activity-widget-metric-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.activity-widget-bar {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.08);
+}
+.activity-widget-bar span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), #7de3ff);
+}
+.activity-widget-bar-alt span {
+  background: linear-gradient(90deg, var(--amber), #ffb86f);
+}
+.activity-widget-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.activity-widget-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--label);
+}
+.activity-widget-field input {
+  padding: 8px 10px;
+  font-size: 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  width: 100%;
+}
+.activity-widget-field input:focus {
+  outline: none;
+  border-color: rgba(45,212,191,0.8);
+  box-shadow: 0 0 0 3px rgba(45,212,191,0.18);
+}
+.activity-widget-field input[aria-invalid="true"] {
+  border-color: rgba(251,113,133,0.95);
+  box-shadow: 0 0 0 3px rgba(251,113,133,0.14);
+}
+.activity-widget-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.activity-widget-actions .field-hint[data-state="saved"] {
+  color: #95f3d7;
+}
+.activity-widget-actions .field-hint[data-state="pending"] {
+  color: #ffd08a;
+}
+.activity-widget-actions .field-hint[data-state="error"] {
+  color: #ffb3c1;
+}
+
 /* Sessions + Splits */
 .act-sessions-row {
   display: grid; grid-template-columns: 3fr 2fr; gap: var(--gap);
@@ -729,7 +1129,7 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .sessions-header .section-eyebrow { margin-bottom: 0; }
 
 /* Session list rows — populated by app.js */
-.act-session-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
+.act-session-list { display: flex; flex-direction: column; max-height: 410px; overflow-y: auto; }
 .act-session-list li {
   display: grid;
   grid-template-columns: 70px 1fr auto;
@@ -776,7 +1176,7 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 360px;
+  max-height: 410px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -915,7 +1315,7 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 
 /* Charts */
 .act-charts-row {
-  display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap);
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap);
 }
 .act-chart-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -927,6 +1327,7 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 }
 .chart-legend-dot.teal  { background: var(--teal); }
 .chart-legend-dot.amber { background: var(--amber); }
+.chart-legend-dot.blue  { background: var(--blue); }
 
 /* Best Efforts + Strava */
 .act-bottom-row {
@@ -1458,6 +1859,8 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 1300px) {
   .pulse-row { grid-template-columns: repeat(3,1fr); }
+  .activity-focus-grid { grid-template-columns: 1fr; }
+  .act-charts-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 1200px) {
@@ -1496,6 +1899,19 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   .trend-boards { grid-template-columns: 1fr; }
   .signals-table { grid-template-columns: 1fr; }
   .pulse-row { grid-template-columns: repeat(2,1fr); }
+  .activity-focus-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .activity-focus-badges { justify-content: flex-start; }
+  .activity-focus-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .activity-route-stage { min-height: 300px; }
+  .activity-widget-row { grid-template-columns: 1fr; }
+  .activity-widget-target-grid { grid-template-columns: 1fr; }
+  .activity-widget-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .act-sessions-row { grid-template-columns: 1fr; }
   .act-charts-row { grid-template-columns: 1fr; }
   .act-bottom-row { grid-template-columns: 1fr; }
@@ -1531,6 +1947,18 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
   .metric-value { font-size: 22px; }
   .pulse-row { grid-template-columns: 1fr 1fr; }
   .pulse-value { font-size: 20px; }
+  .activity-focus-card { padding: 16px; }
+  .activity-focus-title { font-size: 24px; }
+  .activity-focus-metrics { grid-template-columns: 1fr; }
+  .activity-route-stage { min-height: 250px; border-radius: 22px; }
+  .activity-route-empty { inset: auto 12px 12px 12px; }
+  .activity-route-legend { top: 12px; left: 12px; }
+  .activity-widget-top { align-items: flex-start; }
+  .activity-widget-dial {
+    width: 88px;
+    height: 88px;
+  }
+  .activity-widget-dial strong { font-size: 24px; }
   .nutrition-form-grid { grid-template-columns: 1fr 1fr; }
   .athlete-ranking li { grid-template-columns: 20px 30px 1fr 70px; }
   .athlete-readiness { display: none; }
@@ -2671,4 +3099,377 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 @media (max-width: 900px) {
   .chart-canvas-frame-220 { height: 180px; }
   .chart-canvas-frame-240 { height: 200px; }
+}
+
+/* ── Activity page rework: Strava-inspired rail layout ─────────────────── */
+.activity-stream-page {
+  --activity-accent: #fc4c02;
+  --activity-accent-soft: rgba(252, 76, 2, 0.12);
+  --activity-accent-strong: rgba(252, 76, 2, 0.2);
+  display: grid;
+  grid-template-columns: minmax(0, 1.62fr) minmax(320px, 0.92fr);
+  grid-template-areas:
+    "summary sidebar"
+    "focus sidebar"
+    "details sidebar2"
+    "charts sidebar2";
+  align-items: start;
+  gap: 18px 24px;
+}
+
+.activity-stream-page > .pulse-row,
+.activity-stream-page > .activity-focus-row,
+.activity-stream-page > .activity-widget-row,
+.activity-stream-page > .act-sessions-row,
+.activity-stream-page > .act-charts-row,
+.activity-stream-page > .act-bottom-row {
+  margin-top: 0;
+}
+
+.activity-stream-page > .pulse-row {
+  grid-area: summary;
+  gap: 12px;
+}
+
+.activity-stream-page > .activity-focus-row {
+  grid-area: focus;
+}
+
+.activity-stream-page > .activity-widget-row {
+  grid-area: sidebar;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  position: sticky;
+  top: 88px;
+  align-self: start;
+}
+
+.activity-stream-page > .act-sessions-row {
+  grid-area: details;
+  gap: 18px;
+}
+
+.activity-stream-page > .act-charts-row {
+  grid-area: charts;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.activity-stream-page > .act-charts-row .chart-card:first-child {
+  grid-column: 1 / -1;
+}
+
+.activity-stream-page > .act-bottom-row {
+  grid-area: sidebar2;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  align-self: start;
+}
+
+.activity-stream-page .card,
+.activity-stream-page .chart-card {
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(180deg, rgba(22, 24, 29, 0.98), rgba(15, 17, 21, 0.98));
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.activity-stream-page .card:hover,
+.activity-stream-page .chart-card:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 22px 40px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(252, 76, 2, 0.08);
+}
+
+.activity-stream-page .section-eyebrow {
+  color: var(--activity-accent) !important;
+  opacity: 0.8;
+}
+
+.activity-stream-page .outline-btn.secondary {
+  border-color: rgba(252, 76, 2, 0.2);
+  background: rgba(252, 76, 2, 0.05);
+  color: #ffd7c8;
+}
+
+.activity-stream-page .outline-btn.secondary:hover {
+  border-color: rgba(252, 76, 2, 0.34);
+  background: rgba(252, 76, 2, 0.1);
+}
+
+.activity-stream-page .pulse-card {
+  min-height: 114px;
+  padding: 16px 18px;
+  border-top: 3px solid rgba(252, 76, 2, 0.8);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(28, 30, 35, 0.98), rgba(18, 20, 24, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.activity-stream-page .pulse-value,
+.activity-stream-page .pulse-card:nth-child(2) .pulse-value,
+.activity-stream-page .pulse-card:nth-child(4) .pulse-value,
+.activity-stream-page .pulse-card:nth-child(5) .pulse-value,
+.activity-stream-page .pulse-card:nth-child(6) .pulse-value {
+  color: var(--text) !important;
+}
+
+.activity-stream-page .pulse-card:nth-child(1) .pulse-value,
+.activity-stream-page .pulse-card:nth-child(3) .pulse-value {
+  color: #ffb08a !important;
+}
+
+.activity-stream-page .pulse-card:nth-child(6) .pulse-value {
+  color: #a7c8ff !important;
+}
+
+.activity-stream-page .activity-focus-card {
+  padding: 24px;
+}
+
+.activity-stream-page .activity-focus-grid {
+  grid-template-columns: minmax(0, 1.34fr) minmax(320px, 0.9fr);
+  gap: 22px;
+}
+
+.activity-stream-page .activity-focus-title {
+  letter-spacing: -0.05em;
+}
+
+.activity-stream-page .activity-focus-subtitle {
+  max-width: 58ch;
+}
+
+.activity-stream-page .activity-route-stage {
+  min-height: 430px;
+  border-radius: 18px;
+  border-color: rgba(255, 255, 255, 0.05);
+  background:
+    radial-gradient(circle at top right, rgba(252, 76, 2, 0.16), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(255, 153, 102, 0.12), transparent 36%),
+    linear-gradient(180deg, rgba(27, 28, 31, 0.98), rgba(16, 17, 19, 0.98));
+}
+
+.activity-stream-page .activity-route-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+  background-size: 44px 44px;
+  opacity: 0.22;
+}
+
+.activity-stream-page .activity-route-shadow {
+  stroke: rgba(252, 76, 2, 0.16);
+}
+
+.activity-stream-page .activity-route-marker.start {
+  fill: #ffb08a;
+  stroke: rgba(255, 176, 138, 0.35);
+}
+
+.activity-stream-page .activity-route-marker.end {
+  fill: #ff6b4a;
+  stroke: rgba(255, 107, 74, 0.3);
+}
+
+.activity-stream-page .activity-route-empty,
+.activity-stream-page .activity-route-legend {
+  background: rgba(10, 11, 13, 0.72);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.activity-stream-page .activity-route-dot.start {
+  background: #ffb08a;
+  box-shadow: 0 0 12px rgba(255, 176, 138, 0.45);
+}
+
+.activity-stream-page .activity-route-dot.end {
+  background: #ff6b4a;
+  box-shadow: 0 0 12px rgba(255, 107, 74, 0.4);
+}
+
+.activity-stream-page .activity-focus-metric,
+.activity-stream-page .activity-focus-insight-card,
+.activity-stream-page .run-detail-card,
+.activity-stream-page .run-split-card,
+.activity-stream-page .act-efforts-list li {
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(27, 29, 33, 0.98), rgba(17, 18, 22, 0.98));
+}
+
+.activity-stream-page .activity-focus-metric {
+  min-height: 98px;
+}
+
+.activity-stream-page .activity-focus-metric-value,
+.activity-stream-page .act-efforts-list .eff-value {
+  font-size: 26px;
+}
+
+.activity-stream-page .activity-focus-highlights li {
+  border-left-color: rgba(252, 76, 2, 0.42);
+  background: rgba(252, 76, 2, 0.04);
+}
+
+.activity-stream-page .activity-widget-shell {
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(252, 76, 2, 0.13), transparent 34%),
+    linear-gradient(180deg, rgba(27, 28, 32, 0.98), rgba(16, 17, 21, 0.98));
+}
+
+.activity-stream-page .activity-widget-dial {
+  border-color: rgba(252, 76, 2, 0.22);
+  background: rgba(252, 76, 2, 0.08);
+  border-radius: 20px;
+}
+
+.activity-stream-page .activity-widget-bar span {
+  background: linear-gradient(90deg, #ffb08a, #fc4c02);
+}
+
+.activity-stream-page .activity-widget-bar-alt span {
+  background: linear-gradient(90deg, #ffd39d, #ff964f);
+}
+
+.activity-stream-page .activity-widget-field input:focus {
+  border-color: rgba(252, 76, 2, 0.75);
+  box-shadow: 0 0 0 3px rgba(252, 76, 2, 0.14);
+}
+
+.activity-stream-page .activity-widget-field input[aria-invalid="true"] {
+  border-color: rgba(255, 107, 74, 0.9);
+  box-shadow: 0 0 0 3px rgba(255, 107, 74, 0.14);
+}
+
+.activity-stream-page .activity-widget-actions .field-hint[data-state="saved"] {
+  color: #ffccb4;
+}
+
+.activity-stream-page .activity-widget-actions .field-hint[data-state="pending"] {
+  color: #ffd69f;
+}
+
+.activity-stream-page .activity-widget-actions .field-hint[data-state="error"] {
+  color: #ff9f92;
+}
+
+.activity-stream-page .sessions-card,
+.activity-stream-page .splits-card,
+.activity-stream-page .efforts-card,
+.activity-stream-page .strava-card {
+  padding-bottom: 18px;
+}
+
+.activity-stream-page .sessions-header,
+.activity-stream-page .card-header.split,
+.activity-stream-page .act-chart-header {
+  padding-inline: 0;
+}
+
+.activity-stream-page .card-header.split {
+  margin-bottom: 10px;
+}
+
+.activity-stream-page .field-hint,
+.activity-stream-page .strava-actions,
+.activity-stream-page .strava-cred-block {
+  margin-inline: 0;
+}
+
+.activity-stream-page .act-session-list {
+  gap: 10px !important;
+  max-height: 520px;
+}
+
+.activity-stream-page .session-item {
+  border-radius: 16px !important;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(16, 18, 22, 0.84);
+}
+
+.activity-stream-page .session-item:first-child,
+.activity-stream-page .session-item:last-child,
+.activity-stream-page .session-item:only-child {
+  border-radius: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.activity-stream-page .session-item:hover {
+  background: rgba(252, 76, 2, 0.08);
+  border-color: rgba(252, 76, 2, 0.22);
+}
+
+.activity-stream-page .session-item.active {
+  background: linear-gradient(90deg, rgba(252, 76, 2, 0.14), rgba(252, 76, 2, 0.04));
+  border-color: rgba(252, 76, 2, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(252, 76, 2, 0.08);
+}
+
+.activity-stream-page .session-item.active .session-title,
+.activity-stream-page .session-metrics span:first-child,
+.activity-stream-page .run-detail-kicker,
+.activity-stream-page .run-split-pace {
+  color: #ffb08a;
+}
+
+.activity-stream-page .run-detail-metric,
+.activity-stream-page .run-split-row {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.activity-stream-page .chart-legend-dot.teal {
+  background: #fc4c02;
+}
+
+.activity-stream-page .chart-legend-dot.amber {
+  background: #ff944d;
+}
+
+.activity-stream-page .chart-legend-dot.blue {
+  background: #ffb08a;
+}
+
+.activity-stream-page .eff-badge {
+  border-color: rgba(252, 76, 2, 0.22);
+  background: linear-gradient(135deg, rgba(252, 76, 2, 0.18), rgba(252, 76, 2, 0.05));
+  color: #ffb08a;
+}
+
+.activity-stream-page .strava-status-chip,
+.activity-stream-page #stravaStatusChip {
+  border-color: rgba(252, 76, 2, 0.2);
+}
+
+@media (max-width: 1260px) {
+  .activity-stream-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .activity-stream-page > .activity-widget-row {
+    position: static;
+  }
+}
+
+@media (max-width: 1040px) {
+  .activity-stream-page > .act-charts-row {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-stream-page > .act-charts-row .chart-card:first-child {
+    grid-column: auto;
+  }
 }

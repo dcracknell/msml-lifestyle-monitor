@@ -1,4 +1,4 @@
-import React, { ReactNode } from 'react';
+import React, { ReactNode, useEffect } from 'react';
 import dayjs from 'dayjs';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, View } from 'react-native';
@@ -23,6 +23,9 @@ import { useAuth } from '../../providers/AuthProvider';
 import { useSubject } from '../../providers/SubjectProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDecimal, formatNumber, formatPace } from '../../utils/format';
+import { createDailyCaloriesWidgetSnapshot, syncDailyCaloriesWidget } from '../nutrition/dailyCaloriesWidget';
+import { createActivityProgressWidgetSnapshot, syncActivityProgressWidget } from '../activity/activityWidget';
+import { useActivityGoals } from '../activity/useActivityGoals';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -40,6 +43,7 @@ type InsightChip = {
   value: string;
   tone: InsightTone;
 };
+
 
 const SECTION_TONES: Record<'recovery' | 'training' | 'nutrition' | 'trends', SectionTone> = {
   recovery: {
@@ -71,6 +75,7 @@ const SECTION_TONES: Record<'recovery' | 'training' | 'nutrition' | 'trends', Se
 export function OverviewScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
+  const { goals, isReady: goalsReady } = useActivityGoals();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const subjectQueryKey = requestSubject || user?.id;
   const selectedDate = dayjs().format('YYYY-MM-DD');
@@ -124,6 +129,47 @@ export function OverviewScreen() {
     vitalsQuery.isError ||
     nutritionQuery.isError ||
     weightQuery.isError;
+  const calorieGoal = nutritionData?.goals?.targetCalories ?? nutritionData?.goals?.calories ?? null;
+
+  useEffect(() => {
+    if (!nutritionData) {
+      return;
+    }
+    syncDailyCaloriesWidget(
+      createDailyCaloriesWidgetSnapshot({
+        titleLabel: 'Daily calories',
+        consumedCalories: nutritionData.dailyTotals?.calories,
+        targetCalories: calorieGoal,
+      })
+    );
+  }, [calorieGoal, nutritionData]);
+
+  useEffect(() => {
+    if (!activityData || !goalsReady) {
+      return;
+    }
+    const summary = activityData.summary;
+    const trainingLoad = summary?.trainingLoad ?? null;
+    const statusLabel =
+      trainingLoad === null
+        ? 'Open the app to sync activity'
+        : trainingLoad > 400
+        ? 'High load'
+        : trainingLoad > 100
+        ? 'On track'
+        : 'Low activity';
+    syncActivityProgressWidget(
+      createActivityProgressWidgetSnapshot({
+        athleteName: activityData.subject?.name,
+        weeklyDistanceKm: summary?.weeklyDistanceKm,
+        weeklyDurationMin: summary?.weeklyDurationMin,
+        goalDistanceKm: goals.targetDistanceKm,
+        goalDurationMin: goals.targetDurationMin,
+        weeklyTrainingLoad: trainingLoad,
+        statusLabel,
+      })
+    );
+  }, [activityData, goals.targetDistanceKm, goals.targetDurationMin, goalsReady]);
 
   if (!hasAnyData && anyLoading) {
     return <LoadingView />;
@@ -180,7 +226,6 @@ export function OverviewScreen() {
   const latestWeightEntry = weightData?.latest || weightData?.recent?.[0] || weightData?.timeline?.[0] || null;
   const latestWeightKg = latestWeightEntry?.weightKg ?? null;
   const weightWeeklyChange = weightData?.stats?.weeklyChangeKg ?? null;
-  const calorieGoal = nutritionData?.goals?.targetCalories ?? nutritionData?.goals?.calories ?? null;
   const sleepGoal = sleepData?.subject?.goal_sleep ?? user?.goal_sleep ?? null;
   const readinessGoal = sleepData?.subject?.goal_readiness ?? user?.goal_readiness ?? null;
   const readinessScore = sleepData?.summary?.readiness ?? null;
@@ -196,6 +241,7 @@ export function OverviewScreen() {
     readinessScore,
     trainingLoad,
   });
+
 
   const recoveryBadge = getRecoveryBadge(readinessScore, sleepAverage, sleepGoal);
   const trainingBadge = getTrainingBadge(trainingLoad, computeAverageDelta(trainingLoadTrend, 5));
@@ -261,7 +307,6 @@ export function OverviewScreen() {
         </View>
       </View>
 
-      {/* Daily insight card */}
       <View style={styles.insightCard}>
         <View style={styles.insightTitleRow}>
           <View style={styles.insightIconWrap}>
@@ -279,6 +324,7 @@ export function OverviewScreen() {
           ))}
         </View>
       </View>
+
 
       {/* Recovery section */}
       <View style={[styles.sectionCard, { borderColor: SECTION_TONES.recovery.border }]}>
@@ -566,6 +612,7 @@ function InsightChipBlock({ chip }: { chip: InsightChip }) {
   );
 }
 
+
 function ChartPanel({
   title,
   subtitle,
@@ -731,6 +778,7 @@ function getLoadTone(delta: number | null): InsightTone {
   return delta > 0 ? 'negative' : 'positive';
 }
 
+
 function computeAverageDelta(data: Array<{ value: number }>, window: number) {
   const values = data.map((entry) => entry.value).filter((value) => Number.isFinite(value));
   if (values.length < window * 2) {
@@ -837,6 +885,7 @@ function formatLoadDeltaChip(delta: number | null, current: number | null) {
   }
   return `${delta > 0 ? '+' : '-'}${formatNumber(Math.abs(delta))} vs prior`;
 }
+
 
 function describeSleepGoalDelta(hours: number | null, goal: number | null) {
   if (hours === null && goal === null) {
@@ -1067,7 +1116,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.muted,
   },
-  // Insight card
   insightCard: {
     backgroundColor: colors.panel,
     borderRadius: 16,

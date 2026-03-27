@@ -8,17 +8,13 @@ import {
   ConnectionCard,
 } from '../profile/ProfileScreen';
 import { ShareSection } from '../share/ShareScreen';
-import { BluetoothDevicesSection, BluetoothDeveloperSection } from '../devices/BluetoothScreen';
+import { BluetoothDevicesSection } from '../devices/BluetoothScreen';
 import { AdminSection } from '../admin/AdminScreen';
 import { AppButton, AppText } from '../../components';
 import { colors, spacing } from '../../theme';
 
-function SectionLabel({ label, developer }: { label: string; developer?: boolean }) {
-  return (
-    <AppText style={[styles.sectionLabel, developer ? styles.sectionLabelDev : undefined]}>
-      {label}
-    </AppText>
-  );
+function SectionLabel({ label }: { label: string }) {
+  return <AppText style={styles.sectionLabel}>{label}</AppText>;
 }
 
 export function SettingsScreen() {
@@ -57,9 +53,6 @@ export function SettingsScreen() {
 
         <SectionLabel label="DEVICES" />
         <BluetoothDevicesSection />
-
-        <SectionLabel label="DEVELOPER" developer />
-        <BluetoothDeveloperSection />
 
         <SectionLabel label="CONNECTION" />
         <ConnectionCard />
@@ -102,9 +95,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginTop: spacing.md,
     marginBottom: spacing.xs,
-  },
-  sectionLabelDev: {
-    color: colors.warning,
   },
   stickyBar: {
     position: 'absolute',

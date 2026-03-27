@@ -587,6 +587,55 @@ function getSmartViewportOptions(overrides = {}) {
 const DEFAULT_HEIGHT_CM = 175;
 const WEIGHT_HEIGHT_STORAGE_KEY = 'msml.weight.height';
 let weightHeightSettings = loadWeightHeightSettings();
+const ACTIVITY_WIDGET_GOALS_STORAGE_KEY = 'msml.activityWidgetGoals';
+const ACTIVITY_WIDGET_DEFAULT_GOALS = {
+  distanceKm: 25,
+  durationMin: 150,
+};
+const ACTIVITY_WIDGET_GOAL_NOTE_DEFAULT = 'These targets are saved in this browser.';
+const ACTIVITY_WIDGET_GOAL_NOTE_PENDING = 'Press Save targets to apply these goals.';
+const ACTIVITY_WIDGET_GOAL_NOTE_SAVED = 'Targets saved in this browser.';
+const ACTIVITY_WIDGET_GOAL_NOTE_INVALID = 'Enter positive targets for distance and duration.';
+const ACTIVITY_WIDGET_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function sanitizeActivityWidgetGoal(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function normalizeActivityWidgetGoals(goals = {}) {
+  return {
+    distanceKm: sanitizeActivityWidgetGoal(
+      goals?.distanceKm,
+      ACTIVITY_WIDGET_DEFAULT_GOALS.distanceKm
+    ),
+    durationMin: sanitizeActivityWidgetGoal(
+      goals?.durationMin,
+      ACTIVITY_WIDGET_DEFAULT_GOALS.durationMin
+    ),
+  };
+}
+
+function loadActivityWidgetGoals() {
+  try {
+    const raw = window.localStorage?.getItem(ACTIVITY_WIDGET_GOALS_STORAGE_KEY);
+    if (!raw) {
+      return normalizeActivityWidgetGoals();
+    }
+    const parsed = JSON.parse(raw);
+    return normalizeActivityWidgetGoals(parsed);
+  } catch (error) {
+    return normalizeActivityWidgetGoals();
+  }
+}
+
+function persistActivityWidgetGoals(goals) {
+  try {
+    window.localStorage?.setItem(ACTIVITY_WIDGET_GOALS_STORAGE_KEY, JSON.stringify(goals));
+  } catch (error) {
+    // Ignore storage failures for optional preview settings.
+  }
+}
 
 const state = {
   token: null,
@@ -630,6 +679,7 @@ const state = {
     strava: null,
     selectedSessionId: null,
     subjectId: null,
+    widgetGoals: loadActivityWidgetGoals(),
   },
   vitals: {
     latest: null,
@@ -654,6 +704,7 @@ const state = {
       sleep: 8,
     },
   },
+  currentPage: 'overview',
 };
 
 const DEMO_ACTIVITY = {
@@ -1061,6 +1112,17 @@ const activityWeeklyDuration = document.getElementById('activityWeeklyDuration')
 const activityAvgPace = document.getElementById('activityAvgPace');
 const activityLongestRun = document.getElementById('activityLongestRun');
 const activityLongestRunLabel = document.getElementById('activityLongestRunLabel');
+const activityWidgetPercent = document.getElementById('activityWidgetPercent');
+const activityWidgetStatus = document.getElementById('activityWidgetStatus');
+const activityWidgetLoad = document.getElementById('activityWidgetLoad');
+const activityWidgetDistance = document.getElementById('activityWidgetDistance');
+const activityWidgetDuration = document.getElementById('activityWidgetDuration');
+const activityWidgetDistanceBar = document.getElementById('activityWidgetDistanceBar');
+const activityWidgetDurationBar = document.getElementById('activityWidgetDurationBar');
+const activityWidgetDistanceGoalInput = document.getElementById('activityWidgetDistanceGoal');
+const activityWidgetDurationGoalInput = document.getElementById('activityWidgetDurationGoal');
+const activityWidgetSaveGoalsButton = document.getElementById('activityWidgetSaveGoals');
+const activityWidgetGoalNote = document.getElementById('activityWidgetGoalNote');
 const sleepHoursPrimary = document.getElementById('sleepHoursPrimary');
 const sleepGoalCopy = document.getElementById('sleepGoalCopy');
 const sleepGoalInput = document.getElementById('sleepGoalInput');
@@ -1077,6 +1139,10 @@ const overviewSyncCalories = document.getElementById('overviewSyncCalories');
 const overviewSyncCaloriesNote = document.getElementById('overviewSyncCaloriesNote');
 const overviewSyncSleep = document.getElementById('overviewSyncSleep');
 const overviewSyncSleepNote = document.getElementById('overviewSyncSleepNote');
+
+syncActivityWidgetGoalInputs(state.activity.widgetGoals);
+renderActivityWidgetPreview(state.activity.summary);
+updateActivityWidgetGoalDraftState();
 
 let startupReady = false;
 function markStartupReady() {
@@ -2501,6 +2567,21 @@ const activityPrimarySessionsList = document.getElementById('sessionsList');
 const activitySessionsList = document.getElementById('activitySessions');
 const activitySplitsList = document.getElementById('activitySplits');
 const activitySplitTitle = document.getElementById('activitySplitTitle');
+const activityFocusTitle = document.getElementById('activityFocusTitle');
+const activityFocusSubtitle = document.getElementById('activityFocusSubtitle');
+const activityFocusSourceChip = document.getElementById('activityFocusSourceChip');
+const activityFocusRouteChip = document.getElementById('activityFocusRouteChip');
+const activityFocusMetrics = document.getElementById('activityFocusMetrics');
+const activityFocusInsightTitle = document.getElementById('activityFocusInsightTitle');
+const activityFocusInsightBody = document.getElementById('activityFocusInsightBody');
+const activityFocusHighlights = document.getElementById('activityFocusHighlights');
+const activityRouteSvg = document.getElementById('activityRouteSvg');
+const activityRouteShadow = document.getElementById('activityRouteShadow');
+const activityRoutePath = document.getElementById('activityRoutePath');
+const activityRouteStart = document.getElementById('activityRouteStart');
+const activityRouteEnd = document.getElementById('activityRouteEnd');
+const activityRouteEmpty = document.getElementById('activityRouteEmpty');
+const activityRouteLegend = document.getElementById('activityRouteLegend');
 const activityBestEffortsList = document.getElementById('activityBestEfforts');
 const activityBestEffortsBadge = document.getElementById('activityBestEffortsBadge');
 const activityBestEffortsHint = document.getElementById('activityBestEffortsHint');
@@ -2600,6 +2681,230 @@ const formatSessionSource = (value) => {
   if (!normalized) return '—';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };
+const formatPaceDelta = (seconds) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60)
+    .toString()
+    .padStart(2, '0');
+  return `${mins}:${secs}`;
+};
+
+function formatSessionSourceBadge(session) {
+  const source = String(session?.source || '').trim().toLowerCase();
+  if (!source) return 'Session';
+  if (source === 'strava') return 'Strava sync';
+  if (source === 'phone_sync') return 'Phone sync';
+  if (source === 'seed') return 'Demo activity';
+  return formatSessionSource(source);
+}
+
+function simplifyRoutePoints(points = [], maxPoints = 180) {
+  if (!Array.isArray(points) || points.length <= maxPoints) {
+    return Array.isArray(points) ? points.slice() : [];
+  }
+
+  const output = [];
+  const step = (points.length - 1) / (maxPoints - 1);
+  for (let index = 0; index < maxPoints; index += 1) {
+    const sourceIndex = Math.round(index * step);
+    output.push(points[Math.min(sourceIndex, points.length - 1)]);
+  }
+  return output;
+}
+
+function buildSessionRoutePoints(session, precision = 5) {
+  const routePoints = decodePolyline(session?.routeSummaryPolyline, precision);
+  const startLat = Number(session?.routeStartLat);
+  const startLng = Number(session?.routeStartLng);
+  const endLat = Number(session?.routeEndLat);
+  const endLng = Number(session?.routeEndLng);
+  const hasStart = Number.isFinite(startLat) && Number.isFinite(startLng);
+  const hasEnd = Number.isFinite(endLat) && Number.isFinite(endLng);
+
+  if (!routePoints.length) {
+    return [];
+  }
+
+  const normalized = routePoints.slice();
+  if (hasStart) {
+    normalized[0] = { x: startLng, y: startLat };
+  }
+  if (hasEnd) {
+    normalized[normalized.length - 1] = { x: endLng, y: endLat };
+  }
+  return simplifyRoutePoints(normalized);
+}
+
+function decodePolyline(encoded, precision = 5) {
+  if (typeof encoded !== 'string' || !encoded.trim()) {
+    return [];
+  }
+
+  const points = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  const factor = 10 ** precision;
+
+  try {
+    while (index < encoded.length) {
+      let result = 0;
+      let shift = 0;
+      let byte = null;
+
+      do {
+        if (index >= encoded.length) {
+          return [];
+        }
+        byte = encoded.charCodeAt(index++) - 63;
+        if (!Number.isFinite(byte) || byte < 0) {
+          return [];
+        }
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+      result = 0;
+      shift = 0;
+      do {
+        if (index >= encoded.length) {
+          return [];
+        }
+        byte = encoded.charCodeAt(index++) - 63;
+        if (!Number.isFinite(byte) || byte < 0) {
+          return [];
+        }
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lng += result & 1 ? ~(result >> 1) : result >> 1;
+
+      points.push({
+        x: lng / factor,
+        y: lat / factor,
+      });
+    }
+  } catch (error) {
+    return [];
+  }
+
+  return points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+}
+
+function buildRouteGeometry(points = [], { size = 100, padding = 10 } = {}) {
+  if (!Array.isArray(points) || points.length < 2) {
+    return null;
+  }
+
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+  const drawable = Math.max(1, size - padding * 2);
+  const scale = Math.min(drawable / spanX, drawable / spanY);
+  const offsetX = (size - spanX * scale) / 2;
+  const offsetY = (size - spanY * scale) / 2;
+
+  const transformed = points.map((point) => ({
+    x: offsetX + (point.x - minX) * scale,
+    y: size - (offsetY + (point.y - minY) * scale),
+  }));
+  const d = transformed
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(' ');
+
+  return {
+    d,
+    start: transformed[0],
+    end: transformed[transformed.length - 1],
+  };
+}
+
+function buildEffortTracePoints(splits = []) {
+  if (!Array.isArray(splits) || splits.length < 2) {
+    return [];
+  }
+
+  const totalDistance = splits.reduce((sum, split) => sum + (Number(split?.distance) || 0), 0);
+  if (!Number.isFinite(totalDistance) || totalDistance <= 0) {
+    return [];
+  }
+
+  const paceValues = splits
+    .map((split) => getSplitPaceValue(split))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const elevationValues = splits
+    .map((split) => Number(split?.elevation))
+    .filter((value) => Number.isFinite(value));
+  if (!paceValues.length && !elevationValues.length) {
+    return [];
+  }
+  const minPace = Math.min(...paceValues);
+  const maxPace = Math.max(...paceValues);
+  const minElevation = elevationValues.length ? Math.min(...elevationValues) : 0;
+  const maxElevation = elevationValues.length ? Math.max(...elevationValues) : 1;
+  let coveredDistance = 0;
+
+  return splits.map((split) => {
+    coveredDistance += Number(split?.distance) || 0;
+    const progress = coveredDistance / totalDistance;
+    const pace = getSplitPaceValue(split);
+    const elevation = Number(split?.elevation);
+    const paceFactor =
+      Number.isFinite(pace) && maxPace > minPace ? (pace - minPace) / (maxPace - minPace) : 0.5;
+    const elevationFactor =
+      Number.isFinite(elevation) && maxElevation > minElevation
+        ? (elevation - minElevation) / (maxElevation - minElevation)
+        : 0.5;
+    const wave = Math.sin(progress * Math.PI * (2.2 + splits.length * 0.12)) * 0.2;
+
+    return {
+      x: progress,
+      y: paceFactor * 0.68 + (1 - elevationFactor) * 0.22 + wave,
+    };
+  });
+}
+
+function getSelectedActivitySessionSplits(session = getSelectedActivitySession()) {
+  if (!session?.id) return [];
+  return Array.isArray(state.activity?.splits?.[session.id]) ? state.activity.splits[session.id] : [];
+}
+
+function averageSplitPace(splits = []) {
+  const totals = splits.reduce(
+    (acc, split) => {
+      const distance = Number(split?.distance);
+      const pace = getSplitPaceValue(split);
+      if (Number.isFinite(distance) && distance > 0 && Number.isFinite(pace) && pace > 0) {
+        acc.distance += distance;
+        acc.seconds += pace * (distance / 1000);
+      }
+      return acc;
+    },
+    { distance: 0, seconds: 0 }
+  );
+  if (!totals.distance || !totals.seconds) return null;
+  return totals.seconds / (totals.distance / 1000);
+}
+
+function getSplitPaceValue(split = {}) {
+  const pace = Number(split?.pace);
+  if (Number.isFinite(pace) && pace > 0) {
+    return pace;
+  }
+  const distance = Number(split?.distance);
+  const movingTime = Number(split?.movingTime);
+  if (Number.isFinite(distance) && distance > 0 && Number.isFinite(movingTime) && movingTime > 0) {
+    return movingTime / (distance / 1000);
+  }
+  return null;
+}
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -2971,6 +3276,7 @@ function resetNutritionState() {
 }
 
 function resetActivityState() {
+  const currentWidgetGoals = state.activity?.widgetGoals || loadActivityWidgetGoals();
   state.activity = {
     summary: null,
     sessions: [],
@@ -2979,6 +3285,7 @@ function resetActivityState() {
     strava: null,
     selectedSessionId: null,
     subjectId: null,
+    widgetGoals: currentWidgetGoals,
   };
   state.charts.activityMileage?.destroy();
   state.charts.activityMileage = null;
@@ -2986,6 +3293,8 @@ function resetActivityState() {
   state.charts.activityPace = null;
   state.charts.activityLoad?.destroy();
   state.charts.activityLoad = null;
+  state.charts.activitySplit?.destroy();
+  state.charts.activitySplit = null;
   if (activityPrimarySessionsList) activityPrimarySessionsList.innerHTML = '';
   if (activitySessionsList) activitySessionsList.innerHTML = '';
   if (activitySplitsList) activitySplitsList.innerHTML = '';
@@ -3006,6 +3315,7 @@ function resetActivityState() {
   if (activityLongestRun) activityLongestRun.textContent = '—';
   if (activityTrainingLoad) activityTrainingLoad.textContent = '—';
   if (activityVo2max) activityVo2max.textContent = '—';
+  renderActivityWidgetPreview(null);
   if (stravaFeedback) stravaFeedback.textContent = '';
   if (stravaExportButton) {
     stravaExportButton.classList.add('hidden');
@@ -3013,6 +3323,9 @@ function resetActivityState() {
     stravaExportButton.textContent = 'Export to Strava';
   }
   renderSessions([]);
+  renderActivityFocus();
+  renderActivitySplitChart();
+  updateActivityWidgetGoalDraftState();
 }
 
 function resetVitalsState() {
@@ -6005,6 +6318,8 @@ function setActivePage(targetPage = 'overview') {
     targetPage = 'activity';
   }
 
+  state.currentPage = targetPage;
+
   document.querySelectorAll('#sideNav [data-page]').forEach((button) => {
     const isActive = button.dataset.page === targetPage;
     button.classList.toggle('active', isActive);
@@ -6021,6 +6336,9 @@ function setActivePage(targetPage = 'overview') {
 
   if (targetPage === 'sharing') {
     updateSharePanelVisibility(state.user);
+  }
+  if (targetPage === 'overview') {
+    loadMetrics(state.viewing?.id ?? state.user?.id);
   }
   if (targetPage === 'nutrition') {
     loadNutrition(state.viewing?.id ?? state.user?.id);
@@ -6831,6 +7149,11 @@ profileForm?.addEventListener('submit', async (event) => {
 promoteButton?.addEventListener('click', promoteSelectedUser);
 deleteButton?.addEventListener('click', deleteSelectedUser);
 logoutButton?.addEventListener('click', handleLogout);
+activityWidgetSaveGoalsButton?.addEventListener('click', saveActivityWidgetGoalsFromInputs);
+activityWidgetDistanceGoalInput?.addEventListener('input', updateActivityWidgetGoalDraftState);
+activityWidgetDurationGoalInput?.addEventListener('input', updateActivityWidgetGoalDraftState);
+activityWidgetDistanceGoalInput?.addEventListener('keydown', handleActivityWidgetGoalInputKeydown);
+activityWidgetDurationGoalInput?.addEventListener('keydown', handleActivityWidgetGoalInputKeydown);
 
 async function completeAuthentication(session) {
   if (!session || !session.token || !session.user) {
@@ -7208,7 +7531,7 @@ async function loadActivity(subjectOverrideId) {
       (Array.isArray(charts.heartRatePace) && charts.heartRatePace.length > 0);
     renderActivitySummary(state.activity.summary);
     renderActivitySessions(state.activity.sessions);
-    renderActivitySplits();
+    renderActivitySelectionDetails();
     renderActivityBestEfforts(state.activity.bestEfforts);
     renderActivityCharts(charts);
     renderStravaPanel(state.activity.strava || {});
@@ -7328,7 +7651,7 @@ function handleActivitySessionClick(event) {
   state.activity.selectedSessionId = sessionId;
   renderSessions(state.activity.sessions);
   renderActivitySessions(state.activity.sessions);
-  renderActivitySplits();
+  renderActivitySelectionDetails();
 }
 
 function handleActivitySessionKeydown(event) {
@@ -9155,6 +9478,7 @@ function renderSessions(sessions = []) {
   if (activitySessionHint) {
     activitySessionHint.textContent = 'Click a run to inspect details →';
   }
+  const fragment = document.createDocumentFragment();
 
   const estimateSessionLoad = (entry) => {
     const explicitLoad = Number(entry?.trainingLoad);
@@ -9219,8 +9543,9 @@ function renderSessions(sessions = []) {
 
     li.appendChild(body);
     li.appendChild(metrics);
-    list.appendChild(li);
+    fragment.appendChild(li);
   });
+  list.appendChild(fragment);
 
   if (summary) {
     const totalDistanceKm = rollingWindow.reduce(
@@ -9291,6 +9616,7 @@ function renderActivitySummary(summary) {
     if (activityLongestRunLabel) activityLongestRunLabel.textContent = 'Longest effort';
     if (activityTrainingLoad) activityTrainingLoad.textContent = '—';
     if (activityVo2max) activityVo2max.textContent = '—';
+    renderActivityWidgetPreview(null);
     return;
   }
 
@@ -9324,6 +9650,271 @@ function renderActivitySummary(summary) {
     const vo2 = Number(summary.vo2maxEstimate);
     activityVo2max.textContent = Number.isFinite(vo2) ? formatDecimal(vo2, 1) : '—';
   }
+  renderActivityWidgetPreview(summary);
+}
+
+function renderActivityWidgetPreview(summary) {
+  if (
+    !activityWidgetPercent ||
+    !activityWidgetStatus ||
+    !activityWidgetLoad ||
+    !activityWidgetDistance ||
+    !activityWidgetDuration
+  ) {
+    return;
+  }
+
+  const goals = normalizeActivityWidgetGoals(state.activity?.widgetGoals || loadActivityWidgetGoals());
+  syncActivityWidgetGoalInputs(goals);
+
+  const targetDistanceKm = sanitizeActivityWidgetGoal(
+    goals.distanceKm,
+    ACTIVITY_WIDGET_DEFAULT_GOALS.distanceKm
+  );
+  const targetDurationMin = sanitizeActivityWidgetGoal(
+    goals.durationMin,
+    ACTIVITY_WIDGET_DEFAULT_GOALS.durationMin
+  );
+  const widgetData = buildActivityWidgetData(summary, state.activity?.sessions || []);
+  const distanceValue = widgetData.weeklyDistanceKm;
+  const durationValue = widgetData.weeklyDurationMin;
+  const distanceProgress = Math.min(100, Math.round((distanceValue / targetDistanceKm) * 100));
+  const durationProgress = Math.min(100, Math.round((durationValue / targetDurationMin) * 100));
+  const overallPercent = Math.round((distanceProgress + durationProgress) / 2);
+
+  activityWidgetPercent.textContent = `${overallPercent}%`;
+  activityWidgetStatus.textContent = describeActivityWidgetStatus({
+    hasSummary: Boolean(summary),
+    hasSessions: widgetData.sessionCount > 0,
+    usesFallbackWindow: widgetData.usesFallbackWindow,
+    overallPercent,
+    trainingLoad: widgetData.trainingLoad,
+  });
+  activityWidgetLoad.textContent = describeActivityWidgetLoad(widgetData);
+  activityWidgetDistance.textContent =
+    `${formatDecimal(distanceValue, 1)} / ${formatDecimal(targetDistanceKm, 1)} km`;
+  activityWidgetDuration.textContent =
+    `${formatWidgetMinutes(durationValue)} / ${formatWidgetMinutes(targetDurationMin)}`;
+  setActivityWidgetProgressBar(activityWidgetDistanceBar, distanceProgress, 'distance goal complete');
+  setActivityWidgetProgressBar(activityWidgetDurationBar, durationProgress, 'duration goal complete');
+}
+
+function collectActivityWidgetWindowStats(sessions = [], windowEndTs = Date.now()) {
+  if (!Array.isArray(sessions) || !sessions.length) {
+    return {
+      weeklyDistanceKm: 0,
+      weeklyDurationMin: 0,
+      trainingLoad: 0,
+      sessionCount: 0,
+      windowEndTs,
+    };
+  }
+
+  const windowStartTs = windowEndTs - ACTIVITY_WIDGET_WINDOW_MS;
+  let weeklyDistance = 0;
+  let weeklyDuration = 0;
+  let trainingLoad = 0;
+  let sessionCount = 0;
+
+  sessions.forEach((session) => {
+    const sessionTs = new Date(session?.startTime || 0).getTime();
+    if (!Number.isFinite(sessionTs) || sessionTs < windowStartTs || sessionTs > windowEndTs) {
+      return;
+    }
+    sessionCount += 1;
+    weeklyDistance += Number(session?.distance) || 0;
+    weeklyDuration += Number(session?.movingTime) || Number(session?.elapsedTime) || 0;
+    trainingLoad += Number(session?.trainingLoad) || 0;
+  });
+
+  return {
+    weeklyDistanceKm: Number((weeklyDistance / 1000).toFixed(2)),
+    weeklyDurationMin: Math.round(weeklyDuration / 60),
+    trainingLoad: Math.round(trainingLoad),
+    sessionCount,
+    windowEndTs,
+  };
+}
+
+function resolveActivityWidgetMetric(summaryValue, derivedValue, derivedSessionCount) {
+  if (Number.isFinite(summaryValue) && (summaryValue > 0 || !derivedSessionCount)) {
+    return summaryValue;
+  }
+  return Number.isFinite(derivedValue) && derivedValue > 0 ? derivedValue : 0;
+}
+
+function buildActivityWidgetData(summary, sessions = []) {
+  const normalizedSessions = Array.isArray(sessions)
+    ? sessions
+        .filter((session) => Number.isFinite(new Date(session?.startTime || 0).getTime()))
+        .slice()
+        .sort((a, b) => new Date(b?.startTime || 0).getTime() - new Date(a?.startTime || 0).getTime())
+    : [];
+  const currentWindow = collectActivityWidgetWindowStats(normalizedSessions, Date.now());
+  const fallbackWindow =
+    !summary && !currentWindow.sessionCount && normalizedSessions.length
+      ? collectActivityWidgetWindowStats(
+          normalizedSessions,
+          new Date(normalizedSessions[0]?.startTime || 0).getTime()
+        )
+      : null;
+  const derivedWindow = currentWindow.sessionCount ? currentWindow : fallbackWindow || currentWindow;
+  const summaryDistance = Number(summary?.weeklyDistanceKm);
+  const summaryDuration = Number(summary?.weeklyDurationMin);
+  const summaryTrainingLoad = Number(summary?.trainingLoad);
+
+  return {
+    weeklyDistanceKm: resolveActivityWidgetMetric(
+      summaryDistance,
+      derivedWindow.weeklyDistanceKm,
+      derivedWindow.sessionCount
+    ),
+    weeklyDurationMin: resolveActivityWidgetMetric(
+      summaryDuration,
+      derivedWindow.weeklyDurationMin,
+      derivedWindow.sessionCount
+    ),
+    trainingLoad: resolveActivityWidgetMetric(
+      summaryTrainingLoad,
+      derivedWindow.trainingLoad,
+      derivedWindow.sessionCount
+    ),
+    sessionCount: derivedWindow.sessionCount,
+    usesFallbackWindow: Boolean(!summary && !currentWindow.sessionCount && derivedWindow.sessionCount),
+  };
+}
+
+function describeActivityWidgetStatus({
+  hasSummary,
+  hasSessions,
+  usesFallbackWindow,
+  overallPercent,
+  trainingLoad,
+}) {
+  if (!hasSummary && !hasSessions) {
+    return 'Awaiting activity data.';
+  }
+  if (usesFallbackWindow) {
+    return 'Showing your most recent synced training block.';
+  }
+  if (overallPercent >= 100) {
+    return 'Goal smashed this week.';
+  }
+  if (overallPercent >= 70) {
+    return 'On track for your weekly target.';
+  }
+  if (Number.isFinite(trainingLoad) && trainingLoad > 0) {
+    return 'Momentum is building. Keep going.';
+  }
+  return 'No sessions logged this week yet.';
+}
+
+function describeActivityWidgetLoad({ trainingLoad, sessionCount, usesFallbackWindow }) {
+  const periodLabel = usesFallbackWindow ? 'in your most recent synced week' : 'this week';
+  if (Number.isFinite(trainingLoad) && trainingLoad > 0) {
+    return `${formatNumber(trainingLoad)} training load points ${periodLabel}`;
+  }
+  if (Number.isFinite(sessionCount) && sessionCount > 0) {
+    return `${formatNumber(sessionCount)} synced session${sessionCount === 1 ? '' : 's'} counted ${periodLabel}`;
+  }
+  return 'Training load appears once sessions sync.';
+}
+
+function formatWidgetMinutes(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0m';
+  return formatDurationFromMinutes(minutes);
+}
+
+function syncActivityWidgetGoalInputs(goals) {
+  const normalizedGoals = normalizeActivityWidgetGoals(goals);
+  if (activityWidgetDistanceGoalInput && document.activeElement !== activityWidgetDistanceGoalInput) {
+    activityWidgetDistanceGoalInput.value = String(normalizedGoals.distanceKm);
+  }
+  if (activityWidgetDurationGoalInput && document.activeElement !== activityWidgetDurationGoalInput) {
+    activityWidgetDurationGoalInput.value = String(normalizedGoals.durationMin);
+  }
+}
+
+function setActivityWidgetProgressBar(element, percent, description) {
+  if (!element) return;
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  element.style.width = `${safePercent}%`;
+  element.setAttribute('aria-valuenow', String(safePercent));
+  if (description) {
+    element.setAttribute('aria-valuetext', `${safePercent}% ${description}`);
+  }
+}
+
+function setActivityWidgetGoalNote(message = ACTIVITY_WIDGET_GOAL_NOTE_DEFAULT, stateName = 'default') {
+  if (!activityWidgetGoalNote) return;
+  activityWidgetGoalNote.textContent = message;
+  activityWidgetGoalNote.dataset.state = stateName;
+}
+
+function setActivityWidgetGoalValidity(isValid) {
+  [activityWidgetDistanceGoalInput, activityWidgetDurationGoalInput].forEach((input) => {
+    if (!input) return;
+    input.setAttribute('aria-invalid', String(!isValid));
+  });
+}
+
+function readActivityWidgetGoalsFromInputs() {
+  const distanceKm = sanitizeActivityWidgetGoal(activityWidgetDistanceGoalInput?.value, NaN);
+  const durationMin = sanitizeActivityWidgetGoal(activityWidgetDurationGoalInput?.value, NaN);
+  if (!Number.isFinite(distanceKm) || !Number.isFinite(durationMin)) {
+    return null;
+  }
+  return normalizeActivityWidgetGoals({ distanceKm, durationMin });
+}
+
+function activityWidgetGoalsMatch(left, right) {
+  if (!left || !right) return false;
+  return Number(left.distanceKm) === Number(right.distanceKm) &&
+    Number(left.durationMin) === Number(right.durationMin);
+}
+
+function updateActivityWidgetGoalDraftState() {
+  if (!activityWidgetDistanceGoalInput && !activityWidgetDurationGoalInput) {
+    return;
+  }
+
+  const savedGoals = normalizeActivityWidgetGoals(state.activity?.widgetGoals || loadActivityWidgetGoals());
+  const draftGoals = readActivityWidgetGoalsFromInputs();
+
+  if (!draftGoals) {
+    setActivityWidgetGoalValidity(false);
+    setActivityWidgetGoalNote(ACTIVITY_WIDGET_GOAL_NOTE_INVALID, 'error');
+    return;
+  }
+
+  setActivityWidgetGoalValidity(true);
+  if (activityWidgetGoalsMatch(savedGoals, draftGoals)) {
+    setActivityWidgetGoalNote(ACTIVITY_WIDGET_GOAL_NOTE_DEFAULT, 'default');
+    return;
+  }
+
+  setActivityWidgetGoalNote(ACTIVITY_WIDGET_GOAL_NOTE_PENDING, 'pending');
+}
+
+function handleActivityWidgetGoalInputKeydown(event) {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  saveActivityWidgetGoalsFromInputs();
+}
+
+function saveActivityWidgetGoalsFromInputs() {
+  const goals = readActivityWidgetGoalsFromInputs();
+  if (!goals) {
+    setActivityWidgetGoalValidity(false);
+    setActivityWidgetGoalNote(ACTIVITY_WIDGET_GOAL_NOTE_INVALID, 'error');
+    return;
+  }
+
+  state.activity.widgetGoals = goals;
+  persistActivityWidgetGoals(state.activity.widgetGoals);
+  setActivityWidgetGoalValidity(true);
+  setActivityWidgetGoalNote(ACTIVITY_WIDGET_GOAL_NOTE_SAVED, 'saved');
+  renderActivityWidgetPreview(state.activity.summary);
 }
 
 function renderActivitySessions(sessions = []) {
@@ -9341,7 +9932,11 @@ function renderActivitySessions(sessions = []) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
+
   sessions.forEach((session) => {
+    const averagePace = Number(session.averagePace);
+    const averageHr = Number(session.averageHr);
     const li = document.createElement('li');
     const button = document.createElement('button');
     button.type = 'button';
@@ -9364,23 +9959,26 @@ function renderActivitySessions(sessions = []) {
     const distance = document.createElement('span');
     distance.textContent = formatDistance(session.distance);
     const pace = document.createElement('span');
-    pace.textContent = session.averagePace ? `${formatPace(session.averagePace)} /km` : '—';
+    pace.textContent =
+      Number.isFinite(averagePace) && averagePace > 0 ? `${formatPace(averagePace)} /km` : '—';
     const hr = document.createElement('span');
-    hr.textContent = session.averageHr ? `${Math.round(session.averageHr)} bpm` : '—';
+    hr.textContent = Number.isFinite(averageHr) && averageHr > 0 ? `${Math.round(averageHr)} bpm` : '—';
     meta.appendChild(distance);
     meta.appendChild(pace);
     meta.appendChild(hr);
-    if (Number.isFinite(session.trainingLoad)) {
+    const trainingLoad = Number(session.trainingLoad);
+    if (Number.isFinite(trainingLoad)) {
       const load = document.createElement('span');
-      load.textContent = `${Math.round(session.trainingLoad)} load`;
+      load.textContent = `${Math.round(trainingLoad)} load`;
       meta.appendChild(load);
     }
 
     button.appendChild(header);
     button.appendChild(meta);
     li.appendChild(button);
-    activitySessionsList.appendChild(li);
+    fragment.appendChild(li);
   });
+  activitySessionsList.appendChild(fragment);
   enforceScrollableList(activitySessionsList);
 }
 
@@ -9388,6 +9986,302 @@ function getSelectedActivitySession() {
   const sessionId = state.activity.selectedSessionId;
   if (!sessionId) return null;
   return state.activity.sessions.find((item) => item.id === sessionId) || null;
+}
+
+function renderActivitySelectionDetails() {
+  renderActivityFocus();
+  renderActivitySplits();
+  renderActivitySplitChart();
+}
+
+function renderActivityFocus() {
+  if (
+    !activityFocusTitle ||
+    !activityFocusSubtitle ||
+    !activityFocusMetrics ||
+    !activityFocusInsightTitle ||
+    !activityFocusInsightBody ||
+    !activityFocusHighlights
+  ) {
+    return;
+  }
+
+  const session = getSelectedActivitySession();
+  if (!session) {
+    activityFocusTitle.textContent = 'Select a run';
+    activityFocusSubtitle.textContent =
+      'Choose a run to inspect route shape, pacing behaviour, and training context.';
+    activityFocusMetrics.innerHTML = '';
+    activityFocusInsightTitle.textContent = 'Ready for analysis';
+    activityFocusInsightBody.textContent =
+      'Choose a run to see pacing, load, and route context.';
+    activityFocusHighlights.innerHTML = '';
+    const emptyHighlight = document.createElement('li');
+    emptyHighlight.textContent = 'No run selected yet.';
+    activityFocusHighlights.appendChild(emptyHighlight);
+    renderActivityRoutePreview(null, []);
+    renderActivityFocusBadge(activityFocusSourceChip, '', '');
+    renderActivityFocusBadge(activityFocusRouteChip, '', '');
+    return;
+  }
+
+  const splits = getSelectedActivitySessionSplits(session);
+  const movingTimeSeconds = Number(session?.movingTime) || Number(session?.elapsedTime);
+  const fastestSplit = splits.reduce((best, split) => {
+    const pace = getSplitPaceValue(split);
+    if (!Number.isFinite(pace) || pace <= 0) return best;
+    if (!best || pace < best.pace) {
+      return { splitIndex: split.splitIndex, pace };
+    }
+    return best;
+  }, null);
+
+  activityFocusTitle.textContent = session.name || 'Training session';
+  activityFocusSubtitle.textContent = [
+    formatActivityDateTime(session.startTime),
+    session.sportType || 'Run',
+    formatSessionSourceBadge(session),
+  ]
+    .filter(Boolean)
+    .join(' • ');
+
+  const focusMetrics = [
+    {
+      label: 'Distance',
+      value: formatDistance(session.distance),
+      copy: splits.length ? `${splits.length} split${splits.length === 1 ? '' : 's'} captured` : 'No split data',
+    },
+    {
+      label: 'Moving time',
+      value: formatDurationFromSeconds(movingTimeSeconds),
+      copy: `Elapsed ${formatDurationFromSeconds(Number(session.elapsedTime))}`,
+    },
+    {
+      label: 'Average pace',
+      value: session.averagePace ? `${formatPace(session.averagePace)} /km` : '—',
+      copy: fastestSplit
+        ? `Fastest split ${fastestSplit.splitIndex}: ${formatPace(fastestSplit.pace)} /km`
+        : 'Pace detail will sharpen once split data syncs',
+    },
+    {
+      label: 'Heart rate',
+      value: session.averageHr ? `${Math.round(session.averageHr)} bpm` : '—',
+      copy: session.maxHr ? `Max ${Math.round(session.maxHr)} bpm` : 'No max heart rate recorded',
+    },
+    {
+      label: 'Elevation',
+      value: Number.isFinite(Number(session.elevationGain))
+        ? `${Math.round(Number(session.elevationGain))} m`
+        : '—',
+      copy: Number.isFinite(Number(session.averageCadence))
+        ? `${formatDecimal(Number(session.averageCadence), 0)} spm cadence`
+        : 'Cadence unavailable',
+    },
+    {
+      label: 'Training load',
+      value: Number.isFinite(Number(session.trainingLoad))
+        ? formatNumber(Math.round(Number(session.trainingLoad)))
+        : '—',
+      copy: Number.isFinite(Number(session.perceivedEffort))
+        ? `RPE ${Math.round(Number(session.perceivedEffort))}/10`
+        : Number.isFinite(Number(session.vo2maxEstimate))
+        ? `VO2 ${formatDecimal(Number(session.vo2maxEstimate), 1)}`
+        : 'Load context will appear as more data arrives',
+    },
+  ];
+
+  activityFocusMetrics.innerHTML = '';
+  const metricsFragment = document.createDocumentFragment();
+  focusMetrics.forEach((metric) => {
+    const card = document.createElement('article');
+    card.className = 'activity-focus-metric';
+
+    const label = document.createElement('span');
+    label.className = 'activity-focus-metric-label';
+    label.textContent = metric.label;
+
+    const value = document.createElement('strong');
+    value.className = 'activity-focus-metric-value';
+    value.textContent = metric.value;
+
+    const copy = document.createElement('span');
+    copy.className = 'activity-focus-metric-copy';
+    copy.textContent = metric.copy;
+
+    card.appendChild(label);
+    card.appendChild(value);
+    card.appendChild(copy);
+    metricsFragment.appendChild(card);
+  });
+  activityFocusMetrics.appendChild(metricsFragment);
+
+  const insights = buildActivitySessionInsights(session, splits);
+  activityFocusInsightTitle.textContent = insights.title;
+  activityFocusInsightBody.textContent = insights.body;
+  activityFocusHighlights.innerHTML = '';
+  insights.highlights.forEach((item) => {
+    const li = document.createElement('li');
+    li.textContent = item;
+    activityFocusHighlights.appendChild(li);
+  });
+
+  renderActivityRoutePreview(session, splits);
+  renderActivityFocusBadge(activityFocusSourceChip, formatSessionSourceBadge(session), 'status-chip');
+}
+
+function renderActivityFocusBadge(element, text, className) {
+  if (!element) return;
+  element.className = className || 'status-chip';
+  if (!text) {
+    element.textContent = '';
+    element.classList.add('hidden');
+    return;
+  }
+  element.textContent = text;
+  element.classList.remove('hidden');
+}
+
+function buildActivitySessionInsights(session, splits = []) {
+  const distanceKm = Number(session?.distance) / 1000;
+  const movingMinutes = (Number(session?.movingTime) || Number(session?.elapsedTime) || 0) / 60;
+  const trainingLoad = Number(session?.trainingLoad);
+  const averageHr = Number(session?.averageHr);
+  const averagePace = Number(session?.averagePace);
+  const summary = state.activity?.summary || null;
+
+  let title = 'Balanced run';
+  let body = 'A steady session with enough signal to track pacing, load, and efficiency.';
+
+  if ((Number.isFinite(distanceKm) && distanceKm >= 18) || movingMinutes >= 90) {
+    title = 'Long-run builder';
+    body = 'A higher-volume endurance session that should meaningfully shape the current training week.';
+  } else if (
+    (Number.isFinite(trainingLoad) && trainingLoad >= 90) ||
+    (Number.isFinite(averagePace) && averagePace > 0 && averagePace <= 285)
+  ) {
+    title = 'Quality session';
+    body = 'A sharper run profile with enough intensity to move fitness, load, and confidence forward.';
+  } else if (Number.isFinite(averageHr) && averageHr > 0 && averageHr < 150) {
+    title = 'Aerobic support';
+    body = 'A lower-stress aerobic session that supports volume, recovery, and consistency.';
+  }
+
+  const highlights = [];
+  if (splits.length >= 2) {
+    const firstHalf = averageSplitPace(splits.slice(0, Math.ceil(splits.length / 2)));
+    const secondHalf = averageSplitPace(splits.slice(Math.floor(splits.length / 2)));
+    if (Number.isFinite(firstHalf) && Number.isFinite(secondHalf)) {
+      const delta = Math.round(Math.abs(firstHalf - secondHalf));
+      if (delta >= 3) {
+        highlights.push(
+          secondHalf < firstHalf
+            ? `Closed the second half ${formatPaceDelta(delta)} /km faster than the opening half.`
+            : `Pace faded by ${formatPaceDelta(delta)} /km over the second half.`
+        );
+      }
+    }
+
+    const heartRates = splits
+      .map((split) => Number(split?.heartRate))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (heartRates.length >= 2) {
+      const drift = Math.round(heartRates[heartRates.length - 1] - heartRates[0]);
+      if (drift !== 0) {
+        highlights.push(
+          drift > 0
+            ? `Heart rate drifted +${drift} bpm from the first split to the finish.`
+            : `Heart rate settled ${Math.abs(drift)} bpm lower by the closing split.`
+        );
+      }
+    }
+
+    const paceValues = splits
+      .map((split) => getSplitPaceValue(split))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (paceValues.length >= 2) {
+      const paceSpread = Math.round(Math.max(...paceValues) - Math.min(...paceValues));
+      if (paceSpread > 0) {
+        highlights.push(`Split pace spread stayed within ${formatPaceDelta(paceSpread)} /km.`);
+      }
+    }
+  }
+
+  if (Number.isFinite(Number(session?.elevationGain)) && Number(session.elevationGain) > 0) {
+    highlights.push(`Climbing totaled ${Math.round(Number(session.elevationGain))} m across the run.`);
+  }
+
+  if (summary && Number.isFinite(Number(summary.weeklyDistanceKm)) && Number(summary.weeklyDistanceKm) > 0) {
+    const weeklyShare = (Number(session?.distance) / (Number(summary.weeklyDistanceKm) * 1000)) * 100;
+    if (Number.isFinite(weeklyShare) && weeklyShare > 0) {
+      highlights.push(`This run accounts for ${Math.round(weeklyShare)}% of the last 7 days of distance.`);
+    }
+  }
+
+  if (!highlights.length) {
+    if (Number.isFinite(trainingLoad) && trainingLoad > 0) {
+      highlights.push(`Training load landed at ${Math.round(trainingLoad)} for this session.`);
+    } else if (Number.isFinite(distanceKm) && distanceKm > 0) {
+      highlights.push(`Session volume landed at ${formatDecimal(distanceKm, 1)} km.`);
+    } else {
+      highlights.push('More route and split data will sharpen this summary.');
+    }
+  }
+
+  return {
+    title,
+    body,
+    highlights: highlights.slice(0, 3),
+  };
+}
+
+function renderActivityRoutePreview(session, splits = []) {
+  if (
+    !activityRoutePath ||
+    !activityRouteShadow ||
+    !activityRouteStart ||
+    !activityRouteEnd ||
+    !activityRouteEmpty
+  ) {
+    return;
+  }
+
+  const routePoints = buildSessionRoutePoints(session);
+  const effortTracePoints = routePoints.length >= 2 ? [] : buildEffortTracePoints(splits);
+  const previewMode = routePoints.length >= 2 ? 'gps' : effortTracePoints.length >= 2 ? 'trace' : 'none';
+  const previewPoints = previewMode === 'gps' ? routePoints : previewMode === 'trace' ? effortTracePoints : [];
+  const geometry = buildRouteGeometry(previewPoints);
+
+  if (!session || !geometry) {
+    activityRoutePath.setAttribute('d', '');
+    activityRouteShadow.setAttribute('d', '');
+    activityRouteStart.setAttribute('r', '0');
+    activityRouteEnd.setAttribute('r', '0');
+    activityRouteEmpty.classList.remove('hidden');
+    if (activityRouteLegend) {
+      activityRouteLegend.classList.add('hidden');
+    }
+    renderActivityFocusBadge(activityFocusRouteChip, '', '');
+    return;
+  }
+
+  activityRoutePath.setAttribute('d', geometry.d);
+  activityRouteShadow.setAttribute('d', geometry.d);
+  activityRouteStart.setAttribute('cx', geometry.start.x.toFixed(2));
+  activityRouteStart.setAttribute('cy', geometry.start.y.toFixed(2));
+  activityRouteStart.setAttribute('r', '4.6');
+  activityRouteEnd.setAttribute('cx', geometry.end.x.toFixed(2));
+  activityRouteEnd.setAttribute('cy', geometry.end.y.toFixed(2));
+  activityRouteEnd.setAttribute('r', '5.2');
+  activityRouteEmpty.classList.add('hidden');
+  if (activityRouteLegend) {
+    activityRouteLegend.classList.remove('hidden');
+  }
+
+  if (previewMode === 'gps') {
+    renderActivityFocusBadge(activityFocusRouteChip, 'GPS route', 'status-chip ok');
+  } else {
+    renderActivityFocusBadge(activityFocusRouteChip, 'Effort trace', 'status-chip warn');
+  }
 }
 
 function canExportSessionToStrava(session) {
@@ -9552,6 +10446,7 @@ function renderActivitySplits() {
 
   const splitTable = document.createElement('div');
   splitTable.className = 'run-split-table';
+  const splitRows = document.createDocumentFragment();
   splits.forEach((split) => {
     const row = document.createElement('div');
     row.className = 'run-split-row';
@@ -9566,14 +10461,18 @@ function renderActivitySplits() {
 
     const pace = document.createElement('span');
     pace.className = 'run-split-pace';
-    pace.textContent = split.pace ? `${formatPace(split.pace)} /km` : '—';
+    const splitPace = getSplitPaceValue(split);
+    pace.textContent =
+      Number.isFinite(splitPace) && splitPace > 0 ? `${formatPace(splitPace)} /km` : '—';
 
     const meta = document.createElement('span');
     meta.className = 'run-split-meta';
+    const heartRate = Number(split.heartRate);
+    const elevation = Number(split.elevation);
     meta.textContent =
       [
-        split.heartRate ? `${Math.round(split.heartRate)} bpm` : null,
-        Number.isFinite(split.elevation) ? `${Math.round(split.elevation)} m` : null,
+        Number.isFinite(heartRate) && heartRate > 0 ? `${Math.round(heartRate)} bpm` : null,
+        Number.isFinite(elevation) ? `${Math.round(elevation)} m` : null,
       ]
         .filter(Boolean)
         .join(' • ') || '—';
@@ -9582,8 +10481,9 @@ function renderActivitySplits() {
     row.appendChild(distance);
     row.appendChild(pace);
     row.appendChild(meta);
-    splitTable.appendChild(row);
+    splitRows.appendChild(row);
   });
+  splitTable.appendChild(splitRows);
 
   splitCard.appendChild(splitTable);
   activitySplitsList.appendChild(splitCard);
@@ -9701,6 +10601,158 @@ function renderActivityCharts(charts = {}) {
   const mileageTrend = charts.mileageTrend || [];
   renderActivityPaceChart(charts.heartRatePace || [], mileageTrend);
   renderActivityLoadChart(state.activity.sessions, mileageTrend);
+}
+
+function renderActivitySplitChart() {
+  const canvasId = 'activitySplitChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  const session = getSelectedActivitySession();
+  const splits = getSelectedActivitySessionSplits(session);
+  setChartCardTitle(canvasId, 'Split Breakdown');
+
+  if (!session) {
+    state.charts.activitySplit?.destroy();
+    state.charts.activitySplit = null;
+    showChartMessage(canvasId, 'Select a run to compare split behaviour.');
+    return;
+  }
+
+  if (!splits.length) {
+    state.charts.activitySplit?.destroy();
+    state.charts.activitySplit = null;
+    showChartMessage(canvasId, 'This run does not have split detail yet.');
+    return;
+  }
+
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  const labels = splits.map((split) => `S${split.splitIndex}`);
+  const paceSeries = splits.map((split) => getSplitPaceValue(split));
+  const heartRateSeries = splits.map((split) => {
+    const value = Number(split?.heartRate);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+  });
+  const elevationSeries = splits.map((split) => {
+    const value = Number(split?.elevation);
+    return Number.isFinite(value) ? Math.round(value) : null;
+  });
+  const hasPaceData = paceSeries.some((value) => Number.isFinite(value) && value > 0);
+  const hasHeartRate = heartRateSeries.some((value) => Number.isFinite(value));
+  const hasElevation = elevationSeries.some((value) => Number.isFinite(value));
+
+  if (!hasPaceData) {
+    state.charts.activitySplit?.destroy();
+    state.charts.activitySplit = null;
+    showChartMessage(canvasId, 'This run is missing pace data needed for split comparison.');
+    return;
+  }
+
+  const secondaryDataset = hasHeartRate
+    ? {
+        type: 'line',
+        label: 'Heart rate',
+        yAxisID: 'secondary',
+        data: heartRateSeries,
+        borderColor: '#fb7185',
+        backgroundColor: 'rgba(251, 113, 133, 0.16)',
+        tension: 0.35,
+        pointRadius: 3,
+        pointHoverRadius: 4,
+      }
+    : hasElevation
+    ? {
+        type: 'line',
+        label: 'Elevation',
+        yAxisID: 'secondary',
+        data: elevationSeries,
+        borderColor: '#60a5fa',
+        backgroundColor: 'rgba(96, 165, 250, 0.16)',
+        tension: 0.35,
+        pointRadius: 3,
+        pointHoverRadius: 4,
+      }
+    : null;
+
+  state.charts.activitySplit?.destroy();
+  state.charts.activitySplit = createChart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Pace',
+          yAxisID: 'pace',
+          data: paceSeries,
+          backgroundColor: 'rgba(45, 212, 191, 0.48)',
+          borderColor: '#2dd4bf',
+          borderWidth: 1,
+          borderRadius: 8,
+          maxBarThickness: 32,
+        },
+        ...(secondaryDataset ? [secondaryDataset] : []),
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ panX: false, maxVisiblePoints: 12 }),
+        tooltip: {
+          callbacks: {
+            label(context) {
+              if (context.dataset.yAxisID === 'pace') {
+                const pace = Number(context.parsed.y);
+                return Number.isFinite(pace) && pace > 0
+                  ? `Pace ${formatPace(pace)} /km`
+                  : 'Pace unavailable';
+              }
+              if (secondaryDataset?.label === 'Heart rate') {
+                const heartRate = Number(context.parsed.y);
+                return Number.isFinite(heartRate) ? `${Math.round(heartRate)} bpm` : 'Heart rate unavailable';
+              }
+              const elevation = Number(context.parsed.y);
+              return Number.isFinite(elevation) ? `${Math.round(elevation)} m` : 'Elevation unavailable';
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        pace: {
+          position: 'left',
+          reverse: true,
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) {
+              return formatPace(Number(value));
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        secondary: secondaryDataset
+          ? {
+              position: 'right',
+              ticks: {
+                color: '#9bb0d6',
+                callback(value) {
+                  return secondaryDataset.label === 'Heart rate'
+                    ? `${Math.round(Number(value))} bpm`
+                    : `${Math.round(Number(value))} m`;
+                },
+              },
+              grid: { drawOnChartArea: false },
+            }
+          : undefined,
+      },
+    },
+  });
 }
 
 function renderActivityLoadChart(sessions = [], mileageTrend = []) {
@@ -10051,6 +11103,17 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       queueChartResize();
+      // Reload the active page's data so BLE-streamed samples appear
+      // immediately when the user returns from the Bluetooth bridge page.
+      if (state.token && state.user) {
+        const subjectId = state.viewing?.id ?? state.user?.id;
+        const page = state.currentPage;
+        if (page === 'overview') loadMetrics(subjectId);
+        else if (page === 'activity') loadActivity(subjectId);
+        else if (page === 'vitals') loadVitals(subjectId);
+        else if (page === 'weight') loadWeight(subjectId);
+        else if (page === 'nutrition') loadNutrition(subjectId);
+      }
     }
   });
 }
