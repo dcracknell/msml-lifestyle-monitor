@@ -395,6 +395,30 @@ export function ExerciseScreen() {
       return null;
     }
 
+    // During an active session, protect against background GPS drift causing spurious
+    // auto-pauses that would reduce elapsed time and make the timer jump backwards.
+    // If the live timer shows more elapsed than the stored snapshot, keep the live
+    // elapsed accounting but take all other fields (distance, route, pace) from storage.
+    if (sessionStateRef.current !== 'idle') {
+      const liveElapsedMs =
+        elapsedBeforePauseRef.current +
+        (sessionStartRef.current !== null
+          ? Math.max(0, Date.now() - sessionStartRef.current)
+          : 0);
+      const storedElapsedMs = getTrackingElapsedMs(snapshot);
+      if (liveElapsedMs > storedElapsedMs) {
+        const merged = {
+          ...snapshot,
+          elapsedBeforePauseMs: elapsedBeforePauseRef.current,
+          sessionStartTs: sessionStartRef.current,
+          isAutoPaused: sessionStartRef.current === null,
+          stationarySinceTs: null,
+        };
+        applyTrackingSnapshot(merged);
+        return merged;
+      }
+    }
+
     applyTrackingSnapshot(snapshot);
     return snapshot;
   }, [applyTrackingSnapshot]);
@@ -889,10 +913,28 @@ export function ExerciseScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
-        void restorePersistedTrackingSnapshot();
-        // If recording and the foreground watcher was dropped while backgrounded, restart it
-        if (sessionStateRef.current === 'recording' && !locationWatcherRef.current) {
-          void startPhoneTracking();
+        if (sessionStateRef.current === 'recording') {
+          // Always stop and restart the foreground watcher when the app comes back to
+          // the foreground while recording — expo-location subscriptions can silently
+          // stop delivering events while backgrounded even if the handle is non-null.
+          // Restore the background-accumulated snapshot first so the restarted watcher
+          // builds on top of it (avoids a race where a GPS event arrives before the
+          // restore completes and overwrites background progress).
+          locationWatcherRef.current?.stop();
+          locationWatcherRef.current = null;
+          void restorePersistedTrackingSnapshot().then(() => {
+            if (sessionStateRef.current === 'recording') {
+              // Also re-ensure the background task is running — the OS can kill it
+              // under memory pressure even while the session is active.
+              const snapshot = trackingSnapshotRef.current;
+              if (snapshot) {
+                void maybeStartBackgroundTracking(snapshot);
+              }
+              void startPhoneTracking();
+            }
+          });
+        } else {
+          void restorePersistedTrackingSnapshot();
         }
       }
     });
@@ -900,7 +942,7 @@ export function ExerciseScreen() {
     return () => {
       subscription.remove();
     };
-  }, [restorePersistedTrackingSnapshot, startPhoneTracking]);
+  }, [maybeStartBackgroundTracking, restorePersistedTrackingSnapshot, startPhoneTracking]);
 
   useFocusEffect(
     useCallback(() => {
