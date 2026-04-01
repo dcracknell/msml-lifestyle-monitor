@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
+    "postinstall": "node scripts/ensure-native-deps.js",
     "predev": "node scripts/ensure-native-deps.js",
     "dev": "nodemon src/server.js",
     "prestart": "node scripts/ensure-native-deps.js",

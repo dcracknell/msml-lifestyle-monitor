@@ -1,5 +1,6 @@
 const path = require('path');
 const { execSync } = require('child_process');
+require('../scripts/ensure-native-deps');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 const createApp = require('./app');
 const { ensureNutExpressWorkerRunning } = require('./services/nut-express-worker');
