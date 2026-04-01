@@ -69,13 +69,18 @@ class ApiClient {
       headers.Authorization = `Bearer ${token}`;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
     try {
       const response = await fetch(url, {
         method,
         ...config,
         headers,
         body,
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errorPayload: unknown = null;
@@ -105,6 +110,7 @@ class ApiClient {
         return text as unknown as T;
       }
     } catch (error) {
+      clearTimeout(timeoutId);
       if (error instanceof ApiError) {
         throw error;
       }
