@@ -8,6 +8,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY server/package*.json ./
+COPY server/scripts ./scripts
 RUN npm ci --omit=dev
 
 FROM node:20-bullseye-slim AS nut-deps

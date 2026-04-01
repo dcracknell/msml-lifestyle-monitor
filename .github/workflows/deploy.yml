@@ -75,6 +75,7 @@ jobs:
     environment: production
     outputs:
       image_sha: ${{ steps.image.outputs.sha }}
+      image_latest: ${{ steps.image.outputs.latest }}
     permissions:
       contents: read
       packages: write
@@ -88,7 +89,9 @@ jobs:
 
       - name: Set image refs
         id: image
-        run: echo "sha=${{ env.REGISTRY }}/${{ steps.vars.outputs.image }}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "sha=${{ env.REGISTRY }}/${{ steps.vars.outputs.image }}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "latest=${{ env.REGISTRY }}/${{ steps.vars.outputs.image }}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -96,6 +99,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Generate metadata
         id: meta
@@ -111,6 +120,7 @@ jobs:
         with:
           context: lifestyle-web
           file: lifestyle-web/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -118,16 +128,19 @@ jobs:
   rollout:
     name: Auto Rollout
     runs-on: self-hosted
-    needs: [web-tests, mobile-tests]
+    needs: [publish-image]
     environment: production
     steps:
-      - name: Pull latest code and rebuild
+      - name: Pull and redeploy
+        env:
+          LIFESTYLE_WEB_IMAGE: ${{ needs.publish-image.outputs.image_latest }}
         run: |
           cd /home/cracknelldrb/Desktop/Dissertation/msml-lifestyle-monitor
           git pull
           cd lifestyle-web
+          docker-compose pull lifestyle-web
           docker-compose down --remove-orphans --timeout 30
           fuser -k 4000/tcp 2>/dev/null || true
           timeout 15 bash -c 'until ! fuser 4000/tcp 2>/dev/null; do sleep 1; done' || true
-          docker-compose up -d --build
+          docker-compose up -d
           docker image prune -f
