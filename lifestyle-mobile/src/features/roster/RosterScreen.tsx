@@ -30,12 +30,12 @@ export function RosterScreen() {
     );
   }
 
-  if (isLoading || !data) {
-    return <LoadingView />;
-  }
-
   if (isError) {
     return <ErrorView message="Unable to load roster" onRetry={refetch} />;
+  }
+
+  if (isLoading || !data) {
+    return <LoadingView />;
   }
 
   const sorted = [...data.athletes].sort((a, b) => (b.readinessScore ?? 0) - (a.readinessScore ?? 0));

@@ -63,12 +63,12 @@ export function AdminSection() {
     return null;
   }
 
-  if (isLoading || !data) {
-    return <View style={styles.container}><LoadingView /></View>;
-  }
-
   if (isError) {
     return <View style={styles.container}><ErrorView message="Unable to load users" onRetry={refetch} /></View>;
+  }
+
+  if (isLoading || !data) {
+    return <View style={styles.container}><LoadingView /></View>;
   }
 
   return (

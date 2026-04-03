@@ -51,12 +51,12 @@ export function VitalsScreen() {
     enabled: Boolean(user?.id),
   });
 
-  if (isLoading || !data) {
-    return <LoadingView />;
-  }
-
   if (isError) {
     return <ErrorView message="Unable to load vitals" onRetry={refetch} />;
+  }
+
+  if (isLoading || !data) {
+    return <LoadingView />;
   }
 
   const timeline = data.timeline || [];

@@ -480,12 +480,12 @@ export function NutritionScreen() {
     });
   }, [data]);
 
-  if (isLoading || !data) {
-    return <LoadingView />;
-  }
-
   if (isError) {
     return <ErrorView message="Unable to load nutrition" onRetry={refetch} />;
+  }
+
+  if (isLoading || !data) {
+    return <LoadingView />;
   }
 
   const resolveSuggestionMessage = (items: NutritionSuggestion[]) =>

@@ -65,12 +65,12 @@ export function SessionsScreen() {
     setExportFeedback(null);
   }, [activeSession?.id]);
 
-  if (isLoading || !data) {
-    return <LoadingView />;
-  }
-
   if (isError) {
     return <ErrorView message="Unable to load sessions" onRetry={refetch} />;
+  }
+
+  if (isLoading || !data) {
+    return <LoadingView />;
   }
 
   const handleExportToStrava = async () => {

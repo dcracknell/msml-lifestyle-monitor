@@ -153,22 +153,32 @@ async function apiFetch(input, init) {
     throw new Error('Fetch is unavailable in this browser.');
   }
 
-  if (typeof input === 'string') {
-    return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input), init));
-  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+  const initWithSignal = init
+    ? { signal: controller.signal, ...init }
+    : { signal: controller.signal };
 
-  if (typeof URL !== 'undefined' && input instanceof URL) {
-    return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input.toString()), init));
-  }
-
-  if (typeof Request !== 'undefined' && input instanceof Request) {
-    const resolvedUrl = resolveApiRequestUrl(input.url);
-    if (resolvedUrl !== input.url) {
-      return finalizeApiResponse(await nativeFetch(new Request(resolvedUrl, input), init));
+  try {
+    if (typeof input === 'string') {
+      return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input), initWithSignal));
     }
-  }
 
-  return finalizeApiResponse(await nativeFetch(input, init));
+    if (typeof URL !== 'undefined' && input instanceof URL) {
+      return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input.toString()), initWithSignal));
+    }
+
+    if (typeof Request !== 'undefined' && input instanceof Request) {
+      const resolvedUrl = resolveApiRequestUrl(input.url);
+      if (resolvedUrl !== input.url) {
+        return finalizeApiResponse(await nativeFetch(new Request(resolvedUrl, input), initWithSignal));
+      }
+    }
+
+    return finalizeApiResponse(await nativeFetch(input, initWithSignal));
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function destroyChartBoundToCanvas(canvas) {

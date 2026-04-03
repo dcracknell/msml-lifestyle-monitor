@@ -46,12 +46,12 @@ export function WeightScreen() {
     [timeline, unit]
   );
 
-  if (isLoading || !data) {
-    return <LoadingView />;
-  }
-
   if (isError) {
     return <ErrorView message="Unable to load weight" onRetry={refetch} />;
+  }
+
+  if (isLoading || !data) {
+    return <LoadingView />;
   }
 
   const latestEntry = data.latest || data.recent[0] || data.timeline[0] || null;

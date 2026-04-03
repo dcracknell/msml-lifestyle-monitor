@@ -76,12 +76,12 @@ export function SleepScreen() {
       .filter(hasFiniteTrendValue);
   }, [data?.timeline, sleepStreamData?.points]);
 
-  if (isLoading || !data) {
-    return <LoadingView />;
-  }
-
   if (isError) {
     return <ErrorView message="Unable to load sleep data" onRetry={refetch} />;
+  }
+
+  if (isLoading || !data) {
+    return <LoadingView />;
   }
 
   const nightlyAverage = sleepTrend.length
