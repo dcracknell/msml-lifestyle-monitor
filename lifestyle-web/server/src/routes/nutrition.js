@@ -13,15 +13,25 @@ const UPC_LOOKUP_URL = 'https://world.openfoodfacts.org/api/v2';
 const UK_UPC_LOOKUP_URL = 'https://uk.openfoodfacts.org/api/v2';
 const SEARCH_URL = 'https://world.openfoodfacts.org/cgi/search.pl';
 const UK_SEARCH_URL = 'https://uk.openfoodfacts.org/cgi/search.pl';
+const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
 const REMOTE_SEARCH_CACHE_TTL_MS = 1000 * 60 * 5; // 5 minutes
 const REMOTE_SEARCH_CACHE_LIMIT = 50;
-const REMOTE_SEARCH_TIMEOUT_MS = 400;
+const REMOTE_SEARCH_TIMEOUT_MS = 800;
+const REMOTE_PROVIDER_TIMEOUT_MS =
+  Number.parseInt(process.env.NUTRITION_PROVIDER_TIMEOUT_MS, 10) || 450;
 const BARCODE_LOOKUP_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const BARCODE_LOOKUP_CACHE_LIMIT = 5000;
 const QUERY_LOOKUP_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const QUERY_LOOKUP_CACHE_LIMIT = 200;
 const BARCODE_BATCH_LOOKUP_MAX = 250;
 const BARCODE_BATCH_LOOKUP_CONCURRENCY = 8;
+const USDA_API_KEY = (process.env.USDA_API_KEY || process.env.USDA_FOODDATA_API_KEY || '').trim();
+const USDA_SEARCH_PAGE_SIZE = Math.max(
+  4,
+  Number.parseInt(process.env.USDA_SEARCH_PAGE_SIZE, 10) || 6
+);
+const USDA_GENERIC_DATA_TYPES = 'Foundation,SR Legacy,Survey (FNDDS)';
+const USDA_BRANDED_DATA_TYPES = 'Branded';
 const LOOKUP_PRODUCT_FIELDS = [
   'code',
   'product_name',
@@ -1683,6 +1693,11 @@ function parseServingSize(value, fallbackUnit = 'g') {
   const gramMatch = normalized.match(/(\d[\d.,]*)\s*g/);
   const kgMatch = normalized.match(/(\d[\d.,]*)\s*kg/);
   const mlMatch = normalized.match(/(\d[\d.,]*)\s*ml/);
+  const flOzMatch = normalized.match(/(\d[\d.,]*)\s*(?:fl\.?\s*oz|fluid ounces?)/);
+  const tbspMatch = normalized.match(/(\d[\d.,]*)\s*(?:tbsp|tablespoons?)/);
+  const tspMatch = normalized.match(/(\d[\d.,]*)\s*(?:tsp|teaspoons?)/);
+  const cupMatch = normalized.match(/(\d[\d.,]*)\s*cups?/);
+  const ozMatch = normalized.match(/(\d[\d.,]*)\s*(?:oz|onz|ounces?)/);
   const litreMatch = normalized.match(/(\d[\d.,]*)\s*l/);
   const portionMatch = normalized.match(/(\d[\d.,]*)?\s*(serving|portion)/);
 
@@ -1691,6 +1706,8 @@ function parseServingSize(value, fallbackUnit = 'g') {
     gramsEquivalent = Number.parseFloat(gramMatch[1].replace(',', '.'));
   } else if (kgMatch) {
     gramsEquivalent = Number.parseFloat(kgMatch[1].replace(',', '.')) * 1000;
+  } else if (ozMatch) {
+    gramsEquivalent = Number.parseFloat(ozMatch[1].replace(',', '.')) * 28.3495;
   }
   if (Number.isFinite(gramsEquivalent)) {
     gramsEquivalent = Math.round(gramsEquivalent * 10) / 10;
@@ -1703,6 +1720,14 @@ function parseServingSize(value, fallbackUnit = 'g') {
     mlEquivalent = Number.parseFloat(mlMatch[1].replace(',', '.'));
   } else if (litreMatch) {
     mlEquivalent = Number.parseFloat(litreMatch[1].replace(',', '.')) * 1000;
+  } else if (flOzMatch) {
+    mlEquivalent = Number.parseFloat(flOzMatch[1].replace(',', '.')) * 29.5735;
+  } else if (tbspMatch) {
+    mlEquivalent = Number.parseFloat(tbspMatch[1].replace(',', '.')) * 15;
+  } else if (tspMatch) {
+    mlEquivalent = Number.parseFloat(tspMatch[1].replace(',', '.')) * 5;
+  } else if (cupMatch) {
+    mlEquivalent = Number.parseFloat(cupMatch[1].replace(',', '.')) * 240;
   }
   if (Number.isFinite(mlEquivalent)) {
     mlEquivalent = Math.round(mlEquivalent * 10) / 10;
@@ -1756,6 +1781,183 @@ function parseServingSize(value, fallbackUnit = 'g') {
   }
 
   return null;
+}
+
+function roundNutritionNumber(value, decimals = 1) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function normalizeUsdaServingUnit(value = '') {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === 'g' || normalized === 'gram' || normalized === 'grams') {
+    return 'g';
+  }
+  if (normalized === 'kg' || normalized === 'kilogram' || normalized === 'kilograms') {
+    return 'kg';
+  }
+  if (normalized === 'ml' || normalized === 'milliliter' || normalized === 'milliliters') {
+    return 'ml';
+  }
+  if (normalized === 'l' || normalized === 'liter' || normalized === 'liters') {
+    return 'l';
+  }
+  if (normalized === 'oz' || normalized === 'onz' || normalized === 'ounce' || normalized === 'ounces') {
+    return 'oz';
+  }
+  if (normalized === 'fl oz' || normalized === 'fluid ounce' || normalized === 'fluid ounces') {
+    return 'fl oz';
+  }
+  if (normalized === 'tbsp' || normalized === 'tablespoon' || normalized === 'tablespoons') {
+    return 'tbsp';
+  }
+  if (normalized === 'tsp' || normalized === 'teaspoon' || normalized === 'teaspoons') {
+    return 'tsp';
+  }
+  if (normalized === 'cup' || normalized === 'cups') {
+    return 'cup';
+  }
+  return normalized;
+}
+
+function extractUsdaNutrients(rawNutrients = []) {
+  let calories = null;
+  let protein = null;
+  let carbs = null;
+  let fats = null;
+  let fiber = null;
+
+  (Array.isArray(rawNutrients) ? rawNutrients : []).forEach((nutrientEntry) => {
+    if (!nutrientEntry || typeof nutrientEntry !== 'object') {
+      return;
+    }
+    const nutrientMeta = nutrientEntry.nutrient || {};
+    const nutrientId = String(
+      nutrientEntry.nutrientId || nutrientMeta.id || ''
+    ).trim();
+    const nutrientNumber = String(
+      nutrientEntry.nutrientNumber || nutrientMeta.number || ''
+    ).trim();
+    const nutrientName = normalizeText(
+      nutrientEntry.nutrientName || nutrientMeta.name || ''
+    );
+    const unitName = normalizeText(
+      nutrientEntry.unitName || nutrientMeta.unitName || ''
+    );
+    const amount = readFirstFiniteNumber(nutrientEntry.value, nutrientEntry.amount);
+    if (!Number.isFinite(amount)) {
+      return;
+    }
+
+    if (
+      calories === null &&
+      (nutrientId === '1008' ||
+        nutrientNumber === '208' ||
+        (nutrientName === 'energy' && unitName === 'kcal'))
+    ) {
+      calories = amount;
+      return;
+    }
+    if (
+      calories === null &&
+      (nutrientId === '1007' ||
+        nutrientNumber === '268' ||
+        (nutrientName === 'energy' && unitName === 'kj'))
+    ) {
+      calories = amount / 4.184;
+      return;
+    }
+    if (
+      protein === null &&
+      (nutrientId === '1003' || nutrientNumber === '203' || nutrientName === 'protein')
+    ) {
+      protein = amount;
+      return;
+    }
+    if (
+      carbs === null &&
+      (nutrientId === '1005' ||
+        nutrientNumber === '205' ||
+        nutrientName === 'carbohydrate, by difference' ||
+        nutrientName === 'carbohydrates')
+    ) {
+      carbs = amount;
+      return;
+    }
+    if (
+      fats === null &&
+      (nutrientId === '1004' ||
+        nutrientNumber === '204' ||
+        nutrientName === 'total lipid (fat)' ||
+        nutrientName === 'fat')
+    ) {
+      fats = amount;
+      return;
+    }
+    if (
+      fiber === null &&
+      (nutrientId === '1079' ||
+        nutrientNumber === '291' ||
+        nutrientName === 'fiber, total dietary' ||
+        nutrientName === 'dietary fiber' ||
+        nutrientName === 'fibre, total dietary')
+    ) {
+      fiber = amount;
+    }
+  });
+
+  if (![calories, protein, carbs, fats, fiber].some((value) => Number.isFinite(value))) {
+    return null;
+  }
+
+  return {
+    calories: roundNutritionNumber(calories, 0),
+    protein: roundNutritionNumber(protein, 1),
+    carbs: roundNutritionNumber(carbs, 1),
+    fats: roundNutritionNumber(fats, 1),
+    fiber: roundNutritionNumber(fiber, 1),
+  };
+}
+
+function buildUsdaServingInfo(food = {}) {
+  const normalizedUnit = normalizeUsdaServingUnit(food.servingSizeUnit);
+  const servingSize = readFirstFiniteNumber(food.servingSize);
+  const householdServing = (food.householdServingFullText || '').toString().trim();
+  const parsedHousehold = parseServingSize(
+    householdServing,
+    normalizedUnit === 'ml' || normalizedUnit === 'g' ? normalizedUnit : 'g'
+  );
+
+  if (Number.isFinite(servingSize) && servingSize > 0 && normalizedUnit) {
+    const parsedDirect = parseServingSize(`${servingSize} ${normalizedUnit}`, normalizedUnit);
+    return {
+      serving: householdServing || formatWeightLabel(servingSize, normalizedUnit),
+      parsed:
+        parsedDirect ||
+        {
+          amount: servingSize,
+          unit: normalizedUnit,
+        },
+    };
+  }
+
+  if (parsedHousehold) {
+    return {
+      serving: householdServing,
+      parsed: parsedHousehold,
+    };
+  }
+
+  return {
+    serving: householdServing || null,
+    parsed: null,
+  };
 }
 
 function guessUnitFromNutritionData(nutritionPer = '') {
@@ -2086,25 +2288,20 @@ async function lookupByBarcodeBatch(rawBarcodes, options = {}) {
   };
 }
 
-async function lookupByQuery(query) {
+async function lookupByQuery(query, options = {}) {
   const cacheKey = normalizeText(query);
   const now = Date.now();
   const cached = queryLookupCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     return cached.data;
   }
-  const searchParams = new URLSearchParams({
-    search_terms: query,
-    search_simple: '1',
-    action: 'process',
-    json: '1',
-    page_size: '1',
-    fields: LOOKUP_PRODUCT_FIELDS,
-    lc: 'en',
+  const suggestions = await getCombinedSuggestions(options.userId, query, {
+    limit: 6,
+    maxScore: 1.05,
+    includeQuickAdds: true,
   });
-  const data = await fetchJson(`${SEARCH_URL}?${searchParams.toString()}`);
-  const firstHit = data?.products?.[0];
-  const result = firstHit ? parseNutritionFromProduct(firstHit) : null;
+  const best = suggestions[0] || null;
+  const result = best && (best.score ?? 99) <= 0.72 ? mapSuggestionToProduct(best) : null;
   if (result) {
     queryLookupCache.set(cacheKey, { data: result, expiresAt: now + QUERY_LOOKUP_CACHE_TTL_MS });
     if (queryLookupCache.size > QUERY_LOOKUP_CACHE_LIMIT) {
@@ -2121,11 +2318,7 @@ async function lookupProduct({ barcode, query, userId }) {
     if (result) return result;
   }
   if (query) {
-    const quickMatch = lookupQuickAddByQuery(query);
-    if (quickMatch) {
-      return quickMatch;
-    }
-    return lookupByQuery(query);
+    return lookupByQuery(query, { userId });
   }
   return null;
 }
@@ -2491,6 +2684,10 @@ function searchLocalEntries(userId, query) {
         type: row.type || 'Food',
         barcode: row.barcode || null,
       },
+      sourceType: 'recent',
+      matchTexts: [row.name],
+      isGeneric: true,
+      isBranded: false,
       score,
     });
   });
@@ -2515,6 +2712,11 @@ function searchQuickAddSuggestions(query) {
       source: 'Quick Add',
       barcode: item.prefill?.barcode || null,
       prefill: item.prefill,
+      sourceType: 'quick_add',
+      matchTexts: [item.name, ...(item.keywords || [])],
+      keywords: item.keywords || [],
+      isGeneric: true,
+      isBranded: false,
       score: blended,
     };
   })
@@ -2523,7 +2725,189 @@ function searchQuickAddSuggestions(query) {
     .slice(0, 6);
 }
 
-function mapQuickSuggestionToProduct(item) {
+function countPrefillNutritionFields(prefill = {}) {
+  return ['calories', 'protein', 'carbs', 'fats', 'fiber'].reduce((count, key) => {
+    const value = parseNullableNumber(prefill?.[key]);
+    return Number.isFinite(value) ? count + 1 : count;
+  }, 0);
+}
+
+function collectSuggestionMatchTexts(item = {}) {
+  const texts = [
+    item.name,
+    item.brandName,
+    ...(Array.isArray(item.matchTexts) ? item.matchTexts : []),
+    ...(Array.isArray(item.keywords) ? item.keywords : []),
+  ];
+  if (item.brandName && item.name) {
+    texts.push(`${item.brandName} ${item.name}`);
+  }
+  return Array.from(
+    new Set(
+      texts
+        .map((value) => (value == null ? '' : value.toString().trim()))
+        .filter(Boolean)
+    )
+  );
+}
+
+function hasBrandMatch(item = {}, query = '') {
+  const normalizedBrand = normalizeText(item.brandName);
+  const queryTokens = normalizeText(query)
+    .split(/\s+/)
+    .filter((token) => token.length >= 2);
+  if (!normalizedBrand || !queryTokens.length) {
+    return false;
+  }
+  const brandTokens = normalizedBrand.split(/\s+/).filter(Boolean);
+  return queryTokens.some((token) => brandTokens.some((word) => tokenMatches(word, token)));
+}
+
+function isGenericFoodQuery(query = '') {
+  const normalized = normalizeText(query);
+  if (!normalized) {
+    return false;
+  }
+  if (/\d/.test(normalized)) {
+    return false;
+  }
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  return tokens.length <= 3;
+}
+
+function computeMergedSuggestionScore(item = {}, query = '') {
+  const normalizedQuery = normalizeText(query);
+  const matchTexts = collectSuggestionMatchTexts(item);
+  const baseTextScore = matchTexts.length
+    ? matchTexts.reduce((best, text) => Math.min(best, computeSuggestionScore(text, query)), 99)
+    : computeSuggestionScore(item.name, query);
+  const baseScore =
+    typeof item.score === 'number' && Number.isFinite(item.score)
+      ? Math.min(item.score, baseTextScore)
+      : baseTextScore;
+  const tokenCoverage = matchTexts.length
+    ? matchTexts.reduce((best, text) => Math.max(best, computeTokenCoverageRatio(text, query)), 0)
+    : computeTokenCoverageRatio(item.name, query);
+  const exactMatch = matchTexts.some((text) => normalizeText(text) === normalizedQuery);
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const nameTokens = normalizeText(item.name)
+    .split(/\s+/)
+    .filter(Boolean);
+  const extraTokenPenalty =
+    queryTokens.length <= 2 ? Math.max(nameTokens.length - queryTokens.length, 0) * 0.03 : 0;
+  const nutritionBonus = countPrefillNutritionFields(item.prefill) * 0.015;
+  const sourceBiasMap = {
+    recent: -0.22,
+    usda_foundation: -0.18,
+    usda_legacy: -0.12,
+    usda_survey: -0.08,
+    openfoodfacts_uk: 0.02,
+    openfoodfacts: 0.08,
+    usda_branded: 0.1,
+    quick_add: 0.36,
+  };
+  let sourceBias = sourceBiasMap[item.sourceType] ?? 0;
+  if (isGenericFoodQuery(query)) {
+    if (item.isGeneric) {
+      sourceBias -= 0.08;
+    }
+    if (item.isBranded && !hasBrandMatch(item, query)) {
+      sourceBias += 0.4;
+    }
+  }
+  const weightedScore =
+    baseScore +
+    extraTokenPenalty +
+    sourceBias -
+    nutritionBonus -
+    tokenCoverage * 0.14 -
+    (exactMatch ? 0.16 : 0);
+  return {
+    exactMatch,
+    tokenCoverage,
+    nutritionFields: countPrefillNutritionFields(item.prefill),
+    score: Number(Math.max(weightedScore, 0).toFixed(4)),
+  };
+}
+
+function suggestionIdentity(item = {}) {
+  const barcode = normalizeBarcodeValue(item.barcode || item.prefill?.barcode || '');
+  if (barcode) {
+    return `barcode:${barcode}`;
+  }
+  return `name:${normalizeText(item.name)}`;
+}
+
+function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
+  const ranked = (Array.isArray(candidates) ? candidates : [])
+    .filter((item) => item && item.name && isLikelyFoodName(item.name))
+    .map((item) => ({
+      ...item,
+      ...computeMergedSuggestionScore(item, query),
+    }))
+    .sort((a, b) => {
+      const scoreDiff = (a.score ?? 99) - (b.score ?? 99);
+      if (Math.abs(scoreDiff) > 0.04) {
+        return scoreDiff;
+      }
+      if (a.exactMatch !== b.exactMatch) {
+        return a.exactMatch ? -1 : 1;
+      }
+      const coverageDiff = (b.tokenCoverage ?? 0) - (a.tokenCoverage ?? 0);
+      if (Math.abs(coverageDiff) > 0.05) {
+        return coverageDiff;
+      }
+      if ((a.score ?? 99) !== (b.score ?? 99)) {
+        return scoreDiff;
+      }
+      if ((b.nutritionFields ?? 0) !== (a.nutritionFields ?? 0)) {
+        return (b.nutritionFields ?? 0) - (a.nutritionFields ?? 0);
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+  const unique = [];
+  const seen = new Set();
+  ranked.forEach((item) => {
+    const key = suggestionIdentity(item);
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    unique.push(item);
+  });
+
+  const maxScore =
+    Number.isFinite(options.maxScore) && options.maxScore > 0
+      ? Number(options.maxScore)
+      : 0.95;
+  const filtered = unique.filter((item) => (item.score ?? 99) <= maxScore);
+  const fallback = filtered.length ? filtered : unique;
+  const limit =
+    Number.isFinite(options.limit) && options.limit > 0
+      ? Math.floor(options.limit)
+      : 10;
+  return fallback.slice(0, limit);
+}
+
+function stripSuggestionInternalFields(item = {}) {
+  const {
+    score,
+    tokenCoverage,
+    nutritionFields,
+    exactMatch,
+    sourceType,
+    matchTexts,
+    keywords,
+    brandName,
+    isGeneric,
+    isBranded,
+    ...rest
+  } = item;
+  return rest;
+}
+
+function mapSuggestionToProduct(item) {
   if (!item?.prefill) {
     return null;
   }
@@ -2545,6 +2929,10 @@ function mapQuickSuggestionToProduct(item) {
   };
 }
 
+function mapQuickSuggestionToProduct(item) {
+  return mapSuggestionToProduct(item);
+}
+
 function lookupQuickAddByQuery(query) {
   if (!query || !query.trim()) {
     return null;
@@ -2560,55 +2948,282 @@ function lookupQuickAddByQuery(query) {
   return mapQuickSuggestionToProduct(best);
 }
 
-async function searchProducts(query) {
+function mapOpenFoodFactsProductToSuggestion(product, { sourceLabel = 'OpenFoodFacts', sourceType = 'openfoodfacts' } = {}) {
+  const parsed = parseNutritionFromProduct(product);
+  const name = product.product_name || product.generic_name || product.brands || 'Unnamed item';
+  const brandName = (product.brands || '').toString().trim();
+  if (!parsed || !name || !isLikelyFoodName(name)) {
+    return null;
+  }
+  return {
+    id: product.code || product._id,
+    name,
+    barcode: product.code || null,
+    serving: product.serving_size || parsed.serving || null,
+    source: brandName ? `${brandName} · ${sourceLabel}` : sourceLabel,
+    sourceType,
+    brandName: brandName || null,
+    isGeneric: !brandName,
+    isBranded: Boolean(brandName),
+    matchTexts: [
+      name,
+      product.generic_name,
+      brandName,
+      brandName && name ? `${brandName} ${name}` : '',
+    ].filter(Boolean),
+    prefill: {
+      type: parsed.weightUnit === 'ml' ? 'Liquid' : 'Food',
+      calories: parsed.calories,
+      protein: parsed.protein,
+      carbs: parsed.carbs,
+      fats: parsed.fats,
+      fiber: parsed.fiber,
+      weightAmount: parsed.weightAmount,
+      weightUnit: parsed.weightUnit,
+      barcode: parsed.barcode,
+    },
+  };
+}
+
+async function searchOpenFoodFactsProducts(
+  query,
+  { searchUrl = SEARCH_URL, sourceLabel = 'OpenFoodFacts', sourceType = 'openfoodfacts', pageSize = 8 } = {}
+) {
   const searchParams = new URLSearchParams({
     search_terms: query,
     search_simple: '1',
     action: 'process',
     json: '1',
-    page_size: '8',
+    page_size: String(pageSize),
     fields: LOOKUP_PRODUCT_FIELDS,
     lc: 'en',
   });
-  const data = await fetchJson(`${SEARCH_URL}?${searchParams.toString()}`);
-  const products = data?.products || [];
+  if (searchUrl === UK_SEARCH_URL) {
+    searchParams.set('countries_tags_en', 'united-kingdom');
+  }
+  const data = await fetchJson(`${searchUrl}?${searchParams.toString()}`);
+  const products = Array.isArray(data?.products) ? data.products : [];
   return products
-    .map((product) => {
-      const parsed = parseNutritionFromProduct(product);
-      return {
-        id: product.code || product._id,
-        name: product.product_name || product.generic_name || product.brands || 'Unnamed item',
-        barcode: product.code || null,
-        serving: product.serving_size || parsed?.serving || null,
-        source: product.brands || 'OpenFoodFacts',
-        nutriments: product.nutriments || {},
-        parsed,
-      };
+    .filter((product) => hasNutritionData(product?.nutriments || {}))
+    .map((product) => mapOpenFoodFactsProductToSuggestion(product, { sourceLabel, sourceType }))
+    .filter((item) => {
+      if (!item) {
+        return false;
+      }
+      const texts = collectSuggestionMatchTexts(item);
+      const bestCoverage = texts.reduce((best, text) => Math.max(best, computeTokenCoverageRatio(text, query)), 0);
+      const bestScore = texts.reduce((best, text) => Math.min(best, computeSuggestionScore(text, query)), 99);
+      return bestCoverage >= 0.5 || bestScore <= 0.75;
     })
-    .filter(
-      (item) =>
-        item.name &&
-        isLikelyFoodName(item.name) &&
-        hasNutritionData(item.nutriments) &&
-        isRelevantMatch(item.name, query, 0.55)
-    )
-    .map(({ nutriments, parsed, ...rest }) => ({
-      ...rest,
-      prefill: parsed
-        ? {
-            type: parsed.weightUnit === 'ml' ? 'Liquid' : 'Food',
-            calories: parsed.calories,
-            protein: parsed.protein,
-            carbs: parsed.carbs,
-            fats: parsed.fats,
-            fiber: parsed.fiber,
-            weightAmount: parsed.weightAmount,
-            weightUnit: parsed.weightUnit,
-            barcode: parsed.barcode,
-          }
-        : undefined,
-    }))
-    .slice(0, 5);
+    .slice(0, 8);
+}
+
+function mapUsdaFoodToSuggestion(food) {
+  if (!food || !food.description || !Array.isArray(food.foodNutrients)) {
+    return null;
+  }
+  const nutrients = extractUsdaNutrients(food.foodNutrients);
+  if (!nutrients) {
+    return null;
+  }
+  const dataType = (food.dataType || '').toString().trim();
+  const servingInfo = buildUsdaServingInfo(food);
+  const sourceType =
+    dataType === 'Foundation'
+      ? 'usda_foundation'
+      : dataType === 'SR Legacy'
+        ? 'usda_legacy'
+        : dataType === 'Survey (FNDDS)'
+          ? 'usda_survey'
+          : 'usda_branded';
+  const isBranded = sourceType === 'usda_branded';
+  let weightAmount = null;
+  let weightUnit = null;
+  let serving = servingInfo.serving || null;
+
+  if (isBranded) {
+    if (servingInfo.parsed?.gramsEquivalent) {
+      weightAmount = servingInfo.parsed.gramsEquivalent;
+      weightUnit = 'g';
+    } else if (servingInfo.parsed?.mlEquivalent) {
+      weightAmount = servingInfo.parsed.mlEquivalent;
+      weightUnit = 'ml';
+    } else if (servingInfo.parsed?.amount && servingInfo.parsed?.unit) {
+      weightAmount = servingInfo.parsed.amount;
+      weightUnit = servingInfo.parsed.unit;
+    }
+    if (!serving) {
+      serving = formatWeightLabel(weightAmount, weightUnit) || '1 serving';
+    }
+  } else if (servingInfo.parsed?.gramsEquivalent) {
+    weightAmount = servingInfo.parsed.gramsEquivalent;
+    weightUnit = 'g';
+    serving = serving || formatWeightLabel(weightAmount, weightUnit);
+  } else if (servingInfo.parsed?.mlEquivalent) {
+    weightAmount = servingInfo.parsed.mlEquivalent;
+    weightUnit = 'ml';
+    serving = serving || formatWeightLabel(weightAmount, weightUnit);
+  } else {
+    weightAmount = 100;
+    weightUnit = 'g';
+    if (!serving) {
+      serving = '100 g';
+    }
+  }
+
+  const brandName = (food.brandName || food.brandOwner || '').toString().trim();
+  const sourceLabelMap = {
+    usda_foundation: 'USDA Foundation',
+    usda_legacy: 'USDA SR Legacy',
+    usda_survey: 'USDA Survey',
+    usda_branded: 'USDA Branded',
+  };
+  const sourceLabel = sourceLabelMap[sourceType] || 'USDA';
+
+  return {
+    id: `usda-${food.fdcId}`,
+    name: food.description,
+    barcode: food.gtinUpc || null,
+    serving,
+    source: brandName && isBranded ? `${brandName} · ${sourceLabel}` : sourceLabel,
+    sourceType,
+    brandName: brandName || null,
+    isGeneric: !isBranded,
+    isBranded,
+    matchTexts: [
+      food.description,
+      brandName,
+      brandName && food.description ? `${brandName} ${food.description}` : '',
+      food.foodCategory,
+    ].filter(Boolean),
+    prefill: {
+      type: weightUnit === 'ml' ? 'Liquid' : 'Food',
+      calories: nutrients.calories,
+      protein: nutrients.protein,
+      carbs: nutrients.carbs,
+      fats: nutrients.fats,
+      fiber: nutrients.fiber,
+      weightAmount,
+      weightUnit,
+      barcode: food.gtinUpc || null,
+    },
+  };
+}
+
+async function searchUsdaFoods(
+  query,
+  { dataTypes = USDA_GENERIC_DATA_TYPES, pageSize = USDA_SEARCH_PAGE_SIZE } = {}
+) {
+  if (!USDA_API_KEY) {
+    return [];
+  }
+  const searchUrl = new URL(USDA_SEARCH_URL);
+  searchUrl.searchParams.set('api_key', USDA_API_KEY);
+  searchUrl.searchParams.set('query', query);
+  searchUrl.searchParams.set('pageSize', String(pageSize));
+  if (dataTypes) {
+    searchUrl.searchParams.set('dataType', dataTypes);
+  }
+  if (normalizeText(query).split(/\s+/).filter(Boolean).length > 1) {
+    searchUrl.searchParams.set('requireAllWords', 'true');
+  }
+  const data = await fetchJson(searchUrl);
+  const foods = Array.isArray(data?.foods) ? data.foods : [];
+  return foods
+    .map((food) => mapUsdaFoodToSuggestion(food))
+    .filter((item) => {
+      if (!item) {
+        return false;
+      }
+      const texts = collectSuggestionMatchTexts(item);
+      const bestCoverage = texts.reduce((best, text) => Math.max(best, computeTokenCoverageRatio(text, query)), 0);
+      const bestScore = texts.reduce((best, text) => Math.min(best, computeSuggestionScore(text, query)), 99);
+      return bestCoverage >= 0.5 || bestScore <= 0.8;
+    })
+    .slice(0, pageSize);
+}
+
+async function searchProducts(query, options = {}) {
+  const providerTimeoutMs =
+    Number.isFinite(options.providerTimeoutMs) && options.providerTimeoutMs > 0
+      ? Number(options.providerTimeoutMs)
+      : REMOTE_PROVIDER_TIMEOUT_MS;
+  const limit =
+    Number.isFinite(options.limit) && options.limit > 0
+      ? Math.floor(options.limit)
+      : 8;
+  const providerSearches = Array.isArray(options.providerSearches)
+    ? options.providerSearches
+    : [
+        () =>
+          searchOpenFoodFactsProducts(query, {
+            searchUrl: UK_SEARCH_URL,
+            sourceLabel: 'OpenFoodFacts UK',
+            sourceType: 'openfoodfacts_uk',
+          }),
+        () =>
+          searchOpenFoodFactsProducts(query, {
+            searchUrl: SEARCH_URL,
+            sourceLabel: 'OpenFoodFacts',
+            sourceType: 'openfoodfacts',
+          }),
+        () => searchUsdaFoods(query, { dataTypes: USDA_GENERIC_DATA_TYPES }),
+        () => searchUsdaFoods(query, { dataTypes: USDA_BRANDED_DATA_TYPES }),
+      ];
+
+  const batches = await Promise.all(
+    providerSearches.map(async (providerSearch) => {
+      const outcome = await raceWithTimeout(Promise.resolve().then(() => providerSearch(query)), providerTimeoutMs);
+      if (Array.isArray(outcome?.value)) {
+        return outcome.value;
+      }
+      return [];
+    })
+  );
+
+  return rankNutritionSuggestions(batches.flat(), query, {
+    limit,
+    maxScore: 1.05,
+  });
+}
+
+async function getCombinedSuggestions(userId, query, options = {}) {
+  const trimmedQuery = (query || '').toString().trim();
+  if (!trimmedQuery) {
+    return [];
+  }
+  const limit =
+    Number.isFinite(options.limit) && options.limit > 0
+      ? Math.floor(options.limit)
+      : 10;
+  const maxScore =
+    Number.isFinite(options.maxScore) && options.maxScore > 0
+      ? Number(options.maxScore)
+      : 0.95;
+  const includeQuickAdds = options.includeQuickAdds !== false;
+  const localSuggestions = Array.isArray(options.localSuggestions)
+    ? options.localSuggestions
+    : userId
+      ? searchLocalEntries(userId, trimmedQuery)
+      : [];
+  const quickSuggestions = includeQuickAdds
+    ? Array.isArray(options.quickSuggestions)
+      ? options.quickSuggestions
+      : searchQuickAddSuggestions(trimmedQuery)
+    : [];
+  const remoteSuggestions = Array.isArray(options.remoteSuggestions)
+    ? options.remoteSuggestions
+    : trimmedQuery.length >= 2
+      ? await getRemoteSuggestions(trimmedQuery, {
+          searchFn: options.searchFn || searchProducts,
+        })
+      : [];
+
+  return rankNutritionSuggestions(
+    [...localSuggestions, ...remoteSuggestions, ...quickSuggestions],
+    trimmedQuery,
+    { limit, maxScore }
+  );
 }
 
 function trimRemoteSuggestionCache(limit = REMOTE_SEARCH_CACHE_LIMIT) {
@@ -3305,86 +3920,30 @@ router.get('/lookup', authenticate, async (req, res) => {
 
 router.get('/search', authenticate, async (req, res) => {
   const query = (req.query.q || req.query.query || '').toString().trim();
-  if (!query || query.length < 2) {
-    const local = query ? searchLocalEntries(req.user.id, query) : [];
-    const quick = searchQuickAddSuggestions(query);
-    const combined = [...local, ...quick]
-      .sort((a, b) => (a.score ?? 99) - (b.score ?? 99))
-      .slice(0, 10)
-      .map(({ score, ...rest }) => rest);
-    return res.json({ suggestions: combined });
-  }
-  const localSuggestions = searchLocalEntries(req.user.id, query);
-  const quickSuggestions = searchQuickAddSuggestions(query);
-  const remoteSuggestions = await getRemoteSuggestions(query);
-  const combined = [];
-  const seen = new Set();
-  const normalizedQuery = normalizeText(query);
-  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
-  const multiTokenQuery = queryTokens.length > 1;
-  const pushSuggestion = (item, scoreOverride, bias = 0) => {
-    if (!item || !item.name || !isLikelyFoodName(item.name)) {
-      return;
-    }
-    const key = item.name.toLowerCase().trim();
-    if (!key || seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    const computedScore = computeSuggestionScore(item.name, query);
-    const baseScore =
-      typeof scoreOverride === 'number' ? Math.min(scoreOverride, computedScore) : computedScore;
-    combined.push({
-      ...item,
-      score: baseScore + bias,
-      tokenCoverage: computeTokenCoverageRatio(item.name, query),
-    });
-  };
-  localSuggestions.forEach((item) => pushSuggestion(item, item.score, -0.1));
-  quickSuggestions.forEach((item) => pushSuggestion(item, item.score, -0.15));
-  remoteSuggestions.forEach((item) => {
-    if (combined.length >= 10) return;
-    pushSuggestion(item, undefined, 0.2);
+  const suggestions = await getCombinedSuggestions(req.user.id, query, {
+    limit: 10,
+    maxScore: query && query.length >= 2 ? 1.05 : 0.95,
+    includeQuickAdds: true,
   });
-  const sortedCandidates = combined.sort((a, b) => {
-    const coverageDiff = (b.tokenCoverage ?? 0) - (a.tokenCoverage ?? 0);
-    if (Math.abs(coverageDiff) > 0.05) {
-      return coverageDiff;
-    }
-    return (a.score ?? 99) - (b.score ?? 99);
+  return res.json({
+    suggestions: suggestions.map((item) => stripSuggestionInternalFields(item)),
   });
-  const exactMatches = [];
-  const others = [];
-  sortedCandidates.forEach((item) => {
-    if (normalizeText(item.name) === normalizedQuery) {
-      exactMatches.push(item);
-    } else {
-      others.push(item);
-    }
-  });
-  const prioritized = [...exactMatches, ...others];
-  let filtered = sortedCandidates.filter((item) => item.score <= 0.7);
-  if (!filtered.length) {
-    filtered = prioritized;
-  } else {
-    filtered = prioritized.filter((item) => filtered.includes(item));
-  }
-  if (multiTokenQuery) {
-    const coverageThreshold = queryTokens.length >= 3 ? 0.65 : 0.55;
-    const coverageFiltered = filtered.filter((item) => (item.tokenCoverage ?? 0) >= coverageThreshold);
-    if (coverageFiltered.length) {
-      filtered = coverageFiltered;
-    }
-  }
-  const sorted = filtered.slice(0, 10).map(({ score, tokenCoverage, ...rest }) => rest);
-  return res.json({ suggestions: sorted });
 });
 
 router.__private__ = {
   getRemoteSuggestions,
   clearRemoteSuggestionCache,
   REMOTE_SEARCH_TIMEOUT_MS,
+  REMOTE_PROVIDER_TIMEOUT_MS,
   lookupQuickAddByQuery,
+  lookupByQuery,
+  mapSuggestionToProduct,
+  mapUsdaFoodToSuggestion,
+  searchProducts,
+  searchUsdaFoods,
+  getCombinedSuggestions,
+  rankNutritionSuggestions,
+  stripSuggestionInternalFields,
   resolveQuickAddProductFromPhotoAnalysis,
   resolvePhotoDraftItems,
   normalizeBarcodeValue,

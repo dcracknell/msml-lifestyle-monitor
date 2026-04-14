@@ -5,6 +5,9 @@ const {
   clearRemoteSuggestionCache,
   REMOTE_SEARCH_TIMEOUT_MS,
   lookupQuickAddByQuery,
+  mapUsdaFoodToSuggestion,
+  getCombinedSuggestions,
+  rankNutritionSuggestions,
   resolveQuickAddProductFromPhotoAnalysis,
   normalizeBarcodeValue,
   buildBarcodeCandidates,
@@ -149,5 +152,167 @@ describe('quick add lookup fallback', () => {
         calories: 84,
       })
     );
+  });
+});
+
+describe('multi-source nutrition ranking', () => {
+  it('maps USDA foundation foods to 100 g suggestions with fiber', () => {
+    const suggestion = mapUsdaFoodToSuggestion({
+      fdcId: 1,
+      description: 'Bananas, ripe and slightly ripe, raw',
+      dataType: 'Foundation',
+      foodNutrients: [
+        { nutrientId: 1008, nutrientName: 'Energy', nutrientNumber: '208', unitName: 'KCAL', value: 97 },
+        { nutrientId: 1003, nutrientName: 'Protein', nutrientNumber: '203', unitName: 'G', value: 0.74 },
+        { nutrientId: 1005, nutrientName: 'Carbohydrate, by difference', nutrientNumber: '205', unitName: 'G', value: 23.0 },
+        { nutrientId: 1004, nutrientName: 'Total lipid (fat)', nutrientNumber: '204', unitName: 'G', value: 0.29 },
+        { nutrientId: 1079, nutrientName: 'Fiber, total dietary', nutrientNumber: '291', unitName: 'G', value: 1.7 },
+      ],
+    });
+
+    expect(suggestion).toEqual(
+      expect.objectContaining({
+        name: 'Bananas, ripe and slightly ripe, raw',
+        source: 'USDA Foundation',
+        serving: '100 g',
+        sourceType: 'usda_foundation',
+        prefill: expect.objectContaining({
+          calories: 97,
+          protein: 0.7,
+          carbs: 23,
+          fats: 0.3,
+          fiber: 1.7,
+          weightAmount: 100,
+          weightUnit: 'g',
+        }),
+      })
+    );
+  });
+
+  it('maps USDA branded foods to serving-sized suggestions with barcode and fiber', () => {
+    const suggestion = mapUsdaFoodToSuggestion({
+      fdcId: 2,
+      description: 'GREEK YOGURT',
+      dataType: 'Branded',
+      brandName: "TRADER JOE'S",
+      gtinUpc: '00772914',
+      servingSize: 227,
+      servingSizeUnit: 'g',
+      householdServingFullText: '1 CONTAINER',
+      foodNutrients: [
+        { nutrientId: 1008, nutrientName: 'Energy', nutrientNumber: '208', unitName: 'KCAL', value: 132 },
+        { nutrientId: 1003, nutrientName: 'Protein', nutrientNumber: '203', unitName: 'G', value: 4.85 },
+        { nutrientId: 1005, nutrientName: 'Carbohydrate, by difference', nutrientNumber: '205', unitName: 'G', value: 12.3 },
+        { nutrientId: 1004, nutrientName: 'Total lipid (fat)', nutrientNumber: '204', unitName: 'G', value: 7.05 },
+        { nutrientId: 1079, nutrientName: 'Fiber, total dietary', nutrientNumber: '291', unitName: 'G', value: 0 },
+      ],
+    });
+
+    expect(suggestion).toEqual(
+      expect.objectContaining({
+        source: "TRADER JOE'S · USDA Branded",
+        barcode: '00772914',
+        serving: '1 CONTAINER',
+        sourceType: 'usda_branded',
+        prefill: expect.objectContaining({
+          calories: 132,
+          protein: 4.9,
+          carbs: 12.3,
+          fats: 7.1,
+          fiber: 0,
+          weightAmount: 227,
+          weightUnit: 'g',
+          barcode: '00772914',
+        }),
+      })
+    );
+  });
+
+  it('ranks generic USDA foods above branded false positives for broad queries', () => {
+    const ranked = rankNutritionSuggestions(
+      [
+        {
+          id: 'branded-greek',
+          name: 'GREEK YOGURT',
+          source: 'OCEAN SPRAY · USDA Branded',
+          sourceType: 'usda_branded',
+          brandName: 'OCEAN SPRAY',
+          isBranded: true,
+          isGeneric: false,
+          prefill: { calories: 467, protein: 3.3, carbs: 70, fats: 20, fiber: 3.3, weightAmount: 30, weightUnit: 'g' },
+        },
+        {
+          id: 'generic-greek',
+          name: 'Yogurt, Greek, plain, nonfat',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 61, protein: 10.3, carbs: 3.6, fats: 0.4, fiber: 0, weightAmount: 100, weightUnit: 'g' },
+        },
+      ],
+      'greek yogurt',
+      { limit: 2, maxScore: 2 }
+    );
+
+    expect(ranked[0]).toEqual(expect.objectContaining({ sourceType: 'usda_foundation' }));
+    expect(ranked[1]).toEqual(expect.objectContaining({ sourceType: 'usda_branded' }));
+  });
+
+  it('prefers real provider matches over quick adds when both are available', async () => {
+    const suggestions = await getCombinedSuggestions(1, 'banana', {
+      localSuggestions: [],
+      remoteSuggestions: [
+        {
+          id: 'usda-banana',
+          name: 'Bananas, ripe and slightly ripe, raw',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 97, protein: 0.7, carbs: 23, fats: 0.3, fiber: 1.7, weightAmount: 100, weightUnit: 'g' },
+        },
+      ],
+      quickSuggestions: [
+        {
+          id: 'quick-banana',
+          name: 'Banana (1 medium)',
+          source: 'Quick Add',
+          sourceType: 'quick_add',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 105, protein: 1.3, carbs: 27, fats: 0.3, fiber: 3.1, weightAmount: 120, weightUnit: 'g' },
+          score: 0.05,
+        },
+      ],
+      limit: 2,
+      maxScore: 2,
+    });
+
+    expect(suggestions[0]).toEqual(expect.objectContaining({ sourceType: 'usda_foundation' }));
+    expect(suggestions[1]).toEqual(expect.objectContaining({ sourceType: 'quick_add' }));
+  });
+
+  it('still falls back to quick adds when provider results are unavailable', async () => {
+    const suggestions = await getCombinedSuggestions(1, 'porridge', {
+      localSuggestions: [],
+      remoteSuggestions: [],
+      quickSuggestions: [
+        {
+          id: 'quick-porridge',
+          name: 'Oatmeal (cooked)',
+          source: 'Quick Add',
+          sourceType: 'quick_add',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 150, protein: 6, carbs: 27, fats: 3, fiber: 4, weightAmount: 240, weightUnit: 'g' },
+          score: 0.02,
+        },
+      ],
+      limit: 2,
+      maxScore: 2,
+    });
+
+    expect(suggestions[0]).toEqual(expect.objectContaining({ sourceType: 'quick_add' }));
   });
 });
