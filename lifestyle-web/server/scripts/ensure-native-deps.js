@@ -6,16 +6,40 @@ const SERVER_ROOT = path.resolve(__dirname, '..');
 const NATIVE_MODULE = 'better-sqlite3';
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-function isNativeBinaryMismatch(error) {
+function isRecoverableNativeModuleError(error) {
   if (!error) {
     return false;
   }
 
-  const message = String(error.message || '');
-  return (
-    error.code === 'ERR_DLOPEN_FAILED' &&
-    /(invalid (elf|win32) header|wrong elf class|mach-o|exec format error)/i.test(message)
+  const message = [error.message, error.cause?.message].filter(Boolean).join('\n');
+  const recoverablePattern = new RegExp(
+    [
+      'invalid (elf|win32) header',
+      'wrong elf class',
+      'mach-o',
+      'exec format error',
+      'node_module_version',
+      'compiled against a different node\\.js version',
+      'could not locate the bindings file',
+      'cannot find module .*\\.node',
+      'no such file',
+    ].join('|'),
+    'i'
   );
+  return (
+    ['ERR_DLOPEN_FAILED', 'MODULE_NOT_FOUND', 'ERR_MODULE_NOT_FOUND'].includes(error.code) &&
+    recoverablePattern.test(message)
+  );
+}
+
+function probeBetterSqlite3() {
+  const Database = require(NATIVE_MODULE);
+  const db = new Database(':memory:');
+  try {
+    db.prepare('SELECT 1').get();
+  } finally {
+    db.close();
+  }
 }
 
 function rebuildNativeModule() {
@@ -27,12 +51,12 @@ function rebuildNativeModule() {
 }
 
 try {
-  require(NATIVE_MODULE);
+  probeBetterSqlite3();
 } catch (error) {
-  if (!isNativeBinaryMismatch(error)) {
+  if (!isRecoverableNativeModuleError(error)) {
     throw error;
   }
 
   rebuildNativeModule();
-  require(NATIVE_MODULE);
+  probeBetterSqlite3();
 }

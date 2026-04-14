@@ -1150,10 +1150,6 @@ const overviewSyncCaloriesNote = document.getElementById('overviewSyncCaloriesNo
 const overviewSyncSleep = document.getElementById('overviewSyncSleep');
 const overviewSyncSleepNote = document.getElementById('overviewSyncSleepNote');
 
-syncActivityWidgetGoalInputs(state.activity.widgetGoals);
-renderActivityWidgetPreview(state.activity.summary);
-updateActivityWidgetGoalDraftState();
-
 let startupReady = false;
 function markStartupReady() {
   if (startupReady) return;
@@ -11129,6 +11125,9 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 }
 
 updateNutritionFilterButtons();
+syncActivityWidgetGoalInputs(state.activity.widgetGoals);
+renderActivityWidgetPreview(state.activity.summary);
+updateActivityWidgetGoalDraftState();
 restoreSessionFromStorage()
   .catch((error) => {
     console.error('Unexpected startup restore failure.', error);
