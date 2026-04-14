@@ -11,6 +11,13 @@ describe('hashPassword utilities', () => {
     expect(verifyPassword('wrong-password', hashed)).toBe(false);
   });
 
+  it('accepts and rejects legacy plain SHA-256 hex hashes', () => {
+    const password = 'OldAccountPass!';
+    const legacyHash = crypto.createHash('sha256').update(password).digest('hex');
+    expect(verifyPassword(password, legacyHash)).toBe(true);
+    expect(verifyPassword('wrong-password', legacyHash)).toBe(false);
+  });
+
   it('accepts hashes encrypted with the fallback default secret', () => {
     const digest = crypto.createHash('sha256').update('LegacyPass!').digest();
     const key = crypto

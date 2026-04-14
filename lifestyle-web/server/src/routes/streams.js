@@ -803,7 +803,7 @@ function normalizeSessionName(rawName, sportType, fallback = 'Phone workout sync
     }
   }
   if (typeof sportType === 'string' && sportType.trim()) {
-    return `${sportType.trim()} workout`;
+    return `${sportType.trim()} workout`.slice(0, SESSION_NAME_MAX_LENGTH);
   }
   return fallback;
 }

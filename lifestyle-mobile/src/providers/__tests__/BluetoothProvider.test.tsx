@@ -88,16 +88,24 @@ afterEach(() => {
   jest.clearAllMocks();
 });
 
-function renderWithProvider(probe: (ctx: ReturnType<typeof useBluetooth>) => void) {
+async function renderWithProvider(probe: (ctx: ReturnType<typeof useBluetooth>) => void) {
   function Probe() {
     probe(useBluetooth());
     return null;
   }
-  render(
-    <BluetoothProvider>
-      <Probe />
-    </BluetoothProvider>
-  );
+
+  await act(async () => {
+    render(
+      <BluetoothProvider>
+        <Probe />
+      </BluetoothProvider>
+    );
+
+    // The provider bootstraps its config from AsyncStorage on mount.
+    // Flush that async effect here so individual tests don't race it.
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 /** Set up a fresh connected device and return the monitor notification callback. */
@@ -120,7 +128,7 @@ async function connectDevice(options?: {
   });
 
   let ctx: ReturnType<typeof useBluetooth> | null = null;
-  renderWithProvider((c) => { ctx = c; });
+  await renderWithProvider((c) => { ctx = c; });
 
   if (profile !== 'custom') {
     await act(async () => { ctx!.applyProfile(profile as any); });
@@ -226,7 +234,7 @@ describe('BluetoothProvider confirmSystemDevice', () => {
     });
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { await snapshot!.confirmSystemDevice(); });
 
@@ -246,7 +254,7 @@ describe('BluetoothProvider confirmSystemDevice', () => {
     mockConnectedDevices.mockResolvedValue([]);
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { await snapshot!.confirmSystemDevice(); });
 
@@ -506,7 +514,7 @@ describe('BluetoothProvider startScan', () => {
     mockStartDeviceScan.mockImplementation(() => {});
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { await snapshot!.startScan(); });
 
@@ -526,7 +534,7 @@ describe('BluetoothProvider startScan', () => {
     });
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { await snapshot!.startScan(); });
 
@@ -549,7 +557,7 @@ describe('BluetoothProvider startScan', () => {
     });
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { await snapshot!.startScan(); });
 
@@ -580,7 +588,7 @@ describe('BluetoothProvider connectToDevice', () => {
     });
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     // Apply the Arduino profile first
     await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
@@ -611,7 +619,7 @@ describe('BluetoothProvider connectToDevice', () => {
     });
 
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
     await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
@@ -640,9 +648,9 @@ describe('BluetoothProvider connectToDevice', () => {
 // ---------------------------------------------------------------------------
 
 describe('arduino_hm10 profile', () => {
-  it('is present in the profiles list', () => {
+  it('is present in the profiles list', async () => {
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     const ids = snapshot!.profiles.map((p) => p.id);
     expect(ids).toContain('arduino_hm10');
@@ -650,7 +658,7 @@ describe('arduino_hm10 profile', () => {
 
   it('pre-fills FFE0 / FFE1 UUIDs and vitals.heart_rate metric', async () => {
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
-    renderWithProvider((ctx) => { snapshot = ctx; });
+    await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
 

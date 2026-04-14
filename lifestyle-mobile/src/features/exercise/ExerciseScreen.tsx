@@ -90,6 +90,7 @@ import {
   stopExerciseTrackingSnapshot,
   type ExerciseTrackingSnapshot,
 } from './trackingState';
+import { buildStoredWorkoutMetrics } from './workoutSummary';
 
 interface SportOption {
   id: SportId;
@@ -969,16 +970,15 @@ export function ExerciseScreen() {
       endedAt,
       elapsedMilliseconds,
       distanceKm,
-      paceSeconds,
-      heartRate,
     }: {
       endedAt: number;
       elapsedMilliseconds: number;
       distanceKm: number | null;
-      paceSeconds: number | null;
-      heartRate: number | null;
     }) => {
-      const movingTimeSeconds = Math.max(1, Math.round(elapsedMilliseconds / 1000));
+      const storedMetrics = buildStoredWorkoutMetrics({
+        elapsedMilliseconds,
+        distanceKm,
+      });
       const startTs =
         workoutStartedAtRef.current && workoutStartedAtRef.current > 0
           ? workoutStartedAtRef.current
@@ -996,20 +996,7 @@ export function ExerciseScreen() {
         sportType: sportConfig.label,
         startTime: new Date(startTs).toISOString(),
         endTime: new Date(endedAt).toISOString(),
-        distanceMeters:
-          distanceKm !== null && Number.isFinite(distanceKm) && distanceKm > 0
-            ? Math.round(distanceKm * 1000)
-            : null,
-        movingTimeSeconds,
-        elapsedTimeSeconds: movingTimeSeconds,
-        averageHr:
-          heartRate !== null && Number.isFinite(heartRate) && heartRate > 0
-            ? Math.round(heartRate)
-            : null,
-        averagePace:
-          paceSeconds !== null && Number.isFinite(paceSeconds) && paceSeconds > 0
-            ? Math.round(paceSeconds)
-            : null,
+        ...storedMetrics,
         elevationGain: elevationGainRef.current > 0 ? Math.round(elevationGainRef.current) : null,
         calories:
           distanceKm !== null && distanceKm > 0
@@ -1372,8 +1359,6 @@ export function ExerciseScreen() {
             finalDistance !== null && Number.isFinite(finalDistance) && finalDistance > 0
               ? finalDistance
               : null,
-          paceSeconds: finalPace,
-          heartRate: finalHeartRate,
         });
 
         setWorkoutName(buildDefaultWorkoutName(sportConfig.label));

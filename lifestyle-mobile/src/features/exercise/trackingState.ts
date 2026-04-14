@@ -51,6 +51,7 @@ const AUTO_PAUSE_DELAY_MS = 4_000;
 const PHONE_MIN_STEP_METERS = 1;
 const PHONE_MAX_STEP_METERS = 300;
 const PHONE_MAX_SPEED_MS = 40;
+const PHONE_MAX_ACCURACY_METERS = 100;
 
 export function createExerciseTrackingSnapshot({
   sportId,
@@ -217,6 +218,13 @@ export function applyLocationPointToTrackingSnapshot(
     updatedAt: pointTs,
   };
 
+  if (
+    normalizedPoint.accuracy != null &&
+    normalizedPoint.accuracy > PHONE_MAX_ACCURACY_METERS
+  ) {
+    return next;
+  }
+
   if (gpsSpeed !== null) {
     if (gpsSpeed < AUTO_PAUSE_SPEED_THRESHOLD_MS) {
       if (next.isAutoPaused) {
@@ -266,10 +274,14 @@ export function applyLocationPointToTrackingSnapshot(
   let acceptPoint = !previous;
   if (previous && deltaMeters !== null && timeDeltaSeconds !== null) {
     const speedMs = deltaMeters / timeDeltaSeconds;
+    const maxAllowedStepMeters = Math.max(
+      PHONE_MAX_STEP_METERS,
+      PHONE_MAX_SPEED_MS * timeDeltaSeconds
+    );
     if (
       Number.isFinite(deltaMeters) &&
       deltaMeters >= PHONE_MIN_STEP_METERS &&
-      deltaMeters <= PHONE_MAX_STEP_METERS &&
+      deltaMeters <= maxAllowedStepMeters &&
       speedMs <= PHONE_MAX_SPEED_MS
     ) {
       next = {
@@ -277,7 +289,7 @@ export function applyLocationPointToTrackingSnapshot(
         phoneDistanceMeters: next.phoneDistanceMeters + deltaMeters,
       };
       acceptPoint = true;
-    } else if (Number.isFinite(deltaMeters) && deltaMeters > PHONE_MAX_STEP_METERS) {
+    } else if (Number.isFinite(deltaMeters) && deltaMeters > maxAllowedStepMeters) {
       return {
         ...next,
         lastPhonePoint: normalizedPoint,

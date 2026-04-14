@@ -505,6 +505,44 @@ describe('Strava export route', () => {
 });
 
 describe('Activity session editing', () => {
+  it('truncates sport-derived workout names to the session length limit', async () => {
+    const { token } = await loginAsCoach();
+    const sourceId = `long-sport:${Date.now()}`;
+    const startedAt = new Date().toISOString();
+    const sportType = 'pilates-endurance-focus-'.repeat(6);
+    const normalizedSportType = `${sportType.charAt(0).toUpperCase()}${sportType.slice(1)}`;
+    const expectedName = `${normalizedSportType} workout`.slice(0, 96);
+
+    const workout = await request(app)
+      .post('/api/streams/workouts')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        workouts: [
+          {
+            sourceId,
+            sportType,
+            startTime: startedAt,
+            endTime: startedAt,
+            distanceMeters: 3200,
+            movingTimeSeconds: 900,
+            elapsedTimeSeconds: 900,
+          },
+        ],
+      });
+
+    expect(workout.status).toBe(202);
+
+    const activity = await request(app)
+      .get('/api/activity')
+      .set('Authorization', `Bearer ${token}`);
+    expect(activity.status).toBe(200);
+
+    const createdSession = activity.body.sessions.find((session) => session.sourceId === sourceId);
+    expect(createdSession).toBeTruthy();
+    expect(createdSession.name).toBe(expectedName);
+    expect(createdSession.name.length).toBeLessThanOrEqual(96);
+  });
+
   it('stores workout notes and allows self-owned sessions to be updated after logging', async () => {
     const { token } = await loginAsCoach();
     const sourceId = `editable-run:${Date.now()}`;
