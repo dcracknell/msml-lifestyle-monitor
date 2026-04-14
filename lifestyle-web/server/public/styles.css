@@ -1760,13 +1760,42 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 }
 .suggestion-list li { padding: 8px 12px; font-size: 12px; color: var(--label); cursor: pointer; }
 .suggestion-list li:hover { background: var(--surface); color: var(--text); }
-.suggestion-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.suggestion-list li.suggestion-loading { color: var(--muted); cursor: default; font-style: italic; }
+.suggestion-list li.suggestion-loading:hover { background: transparent; color: var(--muted); }
+.suggestion-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
 .suggestion-bar button {
   padding: 3px 8px; font-size: 11px;
   border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--muted); background: transparent;
 }
-.suggestion-bar button:hover { color: var(--text); border-color: var(--teal); color: var(--teal); }
+.suggestion-bar button:hover { color: var(--teal); border-color: var(--teal); }
+.suggestion-bar-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.suggestion-bar-divider { width: 1px; height: 16px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+
+/* Undo delete toast */
+.undo-toast-container {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 8px; z-index: 9000;
+  pointer-events: none;
+}
+.undo-toast {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text); font-size: 13px; white-space: nowrap;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  animation: toast-in 0.18s ease;
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.undo-toast-countdown { color: var(--muted); font-size: 11px; min-width: 22px; }
+.undo-toast-btn {
+  padding: 3px 10px; font-size: 12px;
+  border: 1px solid var(--teal); border-radius: var(--radius);
+  color: var(--teal); background: transparent; cursor: pointer;
+}
+.undo-toast-btn:hover { background: var(--teal); color: var(--bg); }
+li.pending-delete { opacity: 0.38; pointer-events: none; transition: opacity 0.2s; }
 
 /* Chart */
 .nutrition-chart-card { overflow: hidden; }

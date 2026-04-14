@@ -18,6 +18,8 @@ const REMOTE_SEARCH_CACHE_LIMIT = 50;
 const REMOTE_SEARCH_TIMEOUT_MS = 400;
 const BARCODE_LOOKUP_CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const BARCODE_LOOKUP_CACHE_LIMIT = 5000;
+const QUERY_LOOKUP_CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
+const QUERY_LOOKUP_CACHE_LIMIT = 200;
 const BARCODE_BATCH_LOOKUP_MAX = 250;
 const BARCODE_BATCH_LOOKUP_CONCURRENCY = 8;
 const LOOKUP_PRODUCT_FIELDS = [
@@ -42,6 +44,7 @@ const keepAliveAgent = new https.Agent({
 });
 const remoteSuggestionCache = new Map();
 const barcodeLookupCache = new Map();
+const queryLookupCache = new Map();
 const barcodeLookupInflight = new Map();
 const MAX_PHOTO_BASE64_LENGTH =
   Number.parseInt(process.env.NUT_MODEL_MAX_PHOTO_BASE64_LENGTH, 10) || 12 * 1024 * 1024;

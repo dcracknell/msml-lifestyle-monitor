@@ -669,6 +669,7 @@ const state = {
   nutritionEntryFilter: 'all',
   nutritionLogShouldScrollToTop: false,
   nutritionDeletingEntries: new Set(),
+  nutritionPendingDeletes: new Map(),
   nutritionPhotoData: null,
   nutritionPhotoPreparing: false,
   nutritionPhotoAnalyzing: false,
@@ -926,6 +927,27 @@ const storage = (() => {
   }
   return null;
 })();
+
+const RECENT_NUTRITION_KEY = 'msml:nutrition:recent';
+const MAX_RECENT_NUTRITION = 5;
+
+function loadRecentNutritionItems() {
+  try {
+    const raw = storage?.getItem(RECENT_NUTRITION_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentNutritionItem(item) {
+  if (!item?.name) return;
+  try {
+    const recent = loadRecentNutritionItems().filter((r) => r.name !== item.name);
+    recent.unshift(item);
+    storage?.setItem(RECENT_NUTRITION_KEY, JSON.stringify(recent.slice(0, MAX_RECENT_NUTRITION)));
+  } catch {}
+}
 
 function persistSession(session) {
   if (!storage || !session?.token || !session?.user) {
@@ -3264,6 +3286,8 @@ function resetNutritionState() {
   state.nutritionAmountBaseline = null;
   state.nutritionMacroReference = null;
   state.nutritionDeletingEntries.clear();
+  state.nutritionPendingDeletes.forEach((p) => { clearTimeout(p.timeoutId); p.dismissToast?.(); });
+  state.nutritionPendingDeletes.clear();
   setNutritionEntryFilter('all', { force: true, render: false });
   state.nutritionLogShouldScrollToTop = true;
   setAmountReference(null);
@@ -3493,6 +3517,9 @@ function renderNutritionEntries(entries = []) {
     li.dataset.entryType = entry.type || 'Food';
     li.dataset.entryId = entry.id;
     li.style.animationDelay = `${Math.min(index, 6) * 40}ms`;
+    if (state.nutritionPendingDeletes.has(entry.id)) {
+      li.classList.add('pending-delete');
+    }
 
     const header = document.createElement('div');
     header.className = 'nutrition-log-row-head';
@@ -3521,10 +3548,11 @@ function renderNutritionEntries(entries = []) {
       deleteButton.className = 'nutrition-delete-btn';
       deleteButton.dataset.action = 'delete-entry';
       deleteButton.dataset.entryId = entry.id;
+      const isDeleting = state.nutritionDeletingEntries.has(entry.id) || state.nutritionPendingDeletes.has(entry.id);
       deleteButton.textContent = state.nutritionDeletingEntries.has(entry.id)
         ? 'Removing...'
         : 'Remove';
-      deleteButton.disabled = state.nutritionDeletingEntries.has(entry.id);
+      deleteButton.disabled = isDeleting;
       deleteButton.setAttribute('aria-label', `Remove ${entry.name}`);
       metaGroup.appendChild(deleteButton);
     }
@@ -4478,7 +4506,9 @@ function setAmountReference(amount, unit, extras = {}) {
           ? Number(extras.gramsEquivalent)
           : normalizedUnit === UNIT_FOOD
             ? Number(amount)
-            : null,
+            : normalizedUnit === UNIT_OZ
+              ? Number(amount) * OZ_TO_GRAMS
+              : null,
       mlEquivalent:
         Number.isFinite(extras.mlEquivalent) && extras.mlEquivalent > 0
           ? Number(extras.mlEquivalent)
@@ -4661,6 +4691,31 @@ function showQuickSuggestions(query = '') {
 function renderSuggestionBar() {
   if (!nutritionSuggestionBar) return;
   nutritionSuggestionBar.innerHTML = '';
+
+  const recent = loadRecentNutritionItems();
+  if (recent.length) {
+    const recentLabel = document.createElement('span');
+    recentLabel.className = 'suggestion-bar-label';
+    recentLabel.textContent = 'Recent';
+    nutritionSuggestionBar.appendChild(recentLabel);
+    recent.forEach((item) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'suggestion-chip';
+      button.dataset.suggestionId = item.id;
+      const metaLabel = item.serving || '';
+      button.innerHTML = `<strong>${item.name}</strong>${metaLabel ? `<span>${metaLabel}</span>` : ''}`;
+      nutritionSuggestionBar.appendChild(button);
+    });
+    const divider = document.createElement('span');
+    divider.className = 'suggestion-bar-divider';
+    nutritionSuggestionBar.appendChild(divider);
+    const quickLabel = document.createElement('span');
+    quickLabel.className = 'suggestion-bar-label';
+    quickLabel.textContent = 'Quick add';
+    nutritionSuggestionBar.appendChild(quickLabel);
+  }
+
   QUICK_SUGGESTIONS.forEach((item) => {
     const button = document.createElement('button');
     button.type = 'button';
@@ -4778,6 +4833,9 @@ function resolveAmountInGrams(amount, unit) {
   if (unit === UNIT_FOOD) {
     return amount;
   }
+  if (unit === UNIT_OZ) {
+    return amount * OZ_TO_GRAMS;
+  }
   if (unit === UNIT_LIQUID) {
     return null;
   }
@@ -4884,6 +4942,7 @@ function updateAmountFieldUnit({ fill = false } = {}) {
   if (nutritionAmountInput) {
     let placeholder = 'grams';
     if (unit === UNIT_LIQUID) placeholder = 'milliliters';
+    else if (unit === UNIT_OZ) placeholder = 'ounces';
     else if (unit === UNIT_PORTION) placeholder = 'portions';
     nutritionAmountInput.placeholder = placeholder;
   }
@@ -5433,7 +5492,9 @@ const ROLE_ATHLETE = 'Athlete';
 const UNIT_FOOD = 'g';
 const UNIT_LIQUID = 'ml';
 const UNIT_PORTION = 'portion';
-const VALID_UNITS = new Set([UNIT_FOOD, UNIT_LIQUID]);
+const UNIT_OZ = 'oz';
+const OZ_TO_GRAMS = 28.3495;
+const VALID_UNITS = new Set([UNIT_FOOD, UNIT_LIQUID, UNIT_OZ]);
 const MEAL_DRAFT_UNITS = new Set([UNIT_FOOD, UNIT_LIQUID, UNIT_PORTION]);
 const LIQUID_KEYWORDS = [
   'water',
@@ -5576,6 +5637,12 @@ async function lookupNutritionFromApi() {
     if (!response.ok || !payload?.product) {
       throw new Error(payload?.message || 'No nutrition data found.');
     }
+    // Stale check: discard if the user changed the input while the request was in flight
+    const currentBarcode = nutritionBarcodeInput?.value.trim();
+    const currentQuery = nutritionNameInput?.value.trim();
+    if (barcode ? currentBarcode !== barcode : (query && currentQuery !== query)) {
+      return;
+    }
     const product = payload.product;
     if (nutritionNameInput && (!nutritionNameInput.value || barcode)) {
       nutritionNameInput.value = product.name || nutritionNameInput.value;
@@ -5655,10 +5722,14 @@ function scheduleSuggestionFetch() {
     return;
   }
   state.suggestionQuery = query;
+  if (nutritionSuggestions) {
+    nutritionSuggestions.innerHTML = '<li class="suggestion-loading">Searching\u2026</li>';
+    nutritionSuggestions.classList.remove('hidden');
+  }
   state.suggestionTimer = setTimeout(async () => {
     const activeQuery = state.suggestionQuery;
     try {
-      const response = await apiFetch(`/api/nutrition/search?q=${encodeURIComponent(query)}`, {
+      const response = await apiFetch(`/api/nutrition/search?q=${encodeURIComponent(activeQuery)}`, {
         headers: { Authorization: `Bearer ${state.token}` },
       });
       const payload = await response.json().catch(() => null);
@@ -5666,7 +5737,7 @@ function scheduleSuggestionFetch() {
         throw new Error(payload?.message || 'Lookup failed.');
       }
       const latestQuery = nutritionNameInput?.value.trim() || '';
-      if (activeQuery && latestQuery && activeQuery !== latestQuery) {
+      if (activeQuery !== latestQuery) {
         return;
       }
       state.suggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
@@ -5691,14 +5762,65 @@ function setDeleteButtonState(entryId, isLoading) {
   button.textContent = isLoading ? 'Removing...' : 'Remove';
 }
 
-async function deleteNutritionEntry(entryId) {
-  if (!state.token || !Number.isFinite(entryId) || entryId <= 0) return;
-  if (!canModifyOwnNutrition() || state.nutritionDeletingEntries.has(entryId)) return;
-  state.nutritionDeletingEntries.add(entryId);
-  setDeleteButtonState(entryId, true);
-  if (nutritionFeedback) {
-    nutritionFeedback.textContent = 'Removing item...';
+function getOrCreateUndoToastContainer() {
+  let container = document.getElementById('nutritionUndoToastContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'nutritionUndoToastContainer';
+    container.className = 'undo-toast-container';
+    document.body.appendChild(container);
   }
+  return container;
+}
+
+function showUndoDeleteToast(entryId, entryName, undoFn, durationMs) {
+  const container = getOrCreateUndoToastContainer();
+  const toastId = `toast-delete-${entryId}`;
+  const existing = document.getElementById(toastId);
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = toastId;
+  toast.className = 'undo-toast';
+
+  const msg = document.createElement('span');
+  msg.textContent = `Removed \u201c${entryName}\u201d.`;
+
+  const countdownEl = document.createElement('span');
+  countdownEl.className = 'undo-toast-countdown';
+  const startTime = Date.now();
+  countdownEl.textContent = `${Math.ceil(durationMs / 1000)}s`;
+
+  const ticker = setInterval(() => {
+    const remaining = Math.max(0, Math.ceil((durationMs - (Date.now() - startTime)) / 1000));
+    countdownEl.textContent = `${remaining}s`;
+  }, 250);
+
+  const undoButton = document.createElement('button');
+  undoButton.type = 'button';
+  undoButton.className = 'undo-toast-btn';
+  undoButton.textContent = 'Undo';
+  undoButton.addEventListener('click', () => {
+    clearInterval(ticker);
+    const pending = state.nutritionPendingDeletes.get(entryId);
+    if (pending) {
+      clearTimeout(pending.timeoutId);
+      state.nutritionPendingDeletes.delete(entryId);
+    }
+    toast.remove();
+    undoFn();
+  });
+
+  toast.appendChild(msg);
+  toast.appendChild(countdownEl);
+  toast.appendChild(undoButton);
+  container.appendChild(toast);
+
+  return () => { clearInterval(ticker); toast.remove(); };
+}
+
+async function commitDeleteNutritionEntry(entryId, entryName) {
+  state.nutritionDeletingEntries.add(entryId);
   try {
     const response = await apiFetch(`/api/nutrition/${entryId}`, {
       method: 'DELETE',
@@ -5710,7 +5832,7 @@ async function deleteNutritionEntry(entryId) {
     }
     await refreshNutritionLinkedViews();
     if (nutritionFeedback) {
-      nutritionFeedback.textContent = payload?.message || 'Entry removed.';
+      nutritionFeedback.textContent = payload?.message || `${entryName} removed.`;
     }
   } catch (error) {
     if (nutritionFeedback) {
@@ -5718,8 +5840,37 @@ async function deleteNutritionEntry(entryId) {
     }
   } finally {
     state.nutritionDeletingEntries.delete(entryId);
-    setDeleteButtonState(entryId, false);
   }
+}
+
+function deleteNutritionEntry(entryId) {
+  if (!state.token || !Number.isFinite(entryId) || entryId <= 0) return;
+  if (!canModifyOwnNutrition()) return;
+  if (state.nutritionDeletingEntries.has(entryId) || state.nutritionPendingDeletes.has(entryId)) return;
+
+  const entryEl = nutritionEntriesList?.querySelector(`li[data-entry-id="${entryId}"]`);
+  const entryName = entryEl?.querySelector('h4')?.textContent || 'Item';
+
+  if (entryEl) entryEl.classList.add('pending-delete');
+  setDeleteButtonState(entryId, true);
+
+  const UNDO_DURATION_MS = 7000;
+
+  const undoFn = () => {
+    if (entryEl) entryEl.classList.remove('pending-delete');
+    setDeleteButtonState(entryId, false);
+    if (nutritionFeedback) nutritionFeedback.textContent = '';
+  };
+
+  const dismissToast = showUndoDeleteToast(entryId, entryName, undoFn, UNDO_DURATION_MS);
+
+  const timeoutId = setTimeout(async () => {
+    dismissToast();
+    state.nutritionPendingDeletes.delete(entryId);
+    await commitDeleteNutritionEntry(entryId, entryName);
+  }, UNDO_DURATION_MS);
+
+  state.nutritionPendingDeletes.set(entryId, { timeoutId, entryName, undoFn, dismissToast });
 }
 
 function setAvatarValue(value) {
@@ -6376,6 +6527,8 @@ function resetToAuth(message = '') {
   state.nutritionAmountBaseline = null;
   state.nutritionMacroReference = null;
   state.nutritionDeletingEntries.clear();
+  state.nutritionPendingDeletes.forEach((p) => { clearTimeout(p.timeoutId); p.dismissToast?.(); });
+  state.nutritionPendingDeletes.clear();
   state.hydrationEntries = [];
   setAmountReference(null);
   if (state.suggestionTimer) {
@@ -6700,6 +6853,8 @@ nutritionUnitSelect?.addEventListener('change', () => {
     nutritionTypeSelect.value = 'Liquid';
   } else if (nutritionUnitSelect.value === UNIT_FOOD && nutritionTypeSelect) {
     nutritionTypeSelect.value = 'Food';
+  } else if (nutritionUnitSelect.value === UNIT_OZ && nutritionTypeSelect) {
+    nutritionTypeSelect.value = 'Food';
   }
   const filled = updateAmountFieldUnit({ fill: true });
   if (!filled) {
@@ -6777,7 +6932,10 @@ nutritionSuggestions?.addEventListener('click', (event) => {
 nutritionSuggestionBar?.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-suggestion-id]');
   if (!button) return;
-  const suggestion = QUICK_SUGGESTIONS.find((item) => item.id === button.dataset.suggestionId);
+  const id = button.dataset.suggestionId;
+  const suggestion =
+    QUICK_SUGGESTIONS.find((item) => item.id === id) ||
+    loadRecentNutritionItems().find((item) => item.id === id);
   applySuggestion(suggestion);
 });
 
@@ -6922,6 +7080,29 @@ nutritionForm?.addEventListener('submit', async (event) => {
     updateAmountFieldUnit();
     await refreshNutritionLinkedViews();
     clearSuggestions();
+    if (name && !photoData) {
+      saveRecentNutritionItem({
+        id: `recent-local-${Date.now()}`,
+        name,
+        source: 'Recent',
+        serving: Number.isFinite(amountValue) && amountValue > 0 ? `${amountValue}\u202f${unit}` : null,
+        prefill: {
+          type: payload.type || 'Food',
+          calories: payload.calories ?? null,
+          protein: payload.protein ?? null,
+          carbs: payload.carbs ?? null,
+          fats: payload.fats ?? null,
+          fiber: payload.fiber ?? null,
+          weightAmount: payload.weightAmount ?? null,
+          weightUnit: unit,
+        },
+      });
+      renderSuggestionBar();
+    }
+    requestAnimationFrame(() => {
+      nutritionForm?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      setTimeout(() => nutritionNameInput?.focus({ preventScroll: true }), 350);
+    });
   } catch (error) {
     nutritionFeedback.textContent = error.message;
     if (photoData) {
@@ -7464,6 +7645,8 @@ async function loadNutrition(subjectOverrideId, options = {}) {
     };
     syncNutritionDateControls(fallbackDate);
     state.nutritionDeletingEntries.clear();
+    state.nutritionPendingDeletes.forEach((p) => { clearTimeout(p.timeoutId); p.dismissToast?.(); });
+    state.nutritionPendingDeletes.clear();
     state.nutritionLogShouldScrollToTop = true;
     renderNutritionDashboard(state.nutrition);
   } catch (error) {
