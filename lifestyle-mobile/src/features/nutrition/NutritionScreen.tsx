@@ -10,6 +10,7 @@ import {
   Image,
   Modal,
   ScrollView,
+  TextInput,
 } from 'react-native';
 import dayjs from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
@@ -48,8 +49,20 @@ import {
 } from 'expo-camera';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { NutritionEntry, NutritionLookupProduct, NutritionSuggestion } from '../../api/types';
+import type { NutritionLogResponse } from '../../api/types';
 import { fetchSuggestionsWithCache, readSuggestionCache } from './suggestionCache';
 import { createDailyCaloriesWidgetSnapshot, syncDailyCaloriesWidget } from './dailyCaloriesWidget';
+import {
+  readNutritionFavorites,
+  toggleNutritionFavorite,
+  isNutritionFavorite,
+} from './favoritesStore';
+import { trackNutritionMetric } from './nutritionMetrics';
+import {
+  buildServingPresets,
+  scaleNutritionToServing,
+  type NutritionServingPreset,
+} from './servingPresets';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -67,6 +80,20 @@ type EntryFormState = {
   weightAmount: string;
   weightUnit: string;
   photoData: string | null;
+};
+
+const EMPTY_ENTRY_FORM: EntryFormState = {
+  name: '',
+  type: 'Food',
+  barcode: '',
+  calories: '',
+  protein: '',
+  carbs: '',
+  fats: '',
+  fiber: '',
+  weightAmount: '',
+  weightUnit: 'g',
+  photoData: null,
 };
 
 type AddFoodMode = 'menu' | 'search' | 'photo' | 'manual' | 'photoReview';
@@ -126,17 +153,10 @@ type NutritionMealAnalysis = {
   items: NutritionMealAnalysisItem[];
 };
 
-type NutritionLogResponse = {
-  message?: string;
-  autoLookup?: boolean;
-  entriesLogged?: Array<{ name?: string }>;
-  mealAnalysis?: unknown;
-  photoAnalysis?: unknown;
-};
-
 const PHOTO_DETECTED_MAX_ITEMS = 6;
 const PHOTO_DETECTED_MIN_CONFIDENCE = 0.08;
 const PHOTO_UNCERTAIN_CODE = 'PHOTO_ANALYSIS_UNCERTAIN';
+const DELETE_UNDO_WINDOW_MS = 5000;
 
 const NUMERIC_BARCODE_TYPE_HINTS = [
   'ean13',
@@ -380,24 +400,174 @@ function parsePhotoUncertainError(error: unknown) {
   };
 }
 
+const QUICK_SUGGESTIONS: NutritionSuggestion[] = [
+  {
+    id: 'quick-banana',
+    name: 'Banana (1 medium)',
+    source: 'Quick suggestion',
+    serving: '1 medium',
+    prefill: {
+      type: 'Food',
+      calories: 105,
+      protein: 1.3,
+      carbs: 27,
+      fats: 0.3,
+      fiber: 3.1,
+      weightAmount: 120,
+      weightUnit: 'g',
+    },
+  },
+  {
+    id: 'quick-greek-yogurt',
+    name: 'Greek Yogurt (200 g)',
+    source: 'Quick suggestion',
+    serving: '200 g',
+    prefill: {
+      type: 'Food',
+      calories: 146,
+      protein: 20,
+      carbs: 7.8,
+      fats: 4.2,
+      fiber: 0,
+      weightAmount: 200,
+      weightUnit: 'g',
+    },
+  },
+  {
+    id: 'quick-black-beans',
+    name: 'Black Beans (1/2 cup)',
+    source: 'Quick suggestion',
+    serving: '1/2 cup',
+    prefill: {
+      type: 'Food',
+      calories: 114,
+      protein: 7.6,
+      carbs: 20.4,
+      fats: 0.5,
+      fiber: 7.5,
+      weightAmount: 86,
+      weightUnit: 'g',
+    },
+  },
+  {
+    id: 'quick-water',
+    name: 'Water (500 ml)',
+    source: 'Quick suggestion',
+    serving: '500 ml',
+    prefill: {
+      type: 'Liquid',
+      calories: 0,
+      protein: 0,
+      carbs: 0,
+      fats: 0,
+      fiber: 0,
+      weightAmount: 500,
+      weightUnit: 'ml',
+    },
+  },
+];
+
+type SuggestionStatusKind = 'info' | 'success' | 'error';
+
+type PendingDeleteState = {
+  entry: NutritionEntry;
+  expiresAt: number;
+};
+
+function stringifyNumericValue(value?: number | null, { decimals = true } = {}) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '';
+  }
+  const normalized = decimals ? Math.round(value * 10) / 10 : Math.round(value);
+  return String(normalized);
+}
+
+function suggestionFromLookupProduct(product?: NutritionLookupProduct | null): NutritionSuggestion | null {
+  if (!product?.name?.trim()) {
+    return null;
+  }
+  return {
+    id: `lookup-${product.barcode || product.name.toLowerCase().replace(/\s+/g, '-')}`,
+    name: product.name.trim(),
+    source: 'Food database',
+    barcode: product.barcode ?? null,
+    serving: product.serving ?? null,
+    prefill: {
+      type: product.weightUnit === 'ml' ? 'Liquid' : 'Food',
+      calories: product.calories ?? null,
+      protein: product.protein ?? null,
+      carbs: product.carbs ?? null,
+      fats: product.fats ?? null,
+      fiber: product.fiber ?? null,
+      weightAmount: product.weightAmount ?? null,
+      weightUnit: product.weightUnit ?? null,
+      barcode: product.barcode ?? null,
+    },
+  };
+}
+
+function suggestionFromEntry(entry: NutritionEntry): NutritionSuggestion {
+  return {
+    id: `recent-${entry.id}`,
+    name: entry.name,
+    source: 'Recently logged',
+    barcode: entry.barcode,
+    serving:
+      entry.weightAmount && entry.weightUnit ? `${formatNumber(entry.weightAmount)} ${entry.weightUnit}` : null,
+    prefill: {
+      type: entry.type === 'Liquid' ? 'Liquid' : 'Food',
+      calories: entry.calories,
+      protein: entry.protein,
+      carbs: entry.carbs,
+      fats: entry.fats,
+      fiber: entry.fiber,
+      weightAmount: entry.weightAmount,
+      weightUnit: entry.weightUnit,
+      barcode: entry.barcode,
+    },
+  };
+}
+
+function manualSuggestionFromQuery(query: string, type: EntryFormState['type']): NutritionSuggestion | null {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return {
+    id: `manual-${trimmed.toLowerCase().replace(/\s+/g, '-')}`,
+    name: trimmed,
+    source: 'Manual item',
+    serving: null,
+    prefill: {
+      type,
+      fiber: null,
+    },
+  };
+}
+
+function buildRecentSuggestions(entries: NutritionEntry[]) {
+  const seen = new Set<string>();
+  return entries
+    .slice()
+    .sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf())
+    .filter((entry) => {
+      const key = `${entry.barcode || ''}:${entry.name.toLowerCase()}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 6)
+    .map(suggestionFromEntry);
+}
+
 export function NutritionScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
   const { runOrQueue } = useSyncQueue();
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [entryForm, setEntryForm] = useState<EntryFormState>({
-    name: '',
-    type: 'Food',
-    barcode: '',
-    calories: '',
-    protein: '',
-    carbs: '',
-    fats: '',
-    fiber: '',
-    weightAmount: '',
-    weightUnit: 'g',
-    photoData: null,
-  });
+  const [entryForm, setEntryForm] = useState<EntryFormState>(EMPTY_ENTRY_FORM);
   const [addFoodModalVisible, setAddFoodModalVisible] = useState(false);
   const [addFoodMode, setAddFoodMode] = useState<AddFoodMode>('menu');
   const [macroExpanded, setMacroExpanded] = useState(false);
@@ -410,9 +580,16 @@ export function NutritionScreen() {
   const [photoMealAnalysis, setPhotoMealAnalysis] = useState<NutritionMealAnalysis | null>(null);
   const [editableDetectedFoods, setEditableDetectedFoods] = useState<EditableDetectedFood[]>([]);
   const [expandedFoodIds, setExpandedFoodIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSuggestion, setSelectedSuggestion] = useState<NutritionSuggestion | null>(null);
+  const [selectedServingId, setSelectedServingId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<NutritionSuggestion[]>([]);
-  const [suggestionStatus, setSuggestionStatus] = useState('Type at least 2 characters to see suggestions.');
+  const [suggestionStatus, setSuggestionStatus] = useState(
+    'Choose a result to fill the form. Typing alone will not replace the current item.'
+  );
+  const [suggestionStatusKind, setSuggestionStatusKind] = useState<SuggestionStatusKind>('info');
   const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [favorites, setFavorites] = useState<NutritionSuggestion[]>([]);
   const [entryFeedback, setEntryFeedback] = useState<string | null>(null);
   const [scannerActive, setScannerActive] = useState(false);
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
@@ -421,16 +598,31 @@ export function NutritionScreen() {
   const [historyPhoto, setHistoryPhoto] = useState<{ uri: string; name: string } | null>(null);
   const [iosPickerVisible, setIosPickerVisible] = useState(false);
   const [iosPickerDate, setIosPickerDate] = useState(dayjs().toDate());
+  const [pendingDelete, setPendingDelete] = useState<PendingDeleteState | null>(null);
+  const [undoCountdownMs, setUndoCountdownMs] = useState(0);
   const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeSuggestionRequest = useRef<symbol | null>(null);
   const mountedRef = useRef(true);
   const scannerLockRef = useRef(false);
+  const deleteTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const deleteCountdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const searchInputRef = useRef<TextInput | null>(null);
+  const itemNameInputRef = useRef<TextInput | null>(null);
+  const modalScrollRef = useRef<ScrollView | null>(null);
+  const autofillBaselineRef = useRef<Pick<EntryFormState, 'name' | 'type' | 'barcode'> | null>(null);
+  const wrongAutofillTrackedRef = useRef(false);
 
   useEffect(() => {
     return () => {
       mountedRef.current = false;
       if (suggestionTimerRef.current) {
         clearTimeout(suggestionTimerRef.current);
+      }
+      if (deleteTimerRef.current) {
+        clearTimeout(deleteTimerRef.current);
+      }
+      if (deleteCountdownTimerRef.current) {
+        clearInterval(deleteCountdownTimerRef.current);
       }
     };
   }, []);
@@ -480,6 +672,29 @@ export function NutritionScreen() {
     });
   }, [data]);
 
+  useEffect(() => {
+    let cancelled = false;
+    readNutritionFavorites(user?.id).then((saved) => {
+      if (!cancelled) {
+        setFavorites(saved);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!addFoodModalVisible) {
+      return;
+    }
+    if (addFoodMode === 'search') {
+      focusAddFoodForm(entryForm.name.trim() ? 'name' : 'search');
+    } else if (addFoodMode === 'manual') {
+      focusAddFoodForm('name');
+    }
+  }, [addFoodModalVisible, addFoodMode]);
+
   if (isError) {
     return <ErrorView message="Unable to load nutrition" onRetry={refetch} />;
   }
@@ -490,28 +705,58 @@ export function NutritionScreen() {
 
   const resolveSuggestionMessage = (items: NutritionSuggestion[]) =>
     items.length
-      ? 'Tap a suggestion below to auto-fill the form.'
-      : 'No matches yet. Try refining the name or scan a barcode.';
+      ? 'Choose a result to fill calories, macros, and fiber.'
+      : 'No matches yet. Keep typing or use your query as a custom item.';
+
+  const focusAddFoodForm = (target: 'search' | 'name' = 'search') => {
+    requestAnimationFrame(() => {
+      modalScrollRef.current?.scrollTo({ y: 0, animated: true });
+      const ref = target === 'name' ? itemNameInputRef : searchInputRef;
+      setTimeout(() => {
+        ref.current?.focus();
+      }, 120);
+    });
+  };
 
   const handleEntryChange = <K extends keyof EntryFormState>(key: K, value: EntryFormState[K]) => {
     setEntryForm((prev) => ({ ...prev, [key]: value }));
+    const baseline = autofillBaselineRef.current;
+    if (
+      baseline &&
+      !wrongAutofillTrackedRef.current &&
+      (key === 'name' || key === 'type' || key === 'barcode')
+    ) {
+      const nextValue = String(value || '').trim();
+      const expected =
+        key === 'type' ? baseline.type : key === 'barcode' ? baseline.barcode.trim() : baseline.name.trim();
+      if (nextValue !== expected) {
+        wrongAutofillTrackedRef.current = true;
+        trackNutritionMetric('nutrition_wrong_autofill', {
+          field: key,
+          expected,
+          actual: nextValue,
+          selectedSuggestion: baseline.name,
+        });
+      }
+    }
   };
+
   const resetEntryForm = () => {
-    setEntryForm((prev) => ({
-      name: '',
-      type: prev.type,
-      barcode: '',
-      calories: '',
-      protein: '',
-      carbs: '',
-      fats: '',
-      fiber: '',
-      weightAmount: '',
-      weightUnit: prev.weightUnit,
-      photoData: null,
-    }));
+    setSelectedSuggestion(null);
+    setSelectedServingId(null);
+    autofillBaselineRef.current = null;
+    wrongAutofillTrackedRef.current = false;
+    setEntryForm(EMPTY_ENTRY_FORM);
   };
-  const clearSuggestions = (message?: string) => {
+  const clearCommittedItem = () => {
+    setSelectedSuggestion(null);
+    setSelectedServingId(null);
+    autofillBaselineRef.current = null;
+    wrongAutofillTrackedRef.current = false;
+    setEntryForm(EMPTY_ENTRY_FORM);
+    focusAddFoodForm('search');
+  };
+  const clearSuggestions = (message?: string, kind: SuggestionStatusKind = 'info') => {
     if (suggestionTimerRef.current) {
       clearTimeout(suggestionTimerRef.current);
       suggestionTimerRef.current = null;
@@ -519,9 +764,45 @@ export function NutritionScreen() {
     activeSuggestionRequest.current = null;
     setSuggestionLoading(false);
     setSuggestions([]);
+    setSuggestionStatusKind(kind);
     if (message) {
       setSuggestionStatus(message);
     }
+  };
+
+  const applySuggestionSelection = (
+    suggestion: NutritionSuggestion,
+    options: { feedbackMessage?: string; focusTarget?: 'search' | 'name' } = {}
+  ) => {
+    const prefill = suggestion.prefill;
+    const nextType = prefill?.type === 'Liquid' ? 'Liquid' : prefill?.type === 'Food' ? 'Food' : entryForm.type;
+    setSelectedSuggestion(suggestion);
+    const servingPresets = buildServingPresets(suggestion);
+    setSelectedServingId(servingPresets[0]?.id || null);
+    autofillBaselineRef.current = {
+      name: suggestion.name,
+      type: nextType,
+      barcode: suggestion.barcode?.trim() || prefill?.barcode?.trim() || '',
+    };
+    wrongAutofillTrackedRef.current = false;
+    setEntryForm((prev) => ({
+      ...prev,
+      name: suggestion.name,
+      type: nextType,
+      barcode: suggestion.barcode?.trim() || prefill?.barcode?.trim() || '',
+      calories: stringifyNumericValue(prefill?.calories, { decimals: false }),
+      protein: stringifyNumericValue(prefill?.protein),
+      carbs: stringifyNumericValue(prefill?.carbs),
+      fats: stringifyNumericValue(prefill?.fats),
+      fiber: stringifyNumericValue(prefill?.fiber),
+      weightAmount: stringifyNumericValue(prefill?.weightAmount),
+      weightUnit: prefill?.weightUnit || (nextType === 'Liquid' ? 'ml' : 'g'),
+    }));
+    clearSuggestions(
+      options.feedbackMessage || 'Selected item loaded. Adjust the serving or macros before logging.',
+      'success'
+    );
+    focusAddFoodForm(options.focusTarget || 'name');
   };
 
   const applyPhotoDetectedFoods = (foods: PhotoDetectedFood[], feedbackMessage?: string) => {
@@ -535,6 +816,7 @@ export function NutritionScreen() {
     setPhotoDetectedFoods(limitedFoods);
     const photoSuggestions = limitedFoods.map(mapDetectedFoodToSuggestion);
     setSuggestions(photoSuggestions);
+    setSuggestionStatusKind('info');
     if (feedbackMessage) {
       setSuggestionStatus(feedbackMessage);
       return;
@@ -585,20 +867,24 @@ export function NutritionScreen() {
     }
     const trimmed = value.trim();
     if (!trimmed) {
-      clearSuggestions('Type a food name to see suggestions.');
+      clearSuggestions(
+        'Choose a result to fill the form. Typing alone will not replace the current item.'
+      );
       return;
     }
     if (trimmed.length < 2) {
-      clearSuggestions('Keep typing to see suggestions.');
+      clearSuggestions('Keep typing to search the food database.');
       return;
     }
     suggestionTimerRef.current = setTimeout(() => {
       suggestionTimerRef.current = null;
       const requestToken = Symbol('suggestions');
+      const startedAt = Date.now();
       activeSuggestionRequest.current = requestToken;
       const cached = readSuggestionCache(trimmed);
       if (cached) {
         setSuggestions(cached.suggestions);
+        setSuggestionStatusKind('info');
         setSuggestionStatus(
           cached.isStale
             ? cached.suggestions.length
@@ -608,6 +894,7 @@ export function NutritionScreen() {
         );
       } else {
         setSuggestions([]);
+        setSuggestionStatusKind('info');
         setSuggestionStatus('Searching for suggestions...');
       }
       setSuggestionLoading(true);
@@ -623,10 +910,18 @@ export function NutritionScreen() {
           }
           if (Array.isArray(results)) {
             setSuggestions(results);
+            setSuggestionStatusKind('success');
             setSuggestionStatus(resolveSuggestionMessage(results));
+            trackNutritionMetric('nutrition_search_latency', {
+              queryLength: trimmed.length,
+              durationMs: Date.now() - startedAt,
+              resultCount: results.length,
+            });
           } else if (cached) {
+            setSuggestionStatusKind('info');
             setSuggestionStatus('Network is slow. Showing recent results for now.');
           } else {
+            setSuggestionStatusKind('info');
             setSuggestionStatus('Still searching... this is taking longer than expected.');
           }
         } catch (error) {
@@ -636,6 +931,7 @@ export function NutritionScreen() {
           if (!cached) {
             setSuggestions([]);
           }
+          setSuggestionStatusKind('error');
           setSuggestionStatus(
             cached
               ? 'Unable to refresh suggestions. Showing recent results.'
@@ -643,6 +939,10 @@ export function NutritionScreen() {
                 ? error.message
                 : 'Unable to fetch suggestions right now.'
           );
+          trackNutritionMetric('nutrition_search_error', {
+            queryLength: trimmed.length,
+            message: error instanceof Error ? error.message : 'Unknown search error',
+          });
         } finally {
           if (mountedRef.current && activeSuggestionRequest.current === requestToken) {
             setSuggestionLoading(false);
@@ -652,73 +952,71 @@ export function NutritionScreen() {
     }, 250);
   };
 
-  const handleNameChange = (value: string) => {
-    handleEntryChange('name', value);
+  const handleSearchQueryChange = (value: string) => {
+    setSearchQuery(value);
     scheduleSuggestionFetch(value);
   };
 
   const applySuggestion = (suggestion?: NutritionSuggestion) => {
-    if (!suggestion) return;
-    handleEntryChange('name', suggestion.name);
-    if (suggestion.barcode) {
-      handleEntryChange('barcode', suggestion.barcode);
+    if (!suggestion) {
+      return;
     }
-    const prefill = suggestion.prefill;
-    if (prefill) {
-      handleEntryChange('type', prefill.type === 'Liquid' ? 'Liquid' : 'Food');
-      const setNumericField = (
-        key: keyof EntryFormState,
-        value?: number | null,
-        decimals?: boolean
-      ) => {
-        if (value === null || value === undefined || Number.isNaN(value)) return;
-        const normalized = decimals ? Math.round(value * 10) / 10 : Math.round(value);
-        handleEntryChange(key, String(normalized));
-      };
-      setNumericField('calories', prefill.calories);
-      setNumericField('protein', prefill.protein);
-      setNumericField('carbs', prefill.carbs);
-      setNumericField('fats', prefill.fats);
-      setNumericField('fiber', prefill.fiber);
-      setNumericField('weightAmount', prefill.weightAmount, true);
-      if (prefill.weightUnit) {
-        handleEntryChange('weightUnit', prefill.weightUnit);
-      }
-      if (prefill.barcode) {
-        handleEntryChange('barcode', prefill.barcode);
-      }
-    }
-    clearSuggestions('Suggestion applied. Adjust anything before saving.');
+    applySuggestionSelection(suggestion);
   };
 
   const applyLookupProduct = (product?: NutritionLookupProduct | null) => {
-    if (!product) return;
-    if (product.name) {
-      handleEntryChange('name', product.name);
+    const suggestion = suggestionFromLookupProduct(product);
+    if (!suggestion) {
+      return;
     }
-    if (product.barcode) {
-      handleEntryChange('barcode', product.barcode);
+    applySuggestionSelection(suggestion, {
+      feedbackMessage: 'Nutrition data loaded from the food database.',
+    });
+  };
+
+  const commitManualSearchQuery = () => {
+    const suggestion = manualSuggestionFromQuery(searchQuery, 'Food');
+    if (!suggestion) {
+      return;
     }
-    const setNumericField = (
-      key: keyof EntryFormState,
-      value?: number | null,
-      decimals?: boolean
-    ) => {
-      if (value === null || value === undefined || Number.isNaN(value)) {
-        return;
-      }
-      const normalized = decimals ? Math.round(value * 10) / 10 : Math.round(value);
-      handleEntryChange(key, String(normalized));
-    };
-    setNumericField('calories', product.calories);
-    setNumericField('protein', product.protein);
-    setNumericField('carbs', product.carbs);
-    setNumericField('fats', product.fats);
-    setNumericField('fiber', product.fiber);
-    setNumericField('weightAmount', product.weightAmount, true);
-    if (product.weightUnit) {
-      handleEntryChange('weightUnit', product.weightUnit);
+    applySuggestionSelection(suggestion, {
+      feedbackMessage: 'Custom item ready. Add nutrition details before saving.',
+    });
+  };
+
+  const handleServingSelect = (preset: NutritionServingPreset) => {
+    setSelectedServingId(preset.id);
+    const scaled = scaleNutritionToServing(selectedSuggestion, preset);
+    if (!scaled) {
+      return;
     }
+    setEntryForm((prev) => ({
+      ...prev,
+      calories: scaled.calories,
+      protein: scaled.protein,
+      carbs: scaled.carbs,
+      fats: scaled.fats,
+      fiber: scaled.fiber,
+      weightAmount: scaled.weightAmount,
+      weightUnit: scaled.weightUnit,
+    }));
+  };
+
+  const handleToggleFavorite = async (suggestion: NutritionSuggestion | null) => {
+    if (!user?.id || !suggestion) {
+      return;
+    }
+    const nextFavorites = await toggleNutritionFavorite(user.id, suggestion);
+    if (!mountedRef.current) {
+      return;
+    }
+    const nextIsFavorite = isNutritionFavorite(nextFavorites, suggestion);
+    setFavorites(nextFavorites);
+    setEntryFeedback(
+      nextIsFavorite
+        ? `${suggestion.name} saved to Favorites.`
+        : `${suggestion.name} removed from Favorites.`
+    );
   };
 
   const isFoodProduct = (product?: NutritionLookupProduct | null) => {
@@ -734,9 +1032,26 @@ export function NutritionScreen() {
 
   const formatSuggestionMeta = (suggestion: NutritionSuggestion) => {
     const parts: string[] = [];
-    const calories = suggestion.prefill?.calories;
-    if (typeof calories === 'number' && Number.isFinite(calories) && calories > 0) {
-      parts.push(`${Math.round(calories)} kcal`);
+    const prefill = suggestion.prefill;
+    if (typeof prefill?.calories === 'number' && Number.isFinite(prefill.calories)) {
+      parts.push(`${Math.round(prefill.calories)} kcal`);
+    }
+    const macroParts = [
+      typeof prefill?.protein === 'number' && Number.isFinite(prefill.protein)
+        ? `P ${Math.round(prefill.protein * 10) / 10}g`
+        : null,
+      typeof prefill?.carbs === 'number' && Number.isFinite(prefill.carbs)
+        ? `C ${Math.round(prefill.carbs * 10) / 10}g`
+        : null,
+      typeof prefill?.fats === 'number' && Number.isFinite(prefill.fats)
+        ? `F ${Math.round(prefill.fats * 10) / 10}g`
+        : null,
+      typeof prefill?.fiber === 'number' && Number.isFinite(prefill.fiber)
+        ? `Fib ${Math.round(prefill.fiber * 10) / 10}g`
+        : null,
+    ].filter(Boolean);
+    if (macroParts.length) {
+      parts.push(macroParts.join(' · '));
     }
     if (suggestion.serving) {
       parts.push(suggestion.serving);
@@ -833,6 +1148,9 @@ export function NutritionScreen() {
     setScannerFeedback(null);
     setAddFoodMode(mode);
     setAddFoodModalVisible(true);
+    if (mode === 'search') {
+      focusAddFoodForm('search');
+    }
   };
 
   const handleCloseAddFoodModal = () => {
@@ -842,6 +1160,10 @@ export function NutritionScreen() {
     handleCloseScanner();
     setEditableDetectedFoods([]);
     setExpandedFoodIds(new Set());
+    setSearchQuery('');
+    clearSuggestions(
+      'Choose a result to fill the form. Typing alone will not replace the current item.'
+    );
   };
 
   const handleBackToAddFoodMenu = () => {
@@ -863,6 +1185,23 @@ export function NutritionScreen() {
     }
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
+  const resetComposerForNextEntry = (nextMode: AddFoodMode = 'search') => {
+    resetEntryForm();
+    setSearchQuery('');
+    setPhotoStatus(null);
+    setPhotoDetectedFoods([]);
+    setPhotoMealAnalysis(null);
+    setEditableDetectedFoods([]);
+    setExpandedFoodIds(new Set());
+    clearSuggestions(
+      'Choose a result to fill the form. Typing alone will not replace the current item.'
+    );
+    setAddFoodMode(nextMode);
+    setAddFoodModalVisible(true);
+    handleCloseScanner();
+    focusAddFoodForm(nextMode === 'search' ? 'search' : 'name');
   };
 
   const handleAddEntry = async () => {
@@ -897,13 +1236,7 @@ export function NutritionScreen() {
         setPhotoMealAnalysis(null);
         setEntryFeedback('Offline detected - entry queued and will sync automatically.');
       }
-      resetEntryForm();
-      setPhotoStatus(null);
-      setPhotoDetectedFoods([]);
-      clearSuggestions('Type at least 2 characters to see suggestions.');
-      setAddFoodModalVisible(false);
-      setAddFoodMode('menu');
-      handleCloseScanner();
+      resetComposerForNextEntry(addFoodMode === 'manual' ? 'manual' : 'search');
     } catch (error) {
       const uncertain = parsePhotoUncertainError(error);
       if (uncertain) {
@@ -948,9 +1281,85 @@ export function NutritionScreen() {
     }
   };
 
+  const clearPendingDeleteTimers = () => {
+    if (deleteTimerRef.current) {
+      clearTimeout(deleteTimerRef.current);
+      deleteTimerRef.current = null;
+    }
+    if (deleteCountdownTimerRef.current) {
+      clearInterval(deleteCountdownTimerRef.current);
+      deleteCountdownTimerRef.current = null;
+    }
+  };
+
+  const commitPendingDelete = async (pending: PendingDeleteState) => {
+    clearPendingDeleteTimers();
+    setPendingDelete(null);
+    setUndoCountdownMs(0);
+    try {
+      await deleteNutritionEntryRequest(pending.entry.id);
+      setEntryFeedback(`${pending.entry.name} deleted.`);
+      trackNutritionMetric('nutrition_delete_undo', {
+        action: 'committed',
+        entryId: pending.entry.id,
+      });
+      refetch();
+    } catch (error) {
+      setEntryFeedback(
+        error instanceof Error ? error.message : 'Unable to delete that item right now.'
+      );
+      refetch();
+    }
+  };
+
+  const queueDelete = (entry: NutritionEntry) => {
+    clearPendingDeleteTimers();
+    const nextPending: PendingDeleteState = {
+      entry,
+      expiresAt: Date.now() + DELETE_UNDO_WINDOW_MS,
+    };
+    setPendingDelete(nextPending);
+    setUndoCountdownMs(DELETE_UNDO_WINDOW_MS);
+    deleteTimerRef.current = setTimeout(() => {
+      void commitPendingDelete(nextPending);
+    }, DELETE_UNDO_WINDOW_MS);
+    deleteCountdownTimerRef.current = setInterval(() => {
+      const remaining = nextPending.expiresAt - Date.now();
+      if (remaining <= 0) {
+        setUndoCountdownMs(0);
+        if (deleteCountdownTimerRef.current) {
+          clearInterval(deleteCountdownTimerRef.current);
+          deleteCountdownTimerRef.current = null;
+        }
+        return;
+      }
+      setUndoCountdownMs(remaining);
+    }, 250);
+  };
+
+  const handleUndoDelete = () => {
+    if (!pendingDelete) {
+      return;
+    }
+    clearPendingDeleteTimers();
+    setEntryFeedback(`${pendingDelete.entry.name} restored.`);
+    setPendingDelete(null);
+    setUndoCountdownMs(0);
+    trackNutritionMetric('nutrition_delete_undo', {
+      action: 'undone',
+      entryId: pendingDelete.entry.id,
+    });
+  };
+
   const handleDelete = async (entryId: number) => {
-    await deleteNutritionEntryRequest(entryId);
-    refetch();
+    const targetEntry = data.entries.find((entry) => entry.id === entryId);
+    if (!targetEntry) {
+      return;
+    }
+    if (pendingDelete) {
+      await commitPendingDelete(pendingDelete);
+    }
+    queueDelete(targetEntry);
   };
 
   const handleCapturePhoto = async () => {
@@ -1206,14 +1615,7 @@ export function NutritionScreen() {
       } else {
         setEntryFeedback('Offline detected - foods queued and will sync automatically.');
       }
-      resetEntryForm();
-      setPhotoStatus(null);
-      setPhotoDetectedFoods([]);
-      setEditableDetectedFoods([]);
-      setExpandedFoodIds(new Set());
-      clearSuggestions('Type at least 2 characters to see suggestions.');
-      setAddFoodModalVisible(false);
-      setAddFoodMode('menu');
+      resetComposerForNextEntry('search');
     } catch (error) {
       setEntryFeedback(
         error instanceof Error ? error.message : 'Unable to log foods right now.'
@@ -1295,6 +1697,12 @@ export function NutritionScreen() {
       color: colors.warning,
     },
   ];
+  const recentSuggestions = buildRecentSuggestions(data.entries);
+  const servingPresets = buildServingPresets(selectedSuggestion);
+  const selectionIsFavorite = isNutritionFavorite(favorites, selectedSuggestion);
+  const visibleEntries = pendingDelete
+    ? data.entries.filter((entry) => entry.id !== pendingDelete.entry.id)
+    : data.entries;
 
   const renderTypeSelector = () => (
     <View style={styles.typeRow}>
@@ -1323,7 +1731,7 @@ export function NutritionScreen() {
     <View style={styles.suggestionContainer}>
       <View style={styles.inlineRow}>
         <AppText variant="label" style={styles.modalSectionLabel}>
-          Suggestions
+          Search Results
         </AppText>
         {suggestionLoading ? (
           <AppText variant="muted" style={styles.suggestionStatus}>
@@ -1359,12 +1767,139 @@ export function NutritionScreen() {
           );
         })
       ) : (
-        <AppText variant="muted" style={styles.suggestionEmpty}>
+        <AppText
+          variant="muted"
+          style={[
+            styles.suggestionEmpty,
+            suggestionStatusKind === 'error' ? styles.suggestionEmptyError : null,
+          ]}
+        >
           {suggestionStatus}
         </AppText>
       )}
     </View>
   );
+
+  const renderSuggestionShortcutSection = (
+    title: string,
+    items: NutritionSuggestion[],
+    emptyCopy?: string
+  ) => {
+    if (!items.length && !emptyCopy) {
+      return null;
+    }
+    return (
+      <View style={styles.shortcutSection}>
+        <View style={styles.shortcutSectionHeader}>
+          <AppText variant="label" style={styles.modalSectionLabel}>
+            {title}
+          </AppText>
+        </View>
+        {items.length ? (
+          <View style={styles.shortcutChipWrap}>
+            {items.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                style={styles.shortcutChip}
+                activeOpacity={0.8}
+                onPress={() => applySuggestion(item)}
+              >
+                <AppText variant="label" style={styles.shortcutChipTitle}>
+                  {item.name}
+                </AppText>
+                <AppText variant="muted" style={styles.shortcutChipMeta}>
+                  {formatSuggestionMeta(item)}
+                </AppText>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : emptyCopy ? (
+          <AppText variant="muted" style={styles.shortcutEmptyCopy}>
+            {emptyCopy}
+          </AppText>
+        ) : null}
+      </View>
+    );
+  };
+
+  const renderSelectedItemCard = () => {
+    if (!entryForm.name.trim()) {
+      return null;
+    }
+    return (
+      <View style={styles.selectedItemCard}>
+        <View style={styles.selectedItemHeader}>
+          <View style={styles.selectedItemHeaderText}>
+            <AppText variant="label" style={styles.modalSectionLabel}>
+              Current Item
+            </AppText>
+            <AppText variant="body" weight="semibold">
+              {entryForm.name}
+            </AppText>
+            <AppText variant="muted" style={styles.selectedItemMeta}>
+              {[selectedSuggestion?.source || 'Custom item', selectedSuggestion?.serving]
+                .filter(Boolean)
+                .join(' • ') || 'Custom item'}
+            </AppText>
+          </View>
+          <View style={styles.selectedItemActions}>
+            {selectedSuggestion ? (
+              <TouchableOpacity
+                style={styles.selectedItemAction}
+                onPress={() => handleToggleFavorite(selectedSuggestion)}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={selectionIsFavorite ? 'star' : 'star-outline'}
+                  size={16}
+                  color={selectionIsFavorite ? colors.warning : colors.muted}
+                />
+                <AppText variant="label" style={styles.selectedItemActionText}>
+                  {selectionIsFavorite ? 'Saved' : 'Favorite'}
+                </AppText>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity style={styles.selectedItemAction} onPress={clearCommittedItem} activeOpacity={0.8}>
+              <Ionicons name="refresh-outline" size={16} color={colors.muted} />
+              <AppText variant="label" style={styles.selectedItemActionText}>
+                Reset
+              </AppText>
+            </TouchableOpacity>
+          </View>
+        </View>
+        {servingPresets.length ? (
+          <View style={styles.servingPresetSection}>
+            <AppText variant="muted" style={styles.servingPresetHint}>
+              Serving selector
+            </AppText>
+            <View style={styles.servingPresetWrap}>
+              {servingPresets.map((preset) => {
+                const selected = preset.id === selectedServingId;
+                return (
+                  <TouchableOpacity
+                    key={preset.id}
+                    style={[styles.servingPresetChip, selected ? styles.servingPresetChipSelected : null]}
+                    onPress={() => handleServingSelect(preset)}
+                    activeOpacity={0.8}
+                  >
+                    <AppText
+                      variant="label"
+                      style={selected ? styles.servingPresetChipTextSelected : styles.servingPresetChipText}
+                    >
+                      {preset.label}
+                    </AppText>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <AppText variant="muted" style={styles.servingPresetHint}>
+              Macros below stay editable and update from the selected serving, including fiber.
+            </AppText>
+          </View>
+        ) : null}
+      </View>
+    );
+  };
 
   const handleLogDetectedFoodsFromPhoto = async () => {
     if (!entryForm.photoData) {
@@ -1421,10 +1956,7 @@ export function NutritionScreen() {
         setEntryFeedback('Offline detected - detected foods queued and will sync automatically.');
       }
 
-      resetEntryForm();
-      setPhotoStatus(null);
-      setPhotoDetectedFoods([]);
-      clearSuggestions('Type at least 2 characters to see suggestions.');
+      resetComposerForNextEntry('search');
     } catch (error) {
       setEntryFeedback(
         error instanceof Error ? error.message : 'Unable to log detected foods right now.'
@@ -1513,6 +2045,13 @@ export function NutritionScreen() {
                 </AppText>
               </View>
             ) : null}
+            {photoMealAnalysis.totalFiber != null ? (
+              <View style={styles.analysisMacroPill}>
+                <AppText variant="label" style={styles.analysisMacroPillText}>
+                  Fib {Math.round(photoMealAnalysis.totalFiber)}g
+                </AppText>
+              </View>
+            ) : null}
           </View>
         ) : null}
         {photoMealAnalysis.items.length > 0 ? (
@@ -1585,6 +2124,12 @@ export function NutritionScreen() {
         keyboardType="numeric"
         value={entryForm.fats}
         onChangeText={(value) => handleEntryChange('fats', value)}
+      />
+      <AppInput
+        label="Fiber"
+        keyboardType="numeric"
+        value={entryForm.fiber}
+        onChangeText={(value) => handleEntryChange('fiber', value)}
       />
       <AppInput
         label="Weight amount"
@@ -1761,6 +2306,17 @@ export function NutritionScreen() {
                     </View>
                   </View>
                   <View style={styles.reviewInputRow}>
+                    <View style={styles.reviewInputHalf}>
+                      <AppInput
+                        label="Fiber (g)"
+                        keyboardType="numeric"
+                        value={food.fiber}
+                        onChangeText={(v) => updateEditableFood(food.id, 'fiber', v)}
+                      />
+                    </View>
+                    <View style={styles.reviewInputHalf} />
+                  </View>
+                  <View style={styles.reviewInputRow}>
                     <View style={[styles.reviewInputHalf, { flex: 2 }]}>
                       <AppInput
                         label="Weight"
@@ -1866,6 +2422,7 @@ export function NutritionScreen() {
 
     return (
       <ScrollView
+        ref={modalScrollRef}
         contentContainerStyle={styles.modalBody}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
@@ -1874,13 +2431,38 @@ export function NutritionScreen() {
         {addFoodMode === 'search' ? (
           <>
             <AppInput
-              label="Search food"
-              placeholder="Greek yogurt"
-              value={entryForm.name}
-              onChangeText={handleNameChange}
-              selectTextOnFocus
+              ref={searchInputRef}
+              label="Search food database"
+              placeholder="Banana, Greek yogurt, black beans"
+              helperText="Choose a result to fill calories and macros. Typing alone will not replace the current item."
+              value={searchQuery}
+              onChangeText={handleSearchQueryChange}
+              autoCapitalize="sentences"
             />
+            {renderSuggestionShortcutSection('Quick Suggestions', QUICK_SUGGESTIONS)}
+            {renderSuggestionShortcutSection(
+              'Favorites',
+              favorites,
+              'Save a selected item to Favorites for faster repeat logging.'
+            )}
+            {renderSuggestionShortcutSection(
+              'Recently Logged',
+              recentSuggestions,
+              'Foods you log will show up here for one-tap reuse.'
+            )}
             {renderSuggestionPanel()}
+            {searchQuery.trim() && !entryForm.name.trim() ? (
+              <TouchableOpacity
+                style={styles.manualQueryButton}
+                onPress={commitManualSearchQuery}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="create-outline" size={16} color={colors.accent} />
+                <AppText variant="body" weight="semibold" style={styles.manualQueryButtonText}>
+                  Use "{searchQuery.trim()}" as a custom item
+                </AppText>
+              </TouchableOpacity>
+            ) : null}
             {photoDetectedFoods.length ? (
               <View style={styles.detectedFoodsContainer}>
                 <AppText variant="label" style={styles.detectedFoodsLabel}>
@@ -1925,8 +2507,29 @@ export function NutritionScreen() {
               onPress={scannerActive ? handleCloseScanner : handleOpenScanner}
             />
             {renderScannerPanel()}
-            {renderMacroInputFields()}
-            <AppButton title="Log food" onPress={handleAddEntry} />
+            {entryForm.name.trim() ? (
+              <>
+                {renderSelectedItemCard()}
+                <AppInput
+                  ref={itemNameInputRef}
+                  label="Item name"
+                  value={entryForm.name}
+                  onChangeText={(value) => handleEntryChange('name', value)}
+                />
+                {renderMacroInputFields()}
+                <AppButton title="Log intake" onPress={handleAddEntry} />
+              </>
+            ) : (
+              <View style={styles.selectionPromptCard}>
+                <Ionicons name="search-outline" size={18} color={colors.accent} />
+                <AppText variant="body" weight="semibold">
+                  Start with a selection
+                </AppText>
+                <AppText variant="muted" style={styles.selectionPromptCopy}>
+                  Pick a quick suggestion, choose a search result, scan a barcode, or use your typed query as a custom item.
+                </AppText>
+              </View>
+            )}
             {renderEntryFeedback()}
           </>
         ) : null}
@@ -1994,6 +2597,7 @@ export function NutritionScreen() {
               />
             ) : null}
             <AppInput
+              ref={itemNameInputRef}
               label="Name"
               placeholder="Chicken rice bowl"
               value={entryForm.name}
@@ -2011,6 +2615,7 @@ export function NutritionScreen() {
         {addFoodMode === 'manual' ? (
           <>
             <AppInput
+              ref={itemNameInputRef}
               label="Name"
               placeholder="Baked potato"
               value={entryForm.name}
@@ -2261,12 +2866,14 @@ export function NutritionScreen() {
           <NutritionSectionHeader
             title="Food Log"
             subtitle={
-              data.entries.length ? `${data.entries.length} entries logged` : 'No meals logged yet'
+              visibleEntries.length
+                ? `${visibleEntries.length} entries logged`
+                : 'No meals logged yet'
             }
           />
-          {data.entries.length ? (
+          {visibleEntries.length ? (
             <View style={styles.foodLogList}>
-              {data.entries.map((entry) => (
+              {visibleEntries.map((entry) => (
                 <FoodLogRow
                   key={entry.id}
                   entry={entry}
@@ -2303,6 +2910,23 @@ export function NutritionScreen() {
           Add Food
         </AppText>
       </TouchableOpacity>
+      {pendingDelete ? (
+        <View style={styles.undoToast}>
+          <View style={styles.undoToastText}>
+            <AppText variant="body" weight="semibold">
+              {pendingDelete.entry.name} removed
+            </AppText>
+            <AppText variant="muted">
+              Undo within {Math.max(1, Math.ceil(undoCountdownMs / 1000))}s
+            </AppText>
+          </View>
+          <TouchableOpacity style={styles.undoToastButton} onPress={handleUndoDelete} activeOpacity={0.85}>
+            <AppText variant="label" style={styles.undoToastButtonText}>
+              Undo
+            </AppText>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       {Platform.OS === 'ios' ? (
         <Modal
           visible={iosPickerVisible}
@@ -2583,6 +3207,7 @@ function buildEntryMeta(entry: NutritionEntry) {
   parts.push(`P ${formatNumber(entry.protein)}g`);
   parts.push(`C ${formatNumber(entry.carbs)}g`);
   parts.push(`F ${formatNumber(entry.fats)}g`);
+  parts.push(`Fib ${formatNumber(entry.fiber)}g`);
   if (entry.photoData) {
     parts.push('Photo');
   }
@@ -2853,6 +3478,140 @@ const styles = StyleSheet.create({
     color: colors.accent,
   },
   suggestionEmpty: {
+    lineHeight: 20,
+  },
+  suggestionEmptyError: {
+    color: colors.danger,
+  },
+  shortcutSection: {
+    gap: spacing.sm,
+  },
+  shortcutSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  shortcutChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  shortcutChip: {
+    minWidth: '48%',
+    flex: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: 4,
+  },
+  shortcutChipTitle: {
+    color: colors.text,
+  },
+  shortcutChipMeta: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  shortcutEmptyCopy: {
+    lineHeight: 18,
+  },
+  selectedItemCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(77,245,255,0.22)',
+    backgroundColor: 'rgba(77,245,255,0.08)',
+  },
+  selectedItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  selectedItemHeaderText: {
+    flex: 1,
+    gap: 4,
+  },
+  selectedItemMeta: {
+    lineHeight: 18,
+  },
+  selectedItemActions: {
+    gap: spacing.xs,
+  },
+  selectedItemAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(1,9,21,0.2)',
+  },
+  selectedItemActionText: {
+    color: colors.text,
+  },
+  servingPresetSection: {
+    gap: spacing.xs,
+  },
+  servingPresetHint: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  servingPresetWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  servingPresetChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  servingPresetChipSelected: {
+    borderColor: 'rgba(77,245,255,0.32)',
+    backgroundColor: 'rgba(77,245,255,0.18)',
+  },
+  servingPresetChipText: {
+    color: colors.text,
+  },
+  servingPresetChipTextSelected: {
+    color: colors.accent,
+  },
+  manualQueryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(77,245,255,0.24)',
+    backgroundColor: 'rgba(77,245,255,0.08)',
+  },
+  manualQueryButtonText: {
+    color: colors.accent,
+  },
+  selectionPromptCard: {
+    alignItems: 'center',
+    gap: spacing.xs,
+    padding: spacing.lg,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  selectionPromptCopy: {
+    textAlign: 'center',
     lineHeight: 20,
   },
   detectedFoodsContainer: {
@@ -3317,6 +4076,36 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
     marginBottom: spacing.sm,
+  },
+  undoToast: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: spacing.lg + 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(6,18,38,0.98)',
+  },
+  undoToastText: {
+    flex: 1,
+    gap: 2,
+  },
+  undoToastButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(77,245,255,0.24)',
+    backgroundColor: 'rgba(77,245,255,0.08)',
+  },
+  undoToastButtonText: {
+    color: colors.accent,
   },
   fab: {
     position: 'absolute',

@@ -367,6 +367,7 @@ export interface NutritionSuggestionsResponse {
 export interface NutritionLookupProduct {
   name?: string;
   barcode?: string | null;
+  serving?: string | null;
   calories?: number | null;
   protein?: number | null;
   carbs?: number | null;
@@ -378,6 +379,14 @@ export interface NutritionLookupProduct {
 
 export interface NutritionLookupResponse {
   product: NutritionLookupProduct | null;
+}
+
+export interface NutritionLogResponse {
+  message?: string;
+  autoLookup?: boolean;
+  entriesLogged?: Array<{ name?: string }>;
+  mealAnalysis?: unknown;
+  photoAnalysis?: unknown;
 }
 
 export interface NutritionLookupBatchResult {

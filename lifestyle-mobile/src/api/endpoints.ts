@@ -16,6 +16,7 @@ import {
   StravaConnectResponse,
   StravaExportResponse,
   StravaSyncResponse,
+  NutritionLogResponse,
   VitalsResponse,
   WorkoutPublishResponse,
   WeightResponse,
@@ -112,7 +113,7 @@ export const createNutritionEntryRequest = (payload: {
     weightAmount?: number;
     weightUnit?: string;
   }>;
-}) => apiClient.post<MessageResponse>('/api/nutrition', payload);
+}) => apiClient.post<NutritionLogResponse>('/api/nutrition', payload);
 
 export const deleteNutritionEntryRequest = (entryId: number) =>
   apiClient.delete<MessageResponse>(`/api/nutrition/${entryId}`);

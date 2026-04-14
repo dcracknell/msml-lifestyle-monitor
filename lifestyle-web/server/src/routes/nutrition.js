@@ -1883,6 +1883,7 @@ function parseNutritionFromProduct(product = {}) {
   return {
     name: product.product_name || product.generic_name || product.brands || 'Unknown item',
     barcode: product.code || null,
+    serving: rawServing || null,
     calories: Number.isFinite(calories) ? Math.round(calories) : null,
     protein: Number.isFinite(protein) ? Math.round(protein) : null,
     carbs: Number.isFinite(carbs) ? Math.round(carbs) : null,
@@ -2086,6 +2087,12 @@ async function lookupByBarcodeBatch(rawBarcodes, options = {}) {
 }
 
 async function lookupByQuery(query) {
+  const cacheKey = normalizeText(query);
+  const now = Date.now();
+  const cached = queryLookupCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
   const searchParams = new URLSearchParams({
     search_terms: query,
     search_simple: '1',
@@ -2097,10 +2104,15 @@ async function lookupByQuery(query) {
   });
   const data = await fetchJson(`${SEARCH_URL}?${searchParams.toString()}`);
   const firstHit = data?.products?.[0];
-  if (!firstHit) {
-    return null;
+  const result = firstHit ? parseNutritionFromProduct(firstHit) : null;
+  if (result) {
+    queryLookupCache.set(cacheKey, { data: result, expiresAt: now + QUERY_LOOKUP_CACHE_TTL_MS });
+    if (queryLookupCache.size > QUERY_LOOKUP_CACHE_LIMIT) {
+      const oldestKey = queryLookupCache.keys().next().value;
+      if (oldestKey) queryLookupCache.delete(oldestKey);
+    }
   }
-  return parseNutritionFromProduct(firstHit);
+  return result;
 }
 
 async function lookupProduct({ barcode, query, userId }) {
@@ -2520,6 +2532,7 @@ function mapQuickSuggestionToProduct(item) {
   return {
     name: item.name || 'Unknown item',
     barcode: item.prefill.barcode || null,
+    serving: item.serving || null,
     calories: parseNullableNumber(item.prefill.calories),
     protein: parseNullableNumber(item.prefill.protein),
     carbs: parseNullableNumber(item.prefill.carbs),
@@ -2560,14 +2573,18 @@ async function searchProducts(query) {
   const data = await fetchJson(`${SEARCH_URL}?${searchParams.toString()}`);
   const products = data?.products || [];
   return products
-    .map((product) => ({
-      id: product.code || product._id,
-      name: product.product_name || product.generic_name || product.brands || 'Unnamed item',
-      barcode: product.code || null,
-      serving: product.serving_size || null,
-      source: product.brands || 'OpenFoodFacts',
-      nutriments: product.nutriments || {},
-    }))
+    .map((product) => {
+      const parsed = parseNutritionFromProduct(product);
+      return {
+        id: product.code || product._id,
+        name: product.product_name || product.generic_name || product.brands || 'Unnamed item',
+        barcode: product.code || null,
+        serving: product.serving_size || parsed?.serving || null,
+        source: product.brands || 'OpenFoodFacts',
+        nutriments: product.nutriments || {},
+        parsed,
+      };
+    })
     .filter(
       (item) =>
         item.name &&
@@ -2575,7 +2592,22 @@ async function searchProducts(query) {
         hasNutritionData(item.nutriments) &&
         isRelevantMatch(item.name, query, 0.55)
     )
-    .map(({ nutriments, ...rest }) => rest)
+    .map(({ nutriments, parsed, ...rest }) => ({
+      ...rest,
+      prefill: parsed
+        ? {
+            type: parsed.weightUnit === 'ml' ? 'Liquid' : 'Food',
+            calories: parsed.calories,
+            protein: parsed.protein,
+            carbs: parsed.carbs,
+            fats: parsed.fats,
+            fiber: parsed.fiber,
+            weightAmount: parsed.weightAmount,
+            weightUnit: parsed.weightUnit,
+            barcode: parsed.barcode,
+          }
+        : undefined,
+    }))
     .slice(0, 5);
 }
 
