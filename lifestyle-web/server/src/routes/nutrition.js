@@ -2506,6 +2506,82 @@ function levenshteinDistance(a = '', b = '') {
   return prevRow[lenB];
 }
 
+function normalizeLetterString(value = '') {
+  return normalizeText(value).replace(/[^a-z0-9]+/g, '');
+}
+
+function buildLetterNgramCounts(value = '', size = 2) {
+  const normalized = normalizeLetterString(value);
+  if (!normalized) {
+    return new Map();
+  }
+  if (normalized.length <= size) {
+    return new Map([[normalized, 1]]);
+  }
+  const counts = new Map();
+  for (let index = 0; index <= normalized.length - size; index += 1) {
+    const gram = normalized.slice(index, index + size);
+    counts.set(gram, (counts.get(gram) || 0) + 1);
+  }
+  return counts;
+}
+
+function computeNgramDiceSimilarity(left = '', right = '', size = 2) {
+  const leftCounts = buildLetterNgramCounts(left, size);
+  const rightCounts = buildLetterNgramCounts(right, size);
+  if (!leftCounts.size || !rightCounts.size) {
+    return 0;
+  }
+  let overlap = 0;
+  let leftTotal = 0;
+  let rightTotal = 0;
+  leftCounts.forEach((count, gram) => {
+    leftTotal += count;
+    overlap += Math.min(count, rightCounts.get(gram) || 0);
+  });
+  rightCounts.forEach((count) => {
+    rightTotal += count;
+  });
+  const total = leftTotal + rightTotal;
+  if (!total) {
+    return 0;
+  }
+  return (2 * overlap) / total;
+}
+
+function computeLetterSimilarity(text = '', query = '') {
+  const normalizedText = normalizeLetterString(text);
+  const normalizedQuery = normalizeLetterString(query);
+  if (!normalizedText || !normalizedQuery) {
+    return 0;
+  }
+  if (normalizedText === normalizedQuery) {
+    return 1;
+  }
+  const distance = levenshteinDistance(normalizedText, normalizedQuery);
+  const normalizedDistance = 1 - distance / Math.max(normalizedText.length, normalizedQuery.length);
+  const bigramDice = computeNgramDiceSimilarity(normalizedText, normalizedQuery, 2);
+  const trigramDice = computeNgramDiceSimilarity(normalizedText, normalizedQuery, 3);
+  const sharedPrefixLength = (() => {
+    let index = 0;
+    while (
+      index < normalizedText.length &&
+      index < normalizedQuery.length &&
+      normalizedText[index] === normalizedQuery[index]
+    ) {
+      index += 1;
+    }
+    return index;
+  })();
+  const prefixRatio = sharedPrefixLength / Math.max(Math.min(normalizedText.length, normalizedQuery.length), 1);
+  const weighted =
+    normalizedDistance * 0.45 +
+    bigramDice * 0.35 +
+    trigramDice * 0.1 +
+    prefixRatio * 0.1;
+  return Number(Math.max(0, Math.min(1, weighted)).toFixed(4));
+}
+
 function tokenMatches(word = '', token = '') {
   if (!word || !token) return false;
   if (word === token) return true;
@@ -2732,9 +2808,30 @@ function countPrefillNutritionFields(prefill = {}) {
   }, 0);
 }
 
+function buildFoodNameVariants(value = '') {
+  const raw = value == null ? '' : value.toString().trim();
+  if (!raw) {
+    return [];
+  }
+  const variants = new Set([raw]);
+  const withoutParentheses = raw.replace(/\([^)]*\)/g, ' ').replace(/\s+,/g, ',').replace(/\s+/g, ' ').trim();
+  if (withoutParentheses) {
+    variants.add(withoutParentheses);
+  }
+  const commaVariant = raw.split(',')[0]?.trim();
+  if (commaVariant) {
+    variants.add(commaVariant);
+  }
+  const compactCommaVariant = withoutParentheses.split(',')[0]?.trim();
+  if (compactCommaVariant) {
+    variants.add(compactCommaVariant);
+  }
+  return Array.from(variants).filter(Boolean);
+}
+
 function collectSuggestionMatchTexts(item = {}) {
   const texts = [
-    item.name,
+    ...buildFoodNameVariants(item.name),
     item.brandName,
     ...(Array.isArray(item.matchTexts) ? item.matchTexts : []),
     ...(Array.isArray(item.keywords) ? item.keywords : []),
@@ -2778,6 +2875,11 @@ function isGenericFoodQuery(query = '') {
 function computeMergedSuggestionScore(item = {}, query = '') {
   const normalizedQuery = normalizeText(query);
   const matchTexts = collectSuggestionMatchTexts(item);
+  const exactMatchTexts = [
+    ...buildFoodNameVariants(item.name),
+    item.brandName || null,
+    item.brandName && item.name ? `${item.brandName} ${item.name}` : null,
+  ].filter(Boolean);
   const baseTextScore = matchTexts.length
     ? matchTexts.reduce((best, text) => Math.min(best, computeSuggestionScore(text, query)), 99)
     : computeSuggestionScore(item.name, query);
@@ -2788,13 +2890,30 @@ function computeMergedSuggestionScore(item = {}, query = '') {
   const tokenCoverage = matchTexts.length
     ? matchTexts.reduce((best, text) => Math.max(best, computeTokenCoverageRatio(text, query)), 0)
     : computeTokenCoverageRatio(item.name, query);
-  const exactMatch = matchTexts.some((text) => normalizeText(text) === normalizedQuery);
+  const letterSimilarity = matchTexts.length
+    ? matchTexts.reduce((best, text) => Math.max(best, computeLetterSimilarity(text, query)), 0)
+    : computeLetterSimilarity(item.name, query);
+  const exactMatch = exactMatchTexts.some((text) => normalizeText(text) === normalizedQuery);
   const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const normalizedQueryLetters = normalizeLetterString(query);
   const nameTokens = normalizeText(item.name)
     .split(/\s+/)
     .filter(Boolean);
   const extraTokenPenalty =
     queryTokens.length <= 2 ? Math.max(nameTokens.length - queryTokens.length, 0) * 0.03 : 0;
+  const minimumLetterSimilarity =
+    normalizedQueryLetters.length >= 10
+      ? 0.4
+      : normalizedQueryLetters.length >= 7
+        ? 0.46
+        : normalizedQueryLetters.length >= 5
+          ? 0.5
+          : 0.36;
+  const letterPenalty =
+    letterSimilarity < minimumLetterSimilarity
+      ? (minimumLetterSimilarity - letterSimilarity) * 1.15
+      : 0;
+  const letterBonus = letterSimilarity * 0.18;
   const nutritionBonus = countPrefillNutritionFields(item.prefill) * 0.015;
   const sourceBiasMap = {
     recent: -0.22,
@@ -2818,15 +2937,18 @@ function computeMergedSuggestionScore(item = {}, query = '') {
   const weightedScore =
     baseScore +
     extraTokenPenalty +
+    letterPenalty +
     sourceBias -
+    letterBonus -
     nutritionBonus -
     tokenCoverage * 0.14 -
     (exactMatch ? 0.16 : 0);
   return {
     exactMatch,
+    letterSimilarity,
     tokenCoverage,
     nutritionFields: countPrefillNutritionFields(item.prefill),
-    score: Number(Math.max(weightedScore, 0).toFixed(4)),
+    score: Number(weightedScore.toFixed(4)),
   };
 }
 
@@ -2857,6 +2979,10 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
       if (Math.abs(coverageDiff) > 0.05) {
         return coverageDiff;
       }
+      const letterDiff = (b.letterSimilarity ?? 0) - (a.letterSimilarity ?? 0);
+      if (Math.abs(letterDiff) > 0.04) {
+        return letterDiff;
+      }
       if ((a.score ?? 99) !== (b.score ?? 99)) {
         return scoreDiff;
       }
@@ -2877,12 +3003,51 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
     unique.push(item);
   });
 
+  let intentFiltered = unique;
+  const normalizedQueryLetters = normalizeLetterString(query);
+  if (normalizedQueryLetters.length >= 4) {
+    const strictLetterThreshold =
+      normalizedQueryLetters.length >= 8
+        ? 0.42
+        : normalizedQueryLetters.length >= 6
+          ? 0.46
+          : 0.5;
+    const letterFiltered = unique.filter(
+      (item) =>
+        item.exactMatch ||
+        (item.tokenCoverage ?? 0) >= 0.95 ||
+        (item.letterSimilarity ?? 0) >= strictLetterThreshold
+    );
+    if (letterFiltered.length) {
+      intentFiltered = letterFiltered;
+    }
+  }
+  if (isGenericFoodQuery(query)) {
+    const strongGeneric = intentFiltered.find(
+      (item) =>
+        item.isGeneric &&
+        (item.tokenCoverage ?? 0) >= 0.95 &&
+        (item.score ?? 99) <= 0.35
+    );
+    if (strongGeneric) {
+      const narrowed = intentFiltered.filter((item) => {
+        if (item.isGeneric || item.sourceType === 'quick_add' || item.sourceType === 'recent') {
+          return true;
+        }
+        return hasBrandMatch(item, query);
+      });
+      if (narrowed.length) {
+        intentFiltered = narrowed;
+      }
+    }
+  }
+
   const maxScore =
     Number.isFinite(options.maxScore) && options.maxScore > 0
       ? Number(options.maxScore)
       : 0.95;
-  const filtered = unique.filter((item) => (item.score ?? 99) <= maxScore);
-  const fallback = filtered.length ? filtered : unique;
+  const filtered = intentFiltered.filter((item) => (item.score ?? 99) <= maxScore);
+  const fallback = filtered.length ? filtered : intentFiltered;
   const limit =
     Number.isFinite(options.limit) && options.limit > 0
       ? Math.floor(options.limit)
@@ -2894,6 +3059,7 @@ function stripSuggestionInternalFields(item = {}) {
   const {
     score,
     tokenCoverage,
+    letterSimilarity,
     nutritionFields,
     exactMatch,
     sourceType,
@@ -3937,6 +4103,7 @@ router.__private__ = {
   REMOTE_PROVIDER_TIMEOUT_MS,
   lookupQuickAddByQuery,
   lookupByQuery,
+  computeLetterSimilarity,
   mapSuggestionToProduct,
   mapUsdaFoodToSuggestion,
   searchProducts,

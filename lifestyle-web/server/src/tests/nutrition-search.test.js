@@ -5,6 +5,7 @@ const {
   clearRemoteSuggestionCache,
   REMOTE_SEARCH_TIMEOUT_MS,
   lookupQuickAddByQuery,
+  computeLetterSimilarity,
   mapUsdaFoodToSuggestion,
   getCombinedSuggestions,
   rankNutritionSuggestions,
@@ -156,6 +157,13 @@ describe('quick add lookup fallback', () => {
 });
 
 describe('multi-source nutrition ranking', () => {
+  it('measures close typos as stronger letter matches than unrelated foods', () => {
+    expect(computeLetterSimilarity('Banana', 'bananna')).toBeGreaterThan(0.8);
+    expect(computeLetterSimilarity('Banana', 'bananna')).toBeGreaterThan(
+      computeLetterSimilarity('Banana', 'black beans')
+    );
+  });
+
   it('maps USDA foundation foods to 100 g suggestions with fiber', () => {
     const suggestion = mapUsdaFoodToSuggestion({
       fdcId: 1,
@@ -228,7 +236,7 @@ describe('multi-source nutrition ranking', () => {
     );
   });
 
-  it('ranks generic USDA foods above branded false positives for broad queries', () => {
+  it('prefers generic USDA foods and suppresses branded false positives for broad queries', () => {
     const ranked = rankNutritionSuggestions(
       [
         {
@@ -256,7 +264,7 @@ describe('multi-source nutrition ranking', () => {
     );
 
     expect(ranked[0]).toEqual(expect.objectContaining({ sourceType: 'usda_foundation' }));
-    expect(ranked[1]).toEqual(expect.objectContaining({ sourceType: 'usda_branded' }));
+    expect(ranked).toHaveLength(1);
   });
 
   it('prefers real provider matches over quick adds when both are available', async () => {
@@ -291,6 +299,129 @@ describe('multi-source nutrition ranking', () => {
 
     expect(suggestions[0]).toEqual(expect.objectContaining({ sourceType: 'usda_foundation' }));
     expect(suggestions[1]).toEqual(expect.objectContaining({ sourceType: 'quick_add' }));
+  });
+
+  it('drops unrelated branded suggestions when a strong generic match exists', async () => {
+    const suggestions = await getCombinedSuggestions(1, 'banana', {
+      localSuggestions: [],
+      remoteSuggestions: [
+        {
+          id: 'usda-banana',
+          name: 'Bananas, ripe and slightly ripe, raw',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 97, protein: 0.7, carbs: 23, fats: 0.3, fiber: 1.7, weightAmount: 100, weightUnit: 'g' },
+        },
+        {
+          id: 'branded-banana-butter',
+          name: 'BANANA',
+          source: "BETTER'N PEANUT BUTTER · USDA Branded",
+          sourceType: 'usda_branded',
+          brandName: "BETTER'N PEANUT BUTTER",
+          isBranded: true,
+          isGeneric: false,
+          prefill: { calories: 312, protein: 12.5, carbs: 40.6, fats: 6.25, fiber: 6.2, weightAmount: 32, weightUnit: 'g' },
+        },
+      ],
+      quickSuggestions: [
+        {
+          id: 'quick-banana',
+          name: 'Banana (1 medium)',
+          source: 'Quick Add',
+          sourceType: 'quick_add',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 105, protein: 1.3, carbs: 27, fats: 0.3, fiber: 3.1, weightAmount: 120, weightUnit: 'g' },
+          score: 0.05,
+        },
+      ],
+      limit: 5,
+      maxScore: 2,
+    });
+
+    expect(suggestions.map((item) => item.id)).toEqual(
+      expect.arrayContaining(['usda-banana', 'quick-banana'])
+    );
+    expect(suggestions.map((item) => item.id)).not.toContain('branded-banana-butter');
+  });
+
+  it('keeps typo-close suggestions and filters weak letter matches', async () => {
+    const suggestions = await getCombinedSuggestions(1, 'bananna', {
+      localSuggestions: [],
+      remoteSuggestions: [
+        {
+          id: 'usda-banana',
+          name: 'Bananas, ripe and slightly ripe, raw',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 97, protein: 0.7, carbs: 23, fats: 0.3, fiber: 1.7, weightAmount: 100, weightUnit: 'g' },
+        },
+        {
+          id: 'usda-black-beans',
+          name: 'Beans, black, mature seeds, cooked, boiled',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 132, protein: 8.9, carbs: 23.7, fats: 0.5, fiber: 8.7, weightAmount: 100, weightUnit: 'g' },
+        },
+      ],
+      quickSuggestions: [
+        {
+          id: 'quick-banana',
+          name: 'Banana (1 medium)',
+          source: 'Quick Add',
+          sourceType: 'quick_add',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 105, protein: 1.3, carbs: 27, fats: 0.3, fiber: 3.1, weightAmount: 120, weightUnit: 'g' },
+          score: 0.05,
+        },
+      ],
+      limit: 5,
+      maxScore: 2,
+    });
+
+    expect(suggestions.map((item) => item.id)).toEqual(
+      expect.arrayContaining(['usda-banana', 'quick-banana'])
+    );
+    expect(suggestions.map((item) => item.id)).not.toContain('usda-black-beans');
+  });
+
+  it('keeps branded suggestions when the typed query includes the brand', async () => {
+    const suggestions = await getCombinedSuggestions(1, 'chobani greek yogurt', {
+      localSuggestions: [],
+      remoteSuggestions: [
+        {
+          id: 'generic-greek',
+          name: 'Yogurt, Greek, plain, nonfat',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 61, protein: 10.3, carbs: 3.6, fats: 0.4, fiber: 0, weightAmount: 100, weightUnit: 'g' },
+        },
+        {
+          id: 'brand-chobani',
+          name: 'GREEK YOGURT',
+          source: 'CHOBANI · USDA Branded',
+          sourceType: 'usda_branded',
+          brandName: 'CHOBANI',
+          isBranded: true,
+          isGeneric: false,
+          prefill: { calories: 82, protein: 7.2, carbs: 12.8, fats: 0.2, fiber: 0.5, weightAmount: 100, weightUnit: 'g' },
+        },
+      ],
+      quickSuggestions: [],
+      limit: 5,
+      maxScore: 2,
+    });
+
+    expect(suggestions.map((item) => item.id)).toContain('brand-chobani');
   });
 
   it('still falls back to quick adds when provider results are unavailable', async () => {
