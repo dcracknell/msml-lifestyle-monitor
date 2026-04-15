@@ -668,6 +668,7 @@ const state = {
   nutritionMacroReference: null,
   nutritionResolvedSelection: null,
   nutritionCustomMode: false,
+  nutritionSuggestionStatus: 'idle',
   nutritionEntryFilter: 'all',
   nutritionLogShouldScrollToTop: false,
   nutritionDeletingEntries: new Set(),
@@ -1087,6 +1088,7 @@ const nutritionCustomPanel = document.getElementById('nutritionCustomPanel');
 const nutritionMatchCard = document.getElementById('nutritionMatchCard');
 const nutritionMatchName = document.getElementById('nutritionMatchName');
 const nutritionMatchMeta = document.getElementById('nutritionMatchMeta');
+const nutritionMatchDerived = document.getElementById('nutritionMatchDerived');
 const nutritionMatchChangeButton = document.getElementById('nutritionMatchChangeButton');
 const nutritionScanButton = document.getElementById('nutritionScanButton');
 const nutritionScanStatus = document.getElementById('nutritionScanStatus');
@@ -2418,7 +2420,7 @@ async function submitNutritionMealDraft() {
       setAmountReference(null);
       state.nutritionAmountBaseline = null;
       state.nutritionMacroReference = null;
-      state.nutritionResolvedSelection = null;
+      setNutritionResolvedSelection(null);
       setSelectedUnit(UNIT_FOOD);
       setNutritionCustomMode(false);
       updateAmountFieldUnit();
@@ -4550,8 +4552,14 @@ function normalizeWeightForInput(amount, unit, extras = {}, options = {}) {
 }
 
 function clearSuggestions() {
+  if (state.suggestionTimer) {
+    clearTimeout(state.suggestionTimer);
+    state.suggestionTimer = null;
+  }
+  state.suggestionQuery = '';
   state.suggestions = [];
   state.activeSuggestionIndex = -1;
+  state.nutritionSuggestionStatus = 'idle';
   if (nutritionSuggestions) {
     nutritionSuggestions.innerHTML = '';
     nutritionSuggestions.classList.add('hidden');
@@ -4566,6 +4574,7 @@ function clearSuggestions() {
 function renderSuggestionStatus(message, className = 'suggestion-loading') {
   state.suggestions = [];
   state.activeSuggestionIndex = -1;
+  state.nutritionSuggestionStatus = className === 'suggestion-loading' ? 'loading' : 'empty';
   if (!nutritionSuggestions) {
     updateNutritionLookupButtonLabel();
     return;
@@ -4607,13 +4616,17 @@ function dedupeNutritionSuggestions(items = []) {
 }
 
 function getLocalNutritionSuggestions(query = '') {
-  const recent = loadRecentNutritionItems().map((item) => ({
+  const recent = loadRecentNutritionItems().map((item, index) => ({
     ...item,
     source: item.source || 'Recent',
+    _recentIndex: index,
   }));
-  const localSuggestions = dedupeNutritionSuggestions([...recent, ...QUICK_SUGGESTIONS]);
+  const localSuggestions = dedupeNutritionSuggestions([
+    ...recent,
+    ...QUICK_SUGGESTIONS.map((item) => ({ ...item, _recentIndex: Number.POSITIVE_INFINITY })),
+  ]);
   if (!query.trim()) {
-    return localSuggestions.slice(0, 4);
+    return localSuggestions.slice(0, 6);
   }
   return rankNutritionSuggestions(localSuggestions, query, {
     preferredType: nutritionTypeSelect?.value || 'Food',
@@ -4684,7 +4697,7 @@ function renderSuggestions() {
     if (activeQuery) {
       const li = document.createElement('li');
       li.className = 'suggestion-empty';
-      li.textContent = 'No close matches yet. Keep typing or search the food database.';
+      li.textContent = NUTRITION_EMPTY_STATE_MESSAGE;
       nutritionSuggestions.appendChild(li);
       nutritionSuggestions.classList.remove('hidden');
       if (nutritionNameInput) {
@@ -4735,8 +4748,8 @@ function renderSuggestions() {
     }
     const metaLabel = metaParts.length ? metaParts.join(' • ') : 'Serving suggestion';
     li.innerHTML = `
-      <span>${item.name}</span>
-      <span class="suggestion-meta">${metaLabel}</span>
+      <span class="suggestion-name">${renderHighlightedSuggestionName(item.name, nutritionNameInput?.value || '')}</span>
+      <span class="suggestion-meta">${escapeHtml(metaLabel)}</span>
     `;
     nutritionSuggestions.appendChild(li);
   });
@@ -4786,7 +4799,7 @@ function renderSuggestionBar() {
 }
 
 function clearResolvedNutritionSelection({ resetType = true, clearFeedback = false, preserveCustomMode = false } = {}) {
-  state.nutritionResolvedSelection = null;
+  setNutritionResolvedSelection(null);
   if (nutritionBarcodeInput) {
     nutritionBarcodeInput.value = '';
   }
@@ -4807,9 +4820,6 @@ function clearResolvedNutritionSelection({ resetType = true, clearFeedback = fal
   if (!preserveCustomMode) {
     setNutritionCustomMode(false);
   }
-  if (nutritionMatchCard) {
-    nutritionMatchCard.classList.add('hidden');
-  }
   if (clearFeedback && nutritionFeedback) {
     setNutritionFeedback('');
   }
@@ -4822,6 +4832,11 @@ function clearResolvedNutritionSelectionIfQueryChanged() {
   }
   const query = nutritionNameInput?.value.trim() || '';
   const normalizedQuery = normalizeNutritionSearchText(query);
+  if (state.nutritionCustomMode && resolvedSelection.mode === 'custom') {
+    setNutritionResolvedSelection(buildNutritionSelectionFromCustom());
+    updateNutritionPreview();
+    return false;
+  }
   if (normalizedQuery && normalizedQuery === resolvedSelection.normalizedName) {
     return false;
   }
@@ -4858,6 +4873,32 @@ function focusNutritionComposer({ selectText = false } = {}) {
   }
 }
 
+function focusNutritionAmountInput({ selectText = true } = {}) {
+  if (!nutritionAmountInput) {
+    focusNutritionComposer();
+    return;
+  }
+  const focusInput = () => {
+    try {
+      nutritionAmountInput.focus({ preventScroll: true });
+    } catch (error) {
+      nutritionAmountInput.focus();
+    }
+    if (selectText && nutritionAmountInput.value) {
+      if (typeof nutritionAmountInput.select === 'function') {
+        nutritionAmountInput.select();
+      } else if (typeof nutritionAmountInput.setSelectionRange === 'function') {
+        nutritionAmountInput.setSelectionRange(0, nutritionAmountInput.value.length);
+      }
+    }
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(focusInput);
+  } else {
+    setTimeout(focusInput, 0);
+  }
+}
+
 function buildNutritionFeedbackSummary({ calories, protein, carbs, fats } = {}) {
   const parts = [];
   if (Number.isFinite(calories) && calories >= 0) {
@@ -4873,6 +4914,174 @@ function buildNutritionFeedbackSummary({ calories, protein, carbs, fats } = {}) 
     parts.push(`F ${formatDecimal(fats, 1)} g`);
   }
   return parts.join(' • ');
+}
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeRegExp(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function inferNutritionSourceType(item = {}) {
+  const source = String(item?.source || '').toLowerCase();
+  if (source.includes('quick add')) return 'quick_add';
+  if (source.includes('recent')) return 'recent';
+  if (source.includes('usda')) return 'database';
+  if (source.includes('openfoodfacts')) return 'database';
+  if (source.includes('photo')) return 'photo';
+  return 'database';
+}
+
+function formatNutritionBasisLabel({ serving = '', weightAmount = null, weightUnit = null } = {}) {
+  const servingText = String(serving || '').trim();
+  if (servingText) {
+    const normalizedServing = servingText.toLowerCase();
+    return normalizedServing.startsWith('per ') ? servingText : `Per ${servingText}`;
+  }
+  if (Number.isFinite(weightAmount) && weightAmount > 0 && weightUnit) {
+    return `Per ${formatDecimal(weightAmount)} ${weightUnit}`;
+  }
+  return 'Serving basis unavailable';
+}
+
+function buildNutritionConfidenceLabel(item = {}, rankInfo = {}) {
+  const exactMatch = Boolean(rankInfo.exactMatch);
+  const allTermsMatch = Boolean(rankInfo.allTermsMatch);
+  const tokenCoverage = Number(rankInfo.tokenCoverage || 0);
+  const letterSimilarity = Number(rankInfo.letterSimilarity || 0);
+  const sourceType = inferNutritionSourceType(item);
+  if (sourceType === 'quick_add') {
+    return 'High confidence';
+  }
+  if (exactMatch || allTermsMatch || tokenCoverage >= 0.99) {
+    return 'High confidence';
+  }
+  if (tokenCoverage >= 0.5 || letterSimilarity >= 0.72) {
+    return 'Medium confidence';
+  }
+  return 'Low confidence';
+}
+
+function buildNutritionDerivationLabel(item = {}, { isCustom = false } = {}) {
+  if (isCustom) {
+    return 'Macros entered manually for this custom item.';
+  }
+  const sourceType = inferNutritionSourceType(item);
+  if (sourceType === 'quick_add') {
+    return 'Macros come from the saved quick-add defaults for this item.';
+  }
+  if (sourceType === 'recent') {
+    return 'Macros are based on your recent logged intake for this item.';
+  }
+  if (sourceType === 'photo') {
+    return 'Macros are based on the selected photo-analysis suggestion.';
+  }
+  return 'Macros are derived from the matched food database entry and serving basis.';
+}
+
+function renderHighlightedSuggestionName(name = '', query = '') {
+  const safeName = escapeHtml(name);
+  const queryTokens = Array.from(
+    new Set(
+      tokenizeNutritionSearchText(query)
+        .filter((token) => token.length >= 2)
+        .sort((left, right) => right.length - left.length)
+    )
+  );
+  if (!queryTokens.length) {
+    return safeName;
+  }
+  const pattern = new RegExp(`(${queryTokens.map((token) => escapeRegExp(token)).join('|')})`, 'ig');
+  return safeName.replace(pattern, '<mark>$1</mark>');
+}
+
+function buildNutritionSelectionFromSuggestion(item = {}, { query = '' } = {}) {
+  const rankInfo = item._rankInfo || {};
+  const prefill = item.prefill || {};
+  return {
+    mode: 'suggestion',
+    normalizedName: normalizeNutritionSearchText(item.name || ''),
+    barcode: String(item.barcode || prefill.barcode || '').trim(),
+    name: item.name || 'Selected item',
+    basisLabel: formatNutritionBasisLabel({
+      serving: item.serving,
+      weightAmount: Number(prefill.weightAmount),
+      weightUnit: prefill.weightUnit,
+    }),
+    sourceLabel: item.source || 'Food database',
+    confidenceLabel: buildNutritionConfidenceLabel(item, rankInfo),
+    derivationLabel: buildNutritionDerivationLabel(item),
+    query: query || nutritionNameInput?.value.trim() || '',
+  };
+}
+
+function buildNutritionSelectionFromProduct(product = {}, { query = '', matchType = 'database' } = {}) {
+  const sourceLabel = product.source || 'Food database';
+  let confidenceLabel = 'High confidence';
+  if (matchType === 'barcode') {
+    confidenceLabel = 'Barcode match';
+  } else if (matchType === 'database') {
+    confidenceLabel = 'Database match';
+  }
+  return {
+    mode: 'suggestion',
+    normalizedName: normalizeNutritionSearchText(product.name || query || ''),
+    barcode: String(product.barcode || '').trim(),
+    name: product.name || query || 'Selected item',
+    basisLabel: formatNutritionBasisLabel({
+      serving: product.serving,
+      weightAmount: Number(product.weightAmount),
+      weightUnit: product.weightUnit,
+    }),
+    sourceLabel,
+    confidenceLabel,
+    derivationLabel: 'Macros are derived from the matched food database entry and serving basis.',
+    query: query || nutritionNameInput?.value.trim() || '',
+  };
+}
+
+function buildNutritionSelectionFromCustom() {
+  const name = nutritionNameInput?.value.trim() || 'Custom item';
+  return {
+    mode: 'custom',
+    normalizedName: normalizeNutritionSearchText(name),
+    barcode: '',
+    name,
+    basisLabel: 'Manual item',
+    sourceLabel: 'Custom item',
+    confidenceLabel: 'Manual entry',
+    derivationLabel: 'Macros entered manually for this custom item.',
+    query: nutritionNameInput?.value.trim() || '',
+  };
+}
+
+function setNutritionResolvedSelection(selection) {
+  state.nutritionResolvedSelection = selection || null;
+  if (!selection) {
+    if (nutritionMatchCard) {
+      nutritionMatchCard.classList.add('hidden');
+    }
+    return;
+  }
+  if (nutritionMatchName) {
+    nutritionMatchName.textContent = selection.name || 'Selected item';
+  }
+  if (nutritionMatchMeta) {
+    nutritionMatchMeta.textContent = [selection.basisLabel, selection.sourceLabel, selection.confidenceLabel]
+      .filter(Boolean)
+      .join(' • ');
+  }
+  if (nutritionMatchDerived) {
+    nutritionMatchDerived.textContent = selection.derivationLabel || '';
+  }
+  nutritionMatchCard?.classList.remove('hidden');
 }
 
 function highlightNutritionNameInput({ forceFocus = false } = {}) {
@@ -4914,22 +5123,24 @@ function applySuggestion(item) {
   setNutritionCustomMode(false);
   if (nutritionNameInput) {
     nutritionNameInput.value = item.name;
-    highlightNutritionNameInput({ forceFocus: true });
   }
   if (nutritionBarcodeInput && item.barcode) {
     nutritionBarcodeInput.value = item.barcode;
   }
+  setNutritionResolvedSelection(
+    buildNutritionSelectionFromSuggestion(item, {
+      query: nutritionNameInput?.value.trim() || '',
+    })
+  );
   clearSuggestions();
   state.suggestionQuery = '';
   if (applySuggestionPrefill(item)) {
-    state.nutritionResolvedSelection = {
-      normalizedName: normalizeNutritionSearchText(item.name || ''),
-      barcode: String(item.barcode || item?.prefill?.barcode || '').trim(),
-    };
+    focusNutritionAmountInput();
     return;
   }
   // Trigger lookup automatically to hydrate macros/weight
   lookupNutritionFromApi();
+  focusNutritionAmountInput({ selectText: false });
 }
 
 function applySuggestionPrefill(item) {
@@ -5012,6 +5223,7 @@ function resolveAmountInMl(amount, unit) {
 
 function updateNutritionPreview() {
   if (!nutritionPreview) return;
+  const selection = state.nutritionResolvedSelection;
   const amount = Number.parseFloat(nutritionAmountInput?.value);
   const unit = getSelectedUnit();
   const calories = Number.parseFloat(nutritionCaloriesInput?.value);
@@ -5021,9 +5233,22 @@ function updateNutritionPreview() {
   const fiber = Number.parseFloat(nutritionFiberInput?.value);
   const hasMacroData = [calories, protein, carbs, fats, fiber].some((value) => Number.isFinite(value));
 
-  if (!Number.isFinite(amount) || amount <= 0 || !hasMacroData) {
+  if (!selection) {
     nutritionPreview.innerHTML =
-      '<p class="muted small-text">Enter an item and amount to preview macros.</p>';
+      '<p class="muted small-text">Select a suggestion or choose Custom item, then set an amount to preview macros.</p>';
+    return;
+  }
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    nutritionPreview.innerHTML = `<p class="muted small-text">Set an amount for ${escapeHtml(selection.name)} to preview macros.</p>`;
+    return;
+  }
+
+  if (!hasMacroData) {
+    nutritionPreview.innerHTML =
+      selection.mode === 'custom'
+        ? '<p class="muted small-text">Enter macros in Custom item mode to preview this entry.</p>'
+        : `<p class="muted small-text">Nutrition data for ${escapeHtml(selection.name)} is not ready yet.</p>`;
     return;
   }
 
@@ -5102,8 +5327,15 @@ function updateNutritionPreview() {
 
   nutritionPreview.innerHTML = `
     <div class="nutrition-preview-summary">
-      <strong>${Number.isFinite(calories) ? formatNumber(Math.round(calories)) : '\u2014'} kcal</strong>
-      <span class="muted small-text">${formatDecimal(amount)} ${unit} selected${referenceText ? ` • ${referenceText}` : ''}</span>
+      <strong>${escapeHtml(selection.name)}</strong>
+      <span class="muted small-text">${escapeHtml(
+        [selection.basisLabel, selection.sourceLabel, selection.confidenceLabel].filter(Boolean).join(' • ')
+      )}</span>
+    </div>
+    <p class="nutrition-preview-derived">${escapeHtml(selection.derivationLabel || '')}</p>
+    <div class="nutrition-preview-context">
+      <span>${Number.isFinite(calories) ? formatNumber(Math.round(calories)) : '\u2014'} kcal</span>
+      <span>${formatDecimal(amount)} ${unit} selected${referenceText ? ` • ${escapeHtml(referenceText)}` : ''}</span>
     </div>
     <div class="nutrition-preview-badges">
       ${badgeRows.join('')}
@@ -5145,7 +5377,7 @@ function updateNutritionFormVisibility() {
   }
   if (nutritionFormHint) {
     nutritionFormHint.textContent = ownsProfile
-      ? 'Press Enter to log instantly. Open Custom item only when you need to edit macros.'
+      ? 'Select a result or choose Custom item, then press Enter to log instantly.'
       : 'Switch back to your profile to log intake.';
   }
   if (!ownsProfile && nutritionFeedback) {
@@ -5706,6 +5938,7 @@ const LIQUID_KEYWORDS = [
 const POUNDS_PER_KG = 2.2046226218;
 const MAX_NUTRITION_PHOTO_BYTES = 12 * 1024 * 1024;
 const DEFAULT_NUTRITION_PHOTO_STATUS = nutritionPhotoStatus?.textContent || '';
+const NUTRITION_EMPTY_STATE_MESSAGE = 'No results. Try searching the food database or add a custom item.';
 
 const resolveRoleLabel = (role = '') => {
   const key = role?.toString().trim().toLowerCase();
@@ -5801,7 +6034,7 @@ function computeNutritionLetterSimilarity(text = '', query = '') {
 function rankNutritionSuggestions(items = [], query = '', options = {}) {
   const normalizedQuery = normalizeNutritionSearchText(query);
   if (!normalizedQuery) {
-    return Array.isArray(items) ? items.slice(0, 8) : [];
+    return Array.isArray(items) ? items.slice(0, 6) : [];
   }
   const preferredType = options.preferredType || nutritionTypeSelect?.value || 'Food';
   const queryTokens = tokenizeNutritionSearchText(query);
@@ -5811,17 +6044,14 @@ function rankNutritionSuggestions(items = [], query = '', options = {}) {
       if (!normalizedName) {
         return null;
       }
+      const sourceType = inferNutritionSourceType(item);
       const nameTokens = tokenizeNutritionSearchText(item.name);
-      const matchedTokens = queryTokens.reduce((count, token) => {
-        if (
-          nameTokens.some((word) => word.startsWith(token) || word.includes(token)) ||
-          normalizedName.includes(token)
-        ) {
-          return count + 1;
-        }
-        return count;
-      }, 0);
-      const tokenCoverage = queryTokens.length ? matchedTokens / queryTokens.length : 0;
+      const matchedTokens = queryTokens.filter((token) =>
+        nameTokens.some((word) => word.startsWith(token) || word.includes(token)) ||
+        normalizedName.includes(token)
+      );
+      const tokenCoverage = queryTokens.length ? matchedTokens.length / queryTokens.length : 0;
+      const allTermsMatch = Boolean(queryTokens.length) && matchedTokens.length === queryTokens.length;
       const prefixCoverage = queryTokens.length
         ? queryTokens.reduce((count, token) => {
             if (nameTokens.some((word) => word.startsWith(token))) {
@@ -5836,67 +6066,115 @@ function rankNutritionSuggestions(items = [], query = '', options = {}) {
       const letterSimilarity = computeNutritionLetterSimilarity(item.name, query);
       const itemType = getNutritionSuggestionType(item);
       const typeMatches = itemType === preferredType;
-      let score =
-        tokenCoverage * 0.62 +
-        prefixCoverage * 0.18 +
-        letterSimilarity * 0.16 +
-        (containsQuery ? 0.14 : 0) +
-        (exactMatch ? 0.4 : startsWithQuery ? 0.22 : 0) +
-        (typeMatches ? 0.08 : -0.35);
-      if (String(item?.source || '').toLowerCase().includes('quick add')) {
-        score -= 0.04;
+      const phraseMatch = allTermsMatch && queryTokens.length > 1;
+      const baseRelevance =
+        (exactMatch ? 1 : 0) * 4.2 +
+        (allTermsMatch ? 1 : 0) * 2.1 +
+        tokenCoverage * 1.55 +
+        prefixCoverage * 0.7 +
+        (startsWithQuery ? 0.55 : 0) +
+        (containsQuery ? 0.24 : 0) +
+        letterSimilarity * 0.38 +
+        (typeMatches ? 0.1 : -0.35) +
+        (phraseMatch ? 0.22 : 0);
+      let sourceBonus = 0;
+      if (baseRelevance >= 2.25 && tokenCoverage >= 0.5) {
+        if (sourceType === 'recent') {
+          sourceBonus += 0.04;
+        } else if (sourceType === 'quick_add') {
+          sourceBonus += 0.03;
+        }
       }
+      const recentTieBreaker =
+        sourceType === 'recent' && Number.isFinite(item._recentIndex)
+          ? Math.max(0, 0.018 - item._recentIndex * 0.003)
+          : 0;
+      const score = Number((baseRelevance + sourceBonus + recentTieBreaker).toFixed(4));
       return {
-        item,
-        itemType,
-        exactMatch,
-        startsWithQuery,
-        containsQuery,
-        tokenCoverage,
-        score: Number(score.toFixed(4)),
+        ...item,
+        _rankInfo: {
+          exactMatch,
+          allTermsMatch,
+          startsWithQuery,
+          containsQuery,
+          tokenCoverage,
+          letterSimilarity,
+          confidenceLabel: buildNutritionConfidenceLabel(item, {
+            exactMatch,
+            allTermsMatch,
+            tokenCoverage,
+            letterSimilarity,
+          }),
+        },
+        _rankScore: score,
+        _sourceType: sourceType,
+        _allTermsMatch: allTermsMatch,
+        _exactMatch: exactMatch,
+        _startsWithQuery: startsWithQuery,
+        _containsQuery: containsQuery,
+        _tokenCoverage: tokenCoverage,
+        _letterSimilarity: letterSimilarity,
+        _recentIndex: item._recentIndex,
+        _itemType: itemType,
       };
     })
     .filter(Boolean)
-    .filter((entry) => {
-      const minimumScore = normalizedQuery.length >= 5 ? 0.46 : 0.36;
+    .filter((item) => {
+      const minimumLetterSimilarity = normalizedQuery.length >= 6 ? 0.42 : 0.34;
       return (
-        entry.exactMatch ||
-        entry.startsWithQuery ||
-        entry.containsQuery ||
-        entry.tokenCoverage >= 0.5 ||
-        entry.score >= minimumScore
+        item._exactMatch ||
+        item._allTermsMatch ||
+        item._startsWithQuery ||
+        item._containsQuery ||
+        item._tokenCoverage >= 0.5 ||
+        item._letterSimilarity >= minimumLetterSimilarity
       );
     })
     .sort((left, right) => {
-      if (Math.abs(right.score - left.score) > 0.03) {
-        return right.score - left.score;
+      if (left._exactMatch !== right._exactMatch) {
+        return left._exactMatch ? -1 : 1;
       }
-      if (left.itemType !== right.itemType) {
-        return left.itemType === preferredType ? -1 : 1;
+      if (left._allTermsMatch !== right._allTermsMatch) {
+        return left._allTermsMatch ? -1 : 1;
       }
-      if (left.exactMatch !== right.exactMatch) {
-        return left.exactMatch ? -1 : 1;
+      if (Math.abs(right._tokenCoverage - left._tokenCoverage) > 0.01) {
+        return right._tokenCoverage - left._tokenCoverage;
       }
-      if (left.startsWithQuery !== right.startsWithQuery) {
-        return left.startsWithQuery ? -1 : 1;
+      if (Math.abs(right._rankScore - left._rankScore) > 0.02) {
+        return right._rankScore - left._rankScore;
       }
-      if (Math.abs(right.tokenCoverage - left.tokenCoverage) > 0.01) {
-        return right.tokenCoverage - left.tokenCoverage;
+      if (left._itemType !== right._itemType) {
+        return left._itemType === preferredType ? -1 : 1;
       }
-      return String(left.item?.name || '').localeCompare(String(right.item?.name || ''));
+      if (left._sourceType !== right._sourceType) {
+        if (left._sourceType === 'recent' && Number.isFinite(left._recentIndex)) {
+          return -1;
+        }
+        if (right._sourceType === 'recent' && Number.isFinite(right._recentIndex)) {
+          return 1;
+        }
+      }
+      if (
+        left._sourceType === 'recent' &&
+        right._sourceType === 'recent' &&
+        Number.isFinite(left._recentIndex) &&
+        Number.isFinite(right._recentIndex) &&
+        left._recentIndex !== right._recentIndex
+      ) {
+        return left._recentIndex - right._recentIndex;
+      }
+      return String(left.name || '').localeCompare(String(right.name || ''));
     });
-  const sameTypeStrongMatch = ranked.some((entry) => entry.itemType === preferredType && entry.score >= 0.55);
-  const filtered = sameTypeStrongMatch ? ranked.filter((entry) => entry.itemType === preferredType) : ranked;
-  return filtered.map((entry) => entry.item).slice(0, 8);
+  const sameTypeStrongMatch = ranked.some((item) => item._itemType === preferredType && item._rankScore >= 1.8);
+  const filtered = sameTypeStrongMatch ? ranked.filter((item) => item._itemType === preferredType) : ranked;
+  return filtered.slice(0, 6);
 }
 
 function updateNutritionLookupButtonLabel() {
   if (!nutritionLookupButton) {
     return;
   }
-  const query = nutritionNameInput?.value.trim() || '';
-  nutritionLookupButton.textContent =
-    query && state.suggestions.length ? 'Use top match' : 'Search food database';
+  nutritionLookupButton.textContent = 'Search food database';
 }
 
 function updateSuggestionBarVisibility() {
@@ -5904,7 +6182,7 @@ function updateSuggestionBarVisibility() {
     return;
   }
   const hasActiveQuery = Boolean(nutritionNameInput?.value.trim());
-  nutritionSuggestionBar.classList.toggle('hidden', hasActiveQuery);
+  nutritionSuggestionBar.classList.toggle('hidden', hasActiveQuery || state.nutritionCustomMode);
 }
 
 function setNutritionFeedback(message = '', { tone = 'default' } = {}) {
@@ -5924,6 +6202,14 @@ function setNutritionCustomMode(enabled) {
     nutritionCustomToggle.setAttribute('aria-expanded', String(nextEnabled));
     nutritionCustomToggle.textContent = nextEnabled ? 'Hide custom' : 'Custom item';
   }
+  if (nextEnabled) {
+    if (!state.nutritionResolvedSelection) {
+      setNutritionResolvedSelection(buildNutritionSelectionFromCustom());
+    }
+  } else if (state.nutritionResolvedSelection?.mode === 'custom') {
+    setNutritionResolvedSelection(null);
+  }
+  updateNutritionPreview();
 }
 
 function maybeAutoSelectLiquid(name) {
@@ -6092,18 +6378,12 @@ async function lookupNutritionFromApi() {
       setAmountReference(null);
       syncAmountBaselineFromInput();
     }
-    state.nutritionResolvedSelection = {
-      normalizedName: normalizeNutritionSearchText(product.name || query || ''),
-      barcode: String(product.barcode || barcode || '').trim(),
-    };
-    if (nutritionMatchCard && nutritionMatchName && nutritionMatchMeta) {
-      nutritionMatchName.textContent = product.name || query || '';
-      const metaParts = [];
-      if (product.source) metaParts.push(product.source);
-      if (product.serving) metaParts.push(`per ${product.serving}`);
-      nutritionMatchMeta.textContent = metaParts.join(' \u00b7 ');
-      nutritionMatchCard.classList.remove('hidden');
-    }
+    setNutritionResolvedSelection(
+      buildNutritionSelectionFromProduct(product, {
+        query,
+        matchType: barcode ? 'barcode' : 'database',
+      })
+    );
     setNutritionFeedback('Matched — adjust amount inline or open Custom item if needed.');
     updateNutritionPreview();
     syncMacroReferenceFromInputs();
@@ -6115,8 +6395,10 @@ async function lookupNutritionFromApi() {
   }
 }
 
-function scheduleSuggestionFetch() {
+function scheduleSuggestionFetch(options = {}) {
   const query = nutritionNameInput?.value.trim() || '';
+  const immediate = Boolean(options.immediate);
+  const onlyRemote = Boolean(options.onlyRemote);
   if (state.suggestionTimer) {
     clearTimeout(state.suggestionTimer);
     state.suggestionTimer = null;
@@ -6125,13 +6407,20 @@ function scheduleSuggestionFetch() {
     showQuickSuggestions();
     return;
   }
-  if (query.length < 2 || !state.token) {
+  if (query.length < 2 || (!state.token && !onlyRemote)) {
     showQuickSuggestions(query);
+    if (!state.suggestions.length) {
+      renderSuggestionStatus(NUTRITION_EMPTY_STATE_MESSAGE, 'suggestion-empty');
+    }
+    return;
+  }
+  if (!state.token && onlyRemote) {
+    renderSuggestionStatus(NUTRITION_EMPTY_STATE_MESSAGE, 'suggestion-empty');
     return;
   }
   state.suggestionQuery = query;
   renderSuggestionStatus('Searching foods…');
-  state.suggestionTimer = setTimeout(async () => {
+  const executeSearch = async () => {
     const activeQuery = state.suggestionQuery;
     try {
       const response = await apiFetch(`/api/nutrition/search?q=${encodeURIComponent(activeQuery)}`, {
@@ -6146,7 +6435,7 @@ function scheduleSuggestionFetch() {
         return;
       }
       const remoteSuggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
-      const localSuggestions = getLocalNutritionSuggestions(activeQuery);
+      const localSuggestions = onlyRemote ? [] : getLocalNutritionSuggestions(activeQuery);
       state.suggestions = rankNutritionSuggestions(
         dedupeNutritionSuggestions([...remoteSuggestions, ...localSuggestions]),
         activeQuery,
@@ -6154,19 +6443,32 @@ function scheduleSuggestionFetch() {
       );
       state.activeSuggestionIndex = -1;
       if (!state.suggestions.length) {
-        showQuickSuggestions(activeQuery);
+        renderSuggestionStatus(NUTRITION_EMPTY_STATE_MESSAGE, 'suggestion-empty');
         return;
       }
+      state.nutritionSuggestionStatus = 'ready';
       renderSuggestions();
     } catch (error) {
       const latestQuery = nutritionNameInput?.value.trim() || '';
       if (activeQuery !== latestQuery) {
         return;
       }
-      setNutritionFeedback('Food search is temporarily unavailable. Showing close local matches.');
-      showQuickSuggestions(activeQuery);
+      if (onlyRemote) {
+        renderSuggestionStatus('Unable to load results. Try again or add a custom item.', 'suggestion-empty');
+      } else {
+        setNutritionFeedback('Food search is temporarily unavailable. Showing close local matches.');
+        showQuickSuggestions(activeQuery);
+        if (!state.suggestions.length) {
+          renderSuggestionStatus(NUTRITION_EMPTY_STATE_MESSAGE, 'suggestion-empty');
+        }
+      }
     }
-  }, 300);
+  };
+  if (immediate) {
+    executeSearch();
+    return;
+  }
+  state.suggestionTimer = setTimeout(executeSearch, 300);
 }
 
 function setDeleteButtonState(entryId, isLoading) {
@@ -7239,33 +7541,46 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+nutritionLookupButton?.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+});
+
+nutritionLookupButton?.addEventListener('mousedown', (event) => {
+  event.preventDefault();
+});
+
 nutritionLookupButton?.addEventListener('click', () => {
   const query = nutritionNameInput?.value.trim() || '';
-  if (query && state.suggestions.length) {
-    const suggestionIndex = state.activeSuggestionIndex >= 0 ? state.activeSuggestionIndex : 0;
-    const suggestion = state.suggestions[suggestionIndex];
-    if (suggestion) {
-      applySuggestion(suggestion);
-      return;
-    }
+  if (!query) {
+    setNutritionFeedback('Type a food name, then search the food database.');
+    focusNutritionComposer();
+    showQuickSuggestions();
+    return;
   }
-  lookupNutritionFromApi();
+  if (state.nutritionCustomMode) {
+    setNutritionCustomMode(false);
+  }
+  setNutritionFeedback('');
+  scheduleSuggestionFetch({ immediate: true, onlyRemote: true });
 });
 nutritionCustomToggle?.addEventListener('click', () => {
   setNutritionCustomMode(!state.nutritionCustomMode);
+  updateSuggestionBarVisibility();
   if (state.nutritionCustomMode) {
-    if (nutritionMatchCard) {
-      nutritionMatchCard.classList.add('hidden');
-    }
-    setNutritionFeedback('Custom item mode is open. Adjust macros only if the search result is not right.');
+    clearSuggestions();
+    setNutritionFeedback('Custom item mode is open. Enter your own macros when the search results are not right.');
   } else {
     setNutritionFeedback('');
+    const query = nutritionNameInput?.value.trim() || '';
+    if (query) {
+      scheduleSuggestionFetch();
+    } else {
+      showQuickSuggestions();
+    }
   }
 });
 nutritionMatchChangeButton?.addEventListener('click', () => {
-  clearResolvedNutritionSelection({ resetType: true, clearFeedback: true, preserveCustomMode: true });
-  setNutritionCustomMode(true);
-  clearSuggestions();
+  clearResolvedNutritionSelection({ resetType: true, clearFeedback: true });
   const query = nutritionNameInput?.value.trim() || '';
   if (query) {
     scheduleSuggestionFetch();
@@ -7273,7 +7588,7 @@ nutritionMatchChangeButton?.addEventListener('click', () => {
     showQuickSuggestions();
   }
   focusNutritionComposer({ selectText: true });
-  setNutritionFeedback('Pick a different result or enter custom macros below.');
+  setNutritionFeedback('Pick a different result or choose Custom item.');
 });
 nutritionTypeSelect?.addEventListener('change', () => {
   let filled = false;
@@ -7357,14 +7672,14 @@ nutritionEntryFilters?.addEventListener('click', (event) => {
 
 nutritionNameInput?.addEventListener('input', () => {
   clearResolvedNutritionSelectionIfQueryChanged();
-  if (nutritionMatchCard && !nutritionMatchCard.classList.contains('hidden')) {
-    nutritionMatchCard.classList.add('hidden');
-  }
   updateSuggestionBarVisibility();
   updateNutritionLookupButtonLabel();
-  if (!state.nutritionCustomMode) {
+  if (state.nutritionCustomMode) {
+    clearSuggestions();
     setNutritionFeedback('');
+    return;
   }
+  setNutritionFeedback('');
   scheduleSuggestionFetch();
 });
 
@@ -7375,6 +7690,10 @@ nutritionNameInput?.addEventListener('blur', () => {
 nutritionNameInput?.addEventListener('focus', () => {
   highlightNutritionNameInput();
   updateSuggestionBarVisibility();
+  if (state.nutritionCustomMode) {
+    clearSuggestions();
+    return;
+  }
   const query = nutritionNameInput?.value.trim() || '';
   if (state.suggestions.length) {
     renderSuggestions();
@@ -7406,13 +7725,14 @@ nutritionSuggestionBar?.addEventListener('click', (event) => {
 });
 
 nutritionNameInput?.addEventListener('keydown', (event) => {
-  if (!state.suggestions.length) return;
   if (event.key === 'ArrowDown') {
+    if (!state.suggestions.length) return;
     event.preventDefault();
     state.activeSuggestionIndex =
       (state.activeSuggestionIndex + 1) % state.suggestions.length;
     renderSuggestions();
   } else if (event.key === 'ArrowUp') {
+    if (!state.suggestions.length) return;
     event.preventDefault();
     state.activeSuggestionIndex =
       (state.activeSuggestionIndex - 1 + state.suggestions.length) % state.suggestions.length;
@@ -7422,9 +7742,17 @@ nutritionNameInput?.addEventListener('keydown', (event) => {
       event.preventDefault();
       const item = state.suggestions[state.activeSuggestionIndex];
       applySuggestion(item);
-    } else if (state.suggestions.length && !state.nutritionResolvedSelection && !state.nutritionCustomMode) {
-      event.preventDefault();
-      applySuggestion(state.suggestions[0]);
+    } else if (nutritionNameInput?.value.trim()) {
+      const selection = state.nutritionResolvedSelection;
+      const normalizedQuery = normalizeNutritionSearchText(nutritionNameInput.value.trim());
+      const hasCommittedSelection =
+        Boolean(selection) &&
+        selection.mode !== 'custom' &&
+        normalizedQuery === selection.normalizedName;
+      if (!hasCommittedSelection && !state.nutritionCustomMode) {
+        event.preventDefault();
+        setNutritionFeedback('Choose a suggestion or open Custom item before logging.');
+      }
     }
   } else if (event.key === 'Escape') {
     clearSuggestions();
@@ -7455,6 +7783,17 @@ nutritionForm?.addEventListener('submit', async (event) => {
 
   if (!name && !barcode && !photoData) {
     setNutritionFeedback('Provide a name, barcode, or meal photo.');
+    return;
+  }
+
+  if (!photoData && !state.nutritionResolvedSelection && !state.nutritionCustomMode) {
+    setNutritionFeedback('Select a suggestion or choose Custom item before logging.');
+    focusNutritionComposer();
+    if (name) {
+      scheduleSuggestionFetch();
+    } else {
+      showQuickSuggestions();
+    }
     return;
   }
 
@@ -7546,7 +7885,7 @@ nutritionForm?.addEventListener('submit', async (event) => {
     }
     state.nutritionAmountBaseline = null;
     state.nutritionMacroReference = null;
-    state.nutritionResolvedSelection = null;
+    setNutritionResolvedSelection(null);
     state.nutritionLogShouldScrollToTop = true;
     setAmountReference(null);
     setNutritionCustomMode(false);
@@ -7592,6 +7931,7 @@ nutritionClearButton?.addEventListener('click', () => {
   renderSuggestionBar();
   setNutritionFeedback('');
   setNutritionCustomMode(false);
+  showQuickSuggestions();
   focusNutritionComposer();
 });
 

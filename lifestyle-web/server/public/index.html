@@ -1062,10 +1062,13 @@
                         <input
                           type="text"
                           id="nutritionName"
+                          role="combobox"
                           placeholder="Search foods or type a custom item"
                           autocomplete="off"
                           aria-autocomplete="list"
                           aria-controls="nutritionSuggestions"
+                          aria-expanded="false"
+                          aria-haspopup="listbox"
                         />
                       </label>
                       <div class="nutrition-composer-inline">
@@ -1093,15 +1096,17 @@
                     <button type="button" class="outline-btn secondary" id="nutritionClearButton">Clear</button>
                   </div>
                 </div>
-                <div class="nutrition-preview" id="nutritionPreview">
-                  <p class="field-hint">Search an item, adjust the amount inline, then press Enter to log.</p>
-                </div>
                 <div id="nutritionMatchCard" class="nutrition-match-card hidden" aria-live="polite">
                   <div class="nutrition-match-info">
+                    <span class="nutrition-match-label">Selected item</span>
                     <span id="nutritionMatchName" class="nutrition-match-name"></span>
                     <span id="nutritionMatchMeta" class="nutrition-match-meta"></span>
+                    <span id="nutritionMatchDerived" class="nutrition-match-derived"></span>
                   </div>
-                  <button type="button" class="nutrition-match-change-btn" id="nutritionMatchChangeButton">Not right?</button>
+                  <button type="button" class="nutrition-match-change-btn" id="nutritionMatchChangeButton">Change</button>
+                </div>
+                <div class="nutrition-preview" id="nutritionPreview">
+                  <p class="field-hint">Select a suggestion or choose Custom item, then set an amount to preview macros.</p>
                 </div>
                 <input type="hidden" id="nutritionBarcode" />
                 <div class="nutrition-custom-panel hidden" id="nutritionCustomPanel">
@@ -1119,7 +1124,7 @@
                         <option value="Liquid">Liquid</option>
                       </select>
                     </label>
-                    <p class="field-hint">Press Enter from the main bar to log instantly.</p>
+                    <p class="field-hint">Use this only for manual items or macro overrides.</p>
                   </div>
                   <div class="nutrition-form-grid nutrition-custom-grid">
                     <label>Calories<input type="number" id="nutritionCalories" min="0" placeholder="kcal" /></label>
@@ -1130,11 +1135,11 @@
                   </div>
                 </div>
                 <div class="nutrition-actions">
-                  <p class="field-hint nutrition-enter-hint">Press <kbd>Enter</kbd> to log instantly once the item looks right.</p>
+                  <p class="field-hint nutrition-enter-hint">Press <kbd>Enter</kbd> to log after you select a result or choose Custom item.</p>
                   <button type="submit" class="sr-only" aria-label="Log intake">Log intake</button>
                 </div>
                 <p class="form-feedback" id="nutritionFeedback"></p>
-                <p class="field-hint" id="nutritionFormHint">Press Enter to log instantly. Only you can log items for your own profile.</p>
+                <p class="field-hint" id="nutritionFormHint">Select a result or choose Custom item, then press Enter to log instantly.</p>
               </form>
             </article>
           </div>
