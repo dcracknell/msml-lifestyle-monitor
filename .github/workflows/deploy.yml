@@ -174,7 +174,20 @@ jobs:
 
           cd "${DEPLOY_ROOT}/lifestyle-web"
 
-          compose pull lifestyle-web
+          pulled_image=false
+          if docker pull "${LIFESTYLE_WEB_IMAGE}"; then
+            pulled_image=true
+          else
+            echo "Falling back to a local build for ${LIFESTYLE_WEB_IMAGE} from ${GITHUB_SHA}."
+            compose build lifestyle-web
+          fi
+
+          if [ "${pulled_image}" = true ]; then
+            echo "Using published image ${LIFESTYLE_WEB_IMAGE}."
+          else
+            echo "Using locally built image for ${LIFESTYLE_WEB_IMAGE}."
+          fi
+
           compose up -d --remove-orphans portainer
           compose up -d --remove-orphans --force-recreate lifestyle-web
 
