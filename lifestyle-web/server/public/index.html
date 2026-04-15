@@ -1053,17 +1053,48 @@
 
             <article class="card nutrition-form-card">
               <p class="section-eyebrow">Add Intake</p>
-              <form id="nutritionForm" class="nutrition-form">
-                <div class="suggestion-wrapper">
-                  <label>
-                    Item name
-                    <input type="text" id="nutritionName" placeholder="Chicken pesto pasta" autocomplete="off" aria-autocomplete="list" aria-controls="nutritionSuggestions" />
-                  </label>
-                  <ul class="suggestion-list hidden" id="nutritionSuggestions" role="listbox"></ul>
-                  <div class="suggestion-bar" id="nutritionSuggestionBar" aria-label="Quick suggestions"></div>
+              <form id="nutritionForm" class="nutrition-form nutrition-composer-form">
+                <div class="nutrition-composer-shell">
+                  <div class="suggestion-wrapper nutrition-composer-main">
+                    <div class="nutrition-composer-row">
+                      <label class="nutrition-composer-input" for="nutritionName">
+                        <span class="sr-only">Item name</span>
+                        <input
+                          type="text"
+                          id="nutritionName"
+                          placeholder="Search foods or type a custom item"
+                          autocomplete="off"
+                          aria-autocomplete="list"
+                          aria-controls="nutritionSuggestions"
+                        />
+                      </label>
+                      <div class="nutrition-composer-inline">
+                        <label class="nutrition-inline-field nutrition-inline-amount-field" for="nutritionAmount">
+                          <span class="sr-only" id="nutritionAmountLabel">Amount (g)</span>
+                          <input type="number" id="nutritionAmount" min="0" step="0.1" placeholder="grams" />
+                        </label>
+                        <label class="nutrition-inline-field nutrition-inline-unit-field" for="nutritionUnit">
+                          <span class="sr-only">Unit</span>
+                          <select id="nutritionUnit">
+                            <option value="g">g</option>
+                            <option value="ml">ml</option>
+                            <option value="oz">oz</option>
+                          </select>
+                        </label>
+                      </div>
+                    </div>
+                    <p class="label-hint nutrition-inline-reference" id="nutritionAmountReference"></p>
+                    <ul class="suggestion-list hidden" id="nutritionSuggestions" role="listbox"></ul>
+                    <div class="suggestion-bar" id="nutritionSuggestionBar" aria-label="Quick suggestions"></div>
+                  </div>
+                  <div class="nutrition-composer-tools">
+                    <button type="button" class="outline-btn secondary" id="nutritionLookupButton">Search food database</button>
+                    <button type="button" class="outline-btn secondary" id="nutritionCustomToggle" aria-expanded="false">Custom item</button>
+                    <button type="button" class="outline-btn secondary" id="nutritionClearButton">Clear</button>
+                  </div>
                 </div>
-                <div class="nutrition-lookup-row">
-                  <button type="button" class="outline-btn secondary" id="nutritionLookupButton">Search food database</button>
+                <div class="nutrition-preview" id="nutritionPreview">
+                  <p class="field-hint">Search an item, adjust the amount inline, then press Enter to log.</p>
                 </div>
                 <div id="nutritionMatchCard" class="nutrition-match-card hidden" aria-live="polite">
                   <div class="nutrition-match-info">
@@ -1073,37 +1104,37 @@
                   <button type="button" class="nutrition-match-change-btn" id="nutritionMatchChangeButton">Not right?</button>
                 </div>
                 <input type="hidden" id="nutritionBarcode" />
-                <label>
-                  Category
-                  <select id="nutritionType">
-                    <option value="Food">Food</option>
-                    <option value="Liquid">Liquid</option>
-                  </select>
-                </label>
-                <div class="nutrition-preview" id="nutritionPreview">
-                  <p class="field-hint">Enter an item to view macro details.</p>
-                </div>
-                <div class="nutrition-form-grid amount-row">
-                  <label class="flex-1 amount-input">
-                    <span class="label-row">
-                      <span id="nutritionAmountLabel">Amount (g)</span>
-                      <span class="label-hint" id="nutritionAmountReference"></span>
-                    </span>
-                    <input type="number" id="nutritionAmount" min="0" step="0.1" placeholder="grams" />
-                  </label>
-                  <label class="unit-select">Unit<select id="nutritionUnit"><option value="g">g</option><option value="ml">ml</option><option value="oz">oz</option></select></label>
-                  <label>Calories<input type="number" id="nutritionCalories" min="0" placeholder="kcal" /></label>
-                  <label>Protein (g)<input type="number" id="nutritionProtein" min="0" placeholder="0" /></label>
-                  <label>Carbs (g)<input type="number" id="nutritionCarbs" min="0" placeholder="0" /></label>
-                  <label>Fats (g)<input type="number" id="nutritionFats" min="0" placeholder="0" /></label>
-                  <label>Fiber (g)<input type="number" id="nutritionFiber" min="0" placeholder="0" /></label>
+                <div class="nutrition-custom-panel hidden" id="nutritionCustomPanel">
+                  <div class="nutrition-custom-header">
+                    <div>
+                      <p class="section-eyebrow">Custom Item</p>
+                      <p class="field-hint">Open this only when you need to override the selected food or enter your own macros.</p>
+                    </div>
+                  </div>
+                  <div class="nutrition-custom-toolbar">
+                    <label class="unit-select nutrition-compact-field">
+                      <span>Category</span>
+                      <select id="nutritionType">
+                        <option value="Food">Food</option>
+                        <option value="Liquid">Liquid</option>
+                      </select>
+                    </label>
+                    <p class="field-hint">Press Enter from the main bar to log instantly.</p>
+                  </div>
+                  <div class="nutrition-form-grid nutrition-custom-grid">
+                    <label>Calories<input type="number" id="nutritionCalories" min="0" placeholder="kcal" /></label>
+                    <label>Protein (g)<input type="number" id="nutritionProtein" min="0" placeholder="0" /></label>
+                    <label>Carbs (g)<input type="number" id="nutritionCarbs" min="0" placeholder="0" /></label>
+                    <label>Fats (g)<input type="number" id="nutritionFats" min="0" placeholder="0" /></label>
+                    <label>Fiber (g)<input type="number" id="nutritionFiber" min="0" placeholder="0" /></label>
+                  </div>
                 </div>
                 <div class="nutrition-actions">
-                  <button type="submit" class="outline-btn">Log intake</button>
-                  <button type="button" class="outline-btn secondary" id="nutritionClearButton">Clear form</button>
+                  <p class="field-hint nutrition-enter-hint">Press <kbd>Enter</kbd> to log instantly once the item looks right.</p>
+                  <button type="submit" class="sr-only" aria-label="Log intake">Log intake</button>
                 </div>
                 <p class="form-feedback" id="nutritionFeedback"></p>
-                <p class="field-hint" id="nutritionFormHint">Only you can log items for your own profile.</p>
+                <p class="field-hint" id="nutritionFormHint">Press Enter to log instantly. Only you can log items for your own profile.</p>
               </form>
             </article>
           </div>

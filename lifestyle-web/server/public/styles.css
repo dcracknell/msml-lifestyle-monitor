@@ -1738,11 +1738,92 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .nutrition-log-list li:last-child { border-bottom: none; }
 
 /* Add Intake form */
-.nutrition-form { display: flex; flex-direction: column; gap: 10px; }
-.nutrition-lookup-row { display: flex; }
+.nutrition-form {
+  display: flex; flex-direction: column; gap: 12px;
+}
+.nutrition-form-card {
+  box-shadow: 0 18px 40px rgba(0,0,0,0.24);
+}
+.nutrition-composer-shell {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)),
+    var(--surface-2);
+  box-shadow: 0 14px 32px rgba(0,0,0,0.16);
+}
+.nutrition-composer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nutrition-composer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+.nutrition-composer-input input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(7,10,18,0.72);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.nutrition-composer-input input:focus,
+.nutrition-inline-field input:focus,
+.nutrition-inline-field select:focus,
+.nutrition-custom-panel input:focus,
+.nutrition-custom-panel select:focus {
+  outline: none;
+  border-color: rgba(45,212,191,0.5);
+  box-shadow: 0 0 0 3px rgba(45,212,191,0.12);
+}
+.nutrition-composer-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nutrition-inline-field {
+  display: flex;
+  align-items: center;
+}
+.nutrition-inline-field input,
+.nutrition-inline-field select {
+  min-height: 44px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(7,10,18,0.72);
+}
+.nutrition-inline-amount-field input {
+  width: 118px;
+  padding: 0 12px;
+  text-align: right;
+}
+.nutrition-inline-unit-field select {
+  min-width: 82px;
+  padding: 0 12px;
+}
+.nutrition-inline-reference {
+  min-height: 1em;
+  margin: -2px 2px 0;
+}
+.nutrition-composer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.nutrition-composer-tools .outline-btn.secondary {
+  border-radius: 999px;
+  padding-inline: 12px;
+}
 .nutrition-match-card {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 8px 10px; margin-top: 6px;
+  padding: 8px 10px;
   border-radius: var(--radius);
   background: var(--teal-dim); border: 1px solid rgba(45,212,191,0.25);
 }
@@ -1761,27 +1842,146 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 }
 .nutrition-match-change-btn:hover { text-decoration: underline; }
 .nutrition-preview {
-  padding: 10px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface-2);
+  padding: 12px 14px; border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)),
+    var(--surface-2);
   font-size: 12px; color: var(--muted);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.12);
+}
+.nutrition-preview-summary {
+  display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  color: var(--text);
+}
+.nutrition-preview-badges {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;
+}
+.nutrition-preview-badge {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 5px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03); color: var(--text);
+}
+.nutrition-preview-badge span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.nutrition-preview-badge.calories { background: rgba(250,204,21,0.12); border-color: rgba(250,204,21,0.22); }
+.nutrition-preview-badge.protein { background: rgba(45,212,191,0.12); border-color: rgba(45,212,191,0.22); }
+.nutrition-preview-badge.carbs { background: rgba(96,165,250,0.12); border-color: rgba(96,165,250,0.22); }
+.nutrition-preview-badge.fats { background: rgba(251,146,60,0.12); border-color: rgba(251,146,60,0.22); }
+.nutrition-preview-badge.fiber { background: rgba(163,230,53,0.12); border-color: rgba(163,230,53,0.22); }
+.nutrition-preview-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px; margin-top: 10px;
+}
+.nutrition-preview-chip {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border-radius: 12px;
+  background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+  color: var(--text);
+}
+.nutrition-preview-chip span { color: var(--muted); font-size: 11px; }
+.nutrition-custom-panel {
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.02);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+}
+.nutrition-custom-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+.nutrition-custom-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: end;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.nutrition-compact-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+.nutrition-compact-field span {
+  font-size: 11px;
+  color: var(--muted);
 }
 .nutrition-form-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+.nutrition-custom-grid {
+  margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+.nutrition-custom-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.nutrition-custom-grid input,
+.nutrition-custom-grid select,
+.nutrition-compact-field select {
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(7,10,18,0.7);
+}
 .amount-row { align-items: end; }
 .amount-input { display: flex; flex-direction: column; gap: 4px; }
 .unit-select { display: flex; flex-direction: column; gap: 4px; }
 .label-row { display: flex; justify-content: space-between; }
 .label-hint { font-size: 11px; color: var(--muted); }
-.nutrition-actions { display: flex; gap: 8px; }
+.nutrition-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.nutrition-enter-hint {
+  margin: 0;
+  color: var(--muted);
+}
+.nutrition-enter-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
 .suggestion-wrapper { position: relative; }
 .suggestion-list {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--radius); max-height: 200px; overflow-y: auto;
+  box-shadow: 0 14px 30px rgba(0,0,0,0.28);
 }
 .suggestion-list li { padding: 8px 12px; font-size: 12px; color: var(--label); cursor: pointer; }
 .suggestion-list li:hover { background: var(--surface); color: var(--text); }
+.suggestion-list li.active {
+  background: rgba(45,212,191,0.12);
+  color: var(--text);
+}
+.suggestion-list li .suggestion-meta {
+  display: block;
+  margin-top: 3px;
+}
 .suggestion-list li.suggestion-loading { color: var(--muted); cursor: default; font-style: italic; }
 .suggestion-list li.suggestion-loading:hover { background: transparent; color: var(--muted); }
+.suggestion-list li.suggestion-empty { color: var(--muted); cursor: default; }
+.suggestion-list li.suggestion-empty:hover { background: transparent; color: var(--muted); }
 .suggestion-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
 .suggestion-bar button {
   padding: 3px 8px; font-size: 11px;
@@ -1791,6 +1991,22 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .suggestion-bar button:hover { color: var(--teal); border-color: var(--teal); }
 .suggestion-bar-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .suggestion-bar-divider { width: 1px; height: 16px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+@media (max-width: 860px) {
+  .nutrition-composer-row {
+    grid-template-columns: 1fr;
+  }
+  .nutrition-composer-inline {
+    width: 100%;
+  }
+  .nutrition-inline-amount-field,
+  .nutrition-inline-unit-field {
+    flex: 1;
+  }
+  .nutrition-inline-amount-field input,
+  .nutrition-inline-unit-field select {
+    width: 100%;
+  }
+}
 
 /* Undo delete toast */
 .undo-toast-container {
