@@ -1966,7 +1966,7 @@ function guessUnitFromNutritionData(nutritionPer = '') {
   return 'g';
 }
 
-function parseNutritionFromProduct(product = {}) {
+function parseNutritionFromProduct(product = {}, { source = null } = {}) {
   if (!product) return null;
   const nutriments = product.nutriments || {};
   const caloriesServing = readFirstFiniteNumber(
@@ -2086,6 +2086,7 @@ function parseNutritionFromProduct(product = {}) {
     name: product.product_name || product.generic_name || product.brands || 'Unknown item',
     barcode: product.code || null,
     serving: rawServing || null,
+    source,
     calories: Number.isFinite(calories) ? Math.round(calories) : null,
     protein: Number.isFinite(protein) ? Math.round(protein) : null,
     carbs: Number.isFinite(carbs) ? Math.round(carbs) : null,
@@ -2185,11 +2186,13 @@ async function fetchBarcodeProductByEndpoint(candidate, sourceUrl) {
   if (!data?.product) {
     return null;
   }
-  return parseNutritionFromProduct(data.product);
+  const sourceLabel = sourceUrl.toString().includes('uk.openfoodfacts') ? 'OpenFoodFacts UK' : 'OpenFoodFacts';
+  return parseNutritionFromProduct(data.product, { source: sourceLabel });
 }
 
 async function fetchBarcodeProductBySearch(candidate, searchUrl) {
   const barcodeVariants = new Set(buildBarcodeCandidates(candidate).map((value) => normalizeBarcodeValue(value)));
+  const sourceLabel = searchUrl.toString().includes('uk.openfoodfacts') ? 'OpenFoodFacts UK' : 'OpenFoodFacts';
   const searchParams = new URLSearchParams({
     search_terms: candidate,
     search_simple: '1',
@@ -2210,7 +2213,7 @@ async function fetchBarcodeProductBySearch(candidate, searchUrl) {
   let fallbackMatch = null;
   let parsedCount = 0;
   for (const product of products) {
-    const parsed = parseNutritionFromProduct(product);
+    const parsed = parseNutritionFromProduct(product, { source: sourceLabel });
     if (!parsed) {
       continue;
     }
@@ -3083,6 +3086,7 @@ function mapSuggestionToProduct(item) {
     name: item.name || 'Unknown item',
     barcode: item.prefill.barcode || null,
     serving: item.serving || null,
+    source: item.source || null,
     calories: parseNullableNumber(item.prefill.calories),
     protein: parseNullableNumber(item.prefill.protein),
     carbs: parseNullableNumber(item.prefill.carbs),

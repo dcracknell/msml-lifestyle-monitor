@@ -1065,6 +1065,13 @@
                 <div class="nutrition-lookup-row">
                   <button type="button" class="outline-btn secondary" id="nutritionLookupButton">Search food database</button>
                 </div>
+                <div id="nutritionMatchCard" class="nutrition-match-card hidden" aria-live="polite">
+                  <div class="nutrition-match-info">
+                    <span id="nutritionMatchName" class="nutrition-match-name"></span>
+                    <span id="nutritionMatchMeta" class="nutrition-match-meta"></span>
+                  </div>
+                  <button type="button" class="nutrition-match-change-btn" id="nutritionMatchChangeButton">Not right?</button>
+                </div>
                 <input type="hidden" id="nutritionBarcode" />
                 <label>
                   Category

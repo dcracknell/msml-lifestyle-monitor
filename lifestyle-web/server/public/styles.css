@@ -1740,6 +1740,26 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 /* Add Intake form */
 .nutrition-form { display: flex; flex-direction: column; gap: 10px; }
 .nutrition-lookup-row { display: flex; }
+.nutrition-match-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; margin-top: 6px;
+  border-radius: var(--radius);
+  background: var(--teal-dim); border: 1px solid rgba(45,212,191,0.25);
+}
+.nutrition-match-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.nutrition-match-name {
+  font-weight: 600; font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nutrition-match-meta {
+  font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px;
+}
+.nutrition-match-change-btn {
+  font-size: 11px; color: var(--teal); background: none; border: none;
+  cursor: pointer; padding: 2px 0; white-space: nowrap; flex-shrink: 0;
+}
+.nutrition-match-change-btn:hover { text-decoration: underline; }
 .nutrition-preview {
   padding: 10px; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--surface-2);

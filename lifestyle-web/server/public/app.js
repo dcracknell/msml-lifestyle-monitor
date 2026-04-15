@@ -1080,6 +1080,10 @@ const nutritionSuggestions = document.getElementById('nutritionSuggestions');
 const nutritionSuggestionBar = document.getElementById('nutritionSuggestionBar');
 const nutritionPreview = document.getElementById('nutritionPreview');
 const nutritionClearButton = document.getElementById('nutritionClearButton');
+const nutritionMatchCard = document.getElementById('nutritionMatchCard');
+const nutritionMatchName = document.getElementById('nutritionMatchName');
+const nutritionMatchMeta = document.getElementById('nutritionMatchMeta');
+const nutritionMatchChangeButton = document.getElementById('nutritionMatchChangeButton');
 const nutritionScanButton = document.getElementById('nutritionScanButton');
 const nutritionScanStatus = document.getElementById('nutritionScanStatus');
 const nutritionScanPreviewWrapper = document.getElementById('nutritionScanPreviewWrapper');
@@ -4707,24 +4711,7 @@ function renderSuggestionBar() {
       button.innerHTML = `<strong>${item.name}</strong>${metaLabel ? `<span>${metaLabel}</span>` : ''}`;
       nutritionSuggestionBar.appendChild(button);
     });
-    const divider = document.createElement('span');
-    divider.className = 'suggestion-bar-divider';
-    nutritionSuggestionBar.appendChild(divider);
-    const quickLabel = document.createElement('span');
-    quickLabel.className = 'suggestion-bar-label';
-    quickLabel.textContent = 'Quick add';
-    nutritionSuggestionBar.appendChild(quickLabel);
   }
-
-  QUICK_SUGGESTIONS.forEach((item) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'suggestion-chip';
-    button.dataset.suggestionId = item.id;
-    const metaLabel = item.serving || item.source || 'Quick add';
-    button.innerHTML = `<strong>${item.name}</strong><span>${metaLabel}</span>`;
-    nutritionSuggestionBar.appendChild(button);
-  });
 }
 
 function highlightNutritionNameInput({ forceFocus = false } = {}) {
@@ -4887,7 +4874,7 @@ function updateNutritionPreview() {
   const fiberPerUnit = Number.isFinite(fiber) ? fiber / amount : null;
 
   const detailRows = [
-    `<div><strong>${formatNumber(calories)} kcal</strong><span class="muted small-text">Current ${amount} ${unit}</span></div>`,
+    `<div><strong>${formatNumber(calories)} kcal</strong><span class="muted small-text">entered ${amount}\u202f${unit}</span></div>`,
   ];
 
   const chips = [];
@@ -5692,8 +5679,16 @@ async function lookupNutritionFromApi() {
       setAmountReference(null);
       syncAmountBaselineFromInput();
     }
+    if (nutritionMatchCard && nutritionMatchName && nutritionMatchMeta) {
+      nutritionMatchName.textContent = product.name || query || '';
+      const metaParts = [];
+      if (product.source) metaParts.push(product.source);
+      if (product.serving) metaParts.push(`per ${product.serving}`);
+      nutritionMatchMeta.textContent = metaParts.join(' \u00b7 ');
+      nutritionMatchCard.classList.remove('hidden');
+    }
     if (nutritionFeedback) {
-      nutritionFeedback.textContent = 'Nutrition details loaded. Adjust if needed before saving.';
+      nutritionFeedback.textContent = 'Matched \u2014 adjust amount or macros if needed.';
     }
     updateNutritionPreview();
     syncMacroReferenceFromInputs();
@@ -6828,6 +6823,20 @@ document.addEventListener('visibilitychange', () => {
 });
 
 nutritionLookupButton?.addEventListener('click', lookupNutritionFromApi);
+nutritionMatchChangeButton?.addEventListener('click', () => {
+  if (nutritionMatchCard) nutritionMatchCard.classList.add('hidden');
+  [nutritionCaloriesInput, nutritionProteinInput, nutritionCarbsInput, nutritionFatsInput, nutritionFiberInput, nutritionAmountInput].forEach((el) => { if (el) el.value = ''; });
+  setAmountReference(null);
+  state.nutritionAmountBaseline = null;
+  state.nutritionMacroReference = null;
+  updateAmountFieldUnit();
+  updateNutritionPreview();
+  if (nutritionNameInput) {
+    nutritionNameInput.value = '';
+    nutritionNameInput.focus();
+  }
+  if (nutritionFeedback) nutritionFeedback.textContent = '';
+});
 nutritionTypeSelect?.addEventListener('change', () => {
   let filled = false;
   if (nutritionTypeSelect) {
@@ -6900,6 +6909,9 @@ nutritionEntryFilters?.addEventListener('click', (event) => {
 
 nutritionNameInput?.addEventListener('input', () => {
   maybeAutoSelectLiquid(nutritionNameInput.value);
+  if (nutritionMatchCard && !nutritionMatchCard.classList.contains('hidden')) {
+    nutritionMatchCard.classList.add('hidden');
+  }
   scheduleSuggestionFetch();
 });
 
@@ -7125,6 +7137,7 @@ nutritionClearButton?.addEventListener('click', () => {
   setSelectedUnit(UNIT_FOOD);
   updateAmountFieldUnit();
   updateNutritionPreview();
+  if (nutritionMatchCard) nutritionMatchCard.classList.add('hidden');
   if (nutritionFeedback) {
     nutritionFeedback.textContent = '';
   }
