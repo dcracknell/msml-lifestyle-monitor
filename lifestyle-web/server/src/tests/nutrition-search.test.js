@@ -392,6 +392,91 @@ describe('multi-source nutrition ranking', () => {
     expect(suggestions.map((item) => item.id)).not.toContain('usda-black-beans');
   });
 
+  it('keeps fuzzy typo matches for close foods and filters unrelated weak matches', async () => {
+    const suggestions = await getCombinedSuggestions(1, 'chilli con carn', {
+      localSuggestions: [],
+      remoteSuggestions: [
+        {
+          id: 'remote-chili',
+          name: 'Chili con carne',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 210, protein: 16, carbs: 18, fats: 9, fiber: 5, weightAmount: 100, weightUnit: 'g' },
+        },
+        {
+          id: 'remote-chicken',
+          name: 'Chicken curry',
+          source: 'Recent',
+          sourceType: 'recent',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 240, protein: 20, carbs: 7, fats: 14, fiber: 2, weightAmount: 100, weightUnit: 'g' },
+        },
+        {
+          id: 'remote-corn',
+          name: 'Cornflakes',
+          source: 'OpenFoodFacts',
+          sourceType: 'openfoodfacts',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 357, protein: 8, carbs: 84, fats: 0.4, fiber: 3, weightAmount: 100, weightUnit: 'g' },
+        },
+      ],
+      quickSuggestions: [],
+      limit: 5,
+      maxScore: 2,
+    });
+
+    expect(suggestions.map((item) => item.id)).toContain('remote-chili');
+    expect(suggestions.map((item) => item.id)).not.toContain('remote-chicken');
+    expect(suggestions.map((item) => item.id)).not.toContain('remote-corn');
+  });
+
+  it('ranks by relevance first, exact match next, and recency only as a later tie-breaker', () => {
+    const ranked = rankNutritionSuggestions(
+      [
+        {
+          id: 'recent-weaker',
+          name: 'Greek Yogurt',
+          source: 'Recent',
+          sourceType: 'recent',
+          isBranded: false,
+          isGeneric: true,
+          recencyTs: Date.parse('2026-04-16T09:00:00.000Z'),
+          prefill: { calories: 100, protein: 17, carbs: 6, fats: 0, fiber: 0, weightAmount: 170, weightUnit: 'g' },
+        },
+        {
+          id: 'exact-match',
+          name: 'Greek Yogurt Plain',
+          source: 'OpenFoodFacts',
+          sourceType: 'openfoodfacts',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 63, protein: 11, carbs: 3.5, fats: 0.4, fiber: 0, weightAmount: 100, weightUnit: 'g' },
+        },
+        {
+          id: 'more-relevant',
+          name: 'Greek Yogurt Plain Nonfat',
+          source: 'USDA Foundation',
+          sourceType: 'usda_foundation',
+          isBranded: false,
+          isGeneric: true,
+          prefill: { calories: 59, protein: 10.3, carbs: 3.6, fats: 0.4, fiber: 0, weightAmount: 100, weightUnit: 'g' },
+        },
+      ],
+      'greek yogurt plain',
+      { limit: 5, maxScore: 2 }
+    );
+
+    expect(ranked.map((item) => item.id)).toEqual([
+      'exact-match',
+      'more-relevant',
+      'recent-weaker',
+    ]);
+  });
+
   it('keeps branded suggestions when the typed query includes the brand', async () => {
     const suggestions = await getCombinedSuggestions(1, 'chobani greek yogurt', {
       localSuggestions: [],

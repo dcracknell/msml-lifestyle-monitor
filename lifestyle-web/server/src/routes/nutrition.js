@@ -2767,6 +2767,7 @@ function searchLocalEntries(userId, query) {
       matchTexts: [row.name],
       isGeneric: true,
       isBranded: false,
+      recencyTs: Number(new Date(row.createdAt).getTime()) || 0,
       score,
     });
   });
@@ -2878,11 +2879,14 @@ function isGenericFoodQuery(query = '') {
 function computeMergedSuggestionScore(item = {}, query = '') {
   const normalizedQuery = normalizeText(query);
   const matchTexts = collectSuggestionMatchTexts(item);
-  const exactMatchTexts = [
-    ...buildFoodNameVariants(item.name),
-    item.brandName || null,
-    item.brandName && item.name ? `${item.brandName} ${item.name}` : null,
-  ].filter(Boolean);
+  const exactMatchTexts =
+    item.sourceType === 'quick_add'
+      ? [item.name].filter(Boolean)
+      : [
+          ...buildFoodNameVariants(item.name),
+          item.brandName || null,
+          item.brandName && item.name ? `${item.brandName} ${item.name}` : null,
+        ].filter(Boolean);
   const baseTextScore = matchTexts.length
     ? matchTexts.reduce((best, text) => Math.min(best, computeSuggestionScore(text, query)), 99)
     : computeSuggestionScore(item.name, query);
@@ -2917,9 +2921,10 @@ function computeMergedSuggestionScore(item = {}, query = '') {
       ? (minimumLetterSimilarity - letterSimilarity) * 1.15
       : 0;
   const letterBonus = letterSimilarity * 0.18;
+  const sourceRelevancePenalty = item.sourceType === 'quick_add' ? 0.08 : 0;
   const nutritionBonus = countPrefillNutritionFields(item.prefill) * 0.015;
   const sourceBiasMap = {
-    recent: -0.22,
+    recent: 0,
     usda_foundation: -0.18,
     usda_legacy: -0.12,
     usda_survey: -0.08,
@@ -2937,20 +2942,28 @@ function computeMergedSuggestionScore(item = {}, query = '') {
       sourceBias += 0.4;
     }
   }
-  const weightedScore =
+  const relevanceScore =
     baseScore +
     extraTokenPenalty +
     letterPenalty +
-    sourceBias -
+    sourceRelevancePenalty -
     letterBonus -
+    tokenCoverage * 0.14;
+  const weightedScore =
+    relevanceScore +
+    sourceBias -
     nutritionBonus -
-    tokenCoverage * 0.14 -
     (exactMatch ? 0.16 : 0);
   return {
     exactMatch,
     letterSimilarity,
     tokenCoverage,
     nutritionFields: countPrefillNutritionFields(item.prefill),
+    relevanceScore: Number(relevanceScore.toFixed(4)),
+    recencyTs:
+      Number.isFinite(Number(item.recencyTs)) && Number(item.recencyTs) > 0
+        ? Number(item.recencyTs)
+        : 0,
     score: Number(weightedScore.toFixed(4)),
   };
 }
@@ -2971,9 +2984,9 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
       ...computeMergedSuggestionScore(item, query),
     }))
     .sort((a, b) => {
-      const scoreDiff = (a.score ?? 99) - (b.score ?? 99);
-      if (Math.abs(scoreDiff) > 0.04) {
-        return scoreDiff;
+      const relevanceDiff = (a.relevanceScore ?? 99) - (b.relevanceScore ?? 99);
+      if (Math.abs(relevanceDiff) > 0.04) {
+        return relevanceDiff;
       }
       if (a.exactMatch !== b.exactMatch) {
         return a.exactMatch ? -1 : 1;
@@ -2981,6 +2994,10 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
       const coverageDiff = (b.tokenCoverage ?? 0) - (a.tokenCoverage ?? 0);
       if (Math.abs(coverageDiff) > 0.05) {
         return coverageDiff;
+      }
+      const scoreDiff = (a.score ?? 99) - (b.score ?? 99);
+      if (Math.abs(scoreDiff) > 0.03) {
+        return scoreDiff;
       }
       const letterDiff = (b.letterSimilarity ?? 0) - (a.letterSimilarity ?? 0);
       if (Math.abs(letterDiff) > 0.04) {
@@ -2991,6 +3008,9 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
       }
       if ((b.nutritionFields ?? 0) !== (a.nutritionFields ?? 0)) {
         return (b.nutritionFields ?? 0) - (a.nutritionFields ?? 0);
+      }
+      if ((b.recencyTs ?? 0) !== (a.recencyTs ?? 0)) {
+        return (b.recencyTs ?? 0) - (a.recencyTs ?? 0);
       }
       return a.name.localeCompare(b.name);
     });
@@ -3008,13 +3028,15 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
 
   let intentFiltered = unique;
   const normalizedQueryLetters = normalizeLetterString(query);
-  if (normalizedQueryLetters.length >= 4) {
+  if (normalizedQueryLetters.length >= 3) {
     const strictLetterThreshold =
-      normalizedQueryLetters.length >= 8
+      normalizedQueryLetters.length >= 10
         ? 0.42
-        : normalizedQueryLetters.length >= 6
+        : normalizedQueryLetters.length >= 7
           ? 0.46
-          : 0.5;
+          : normalizedQueryLetters.length >= 5
+            ? 0.5
+            : 0.56;
     const letterFiltered = unique.filter(
       (item) =>
         item.exactMatch ||
@@ -3061,10 +3083,12 @@ function rankNutritionSuggestions(candidates = [], query = '', options = {}) {
 function stripSuggestionInternalFields(item = {}) {
   const {
     score,
+    relevanceScore,
     tokenCoverage,
     letterSimilarity,
     nutritionFields,
     exactMatch,
+    recencyTs,
     sourceType,
     matchTexts,
     keywords,

@@ -161,6 +161,7 @@ const PHOTO_DETECTED_MAX_ITEMS = 6;
 const PHOTO_DETECTED_MIN_CONFIDENCE = 0.08;
 const PHOTO_UNCERTAIN_CODE = 'PHOTO_ANALYSIS_UNCERTAIN';
 const DELETE_UNDO_WINDOW_MS = 5000;
+const MAX_VISIBLE_AUTOCOMPLETE_ITEMS = 6;
 
 const NUMERIC_BARCODE_TYPE_HINTS = [
   'ean13',
@@ -790,7 +791,7 @@ export function NutritionScreen() {
   const resolveSuggestionMessage = (items: NutritionSuggestion[]) =>
     items.length
       ? 'Choose a result to fill calories, macros, and fiber.'
-      : 'No matches yet. Keep typing or use your query as a custom item.';
+      : 'No results found';
 
   const focusAddFoodForm = (target: 'search' | 'name' = 'search') => {
     requestAnimationFrame(() => {
@@ -837,8 +838,12 @@ export function NutritionScreen() {
     setSelectedServingId(null);
     autofillBaselineRef.current = null;
     wrongAutofillTrackedRef.current = false;
+    setSearchQuery('');
     setEntryForm(EMPTY_ENTRY_FORM);
-    focusAddFoodForm('search');
+    clearSuggestions(
+      'Choose a result to fill the form. Typing alone will not replace the current item.'
+    );
+    focusAddFoodForm(addFoodMode === 'manual' ? 'name' : 'search');
   };
   const clearSuggestions = (message?: string, kind: SuggestionStatusKind = 'info') => {
     if (suggestionTimerRef.current) {
@@ -1197,7 +1202,7 @@ export function NutritionScreen() {
   };
 
   const enterCustomMode = () => {
-    if (!entryForm.name.trim() && searchQuery.trim()) {
+    if (searchQuery.trim()) {
       commitManualSearchQuery();
       return;
     }
@@ -1290,7 +1295,7 @@ export function NutritionScreen() {
       commitManualSearchQuery();
       return;
     }
-    if (entryForm.name.trim()) {
+    if (selectedSuggestion && entryForm.name.trim()) {
       void handleAddEntry();
     }
   };
@@ -1428,6 +1433,10 @@ export function NutritionScreen() {
     const trimmedBarcode = entryForm.barcode.trim();
     if (!trimmedName && !trimmedBarcode && !entryForm.photoData) {
       setEntryFeedback('Enter a food name, barcode, or meal photo before logging.');
+      return;
+    }
+    if (addFoodMode === 'search' && !selectedSuggestion) {
+      setEntryFeedback('Choose a suggestion or commit a custom item before logging.');
       return;
     }
     const feedbackSnapshot = buildComposerLogFeedback(
@@ -2007,9 +2016,25 @@ export function NutritionScreen() {
     quantityAmount && entryForm.weightUnit.trim()
       ? resolveInlineQuantityStep(quantityAmount, entryForm.weightUnit.trim())
       : null;
+  const visibleAutocompleteItems = autocompleteItems.slice(0, MAX_VISIBLE_AUTOCOMPLETE_ITEMS);
+  const hasSelectedSuggestion = Boolean(selectedSuggestion);
+  const isReplacingSelectedSuggestion =
+    addFoodMode === 'search' && hasSelectedSuggestion && Boolean(trimmedSearchQuery);
+  const hasSelectedServing =
+    typeof selectedSuggestion?.serving === 'string' && selectedSuggestion.serving.trim().length > 0;
+  const hasValidQuantity =
+    typeof quantityAmount === 'number' &&
+    Number.isFinite(quantityAmount) &&
+    quantityAmount > 0 &&
+    Boolean(entryForm.weightUnit.trim());
+  const shouldShowSelectedItemCard = hasSelectedSuggestion && !isReplacingSelectedSuggestion;
+  const shouldShowMacroPreview =
+    hasSelectedSuggestion && !isReplacingSelectedSuggestion && (hasSelectedServing || hasValidQuantity);
+  const shouldShowSuggestionStatus =
+    suggestionStatusKind === 'error' || (Boolean(trimmedSearchQuery) && suggestions.length === 0);
   const canInstantLog =
     addFoodMode === 'search'
-      ? Boolean(entryForm.name.trim()) && !trimmedSearchQuery
+      ? Boolean(selectedSuggestion && entryForm.name.trim()) && !trimmedSearchQuery
       : addFoodMode === 'manual'
         ? Boolean(entryForm.name.trim())
         : false;
@@ -2052,8 +2077,8 @@ export function NutritionScreen() {
           </View>
         ) : null}
       </View>
-      {autocompleteItems.length ? (
-        autocompleteItems.map((item, index) => (
+      {visibleAutocompleteItems.length ? (
+        visibleAutocompleteItems.map((item, index) => (
           <TouchableOpacity
             key={item.id}
             style={[
@@ -2090,6 +2115,17 @@ export function NutritionScreen() {
           {suggestionStatus}
         </AppText>
       )}
+      {visibleAutocompleteItems.length && shouldShowSuggestionStatus ? (
+        <AppText
+          variant="muted"
+          style={[
+            styles.suggestionEmpty,
+            suggestionStatusKind === 'error' ? styles.suggestionEmptyError : null,
+          ]}
+        >
+          {suggestionStatus}
+        </AppText>
+      ) : null}
     </View>
   );
 
@@ -2136,9 +2172,10 @@ export function NutritionScreen() {
   };
 
   const renderSelectedItemCard = () => {
-    if (!entryForm.name.trim()) {
+    if (!selectedSuggestion) {
       return null;
     }
+    const title = entryForm.name.trim() || selectedSuggestion.name;
     return (
       <View style={styles.selectedItemCard}>
         <View style={styles.selectedItemHeader}>
@@ -2147,7 +2184,7 @@ export function NutritionScreen() {
               Ready To Log
             </AppText>
             <AppText variant="body" weight="semibold" style={styles.selectedItemTitle}>
-              {entryForm.name}
+              {title}
             </AppText>
             <AppText variant="muted" style={styles.selectedItemMeta}>
               {[selectedSuggestion?.source || 'Custom item', selectedSuggestion?.serving]
@@ -2172,12 +2209,14 @@ export function NutritionScreen() {
                 </AppText>
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity style={styles.selectedItemAction} onPress={enterCustomMode} activeOpacity={0.8}>
-              <Ionicons name="create-outline" size={16} color={colors.accent} />
-              <AppText variant="label" style={[styles.selectedItemActionText, styles.selectedItemActionAccent]}>
-                Custom
-              </AppText>
-            </TouchableOpacity>
+            {selectedSuggestion && !isManualSuggestion(selectedSuggestion) ? (
+              <TouchableOpacity style={styles.selectedItemAction} onPress={enterCustomMode} activeOpacity={0.8}>
+                <Ionicons name="create-outline" size={16} color={colors.accent} />
+                <AppText variant="label" style={[styles.selectedItemActionText, styles.selectedItemActionAccent]}>
+                  Custom
+                </AppText>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity style={styles.selectedItemAction} onPress={clearCommittedItem} activeOpacity={0.8}>
               <Ionicons name="refresh-outline" size={16} color={colors.muted} />
               <AppText variant="label" style={styles.selectedItemActionText}>
@@ -2564,24 +2603,26 @@ export function NutritionScreen() {
   );
 
   const renderMacroPreviewRow = () => (
-    <View style={styles.composerMacroRow}>
-      {composerMacroPreview.map((item) => (
-        <View
-          key={item.key}
-          style={[
-            styles.composerMacroPill,
-            { backgroundColor: item.background, borderColor: item.border },
-          ]}
-        >
-          <AppText variant="label" style={[styles.composerMacroPillLabel, { color: item.accent }]}>
-            {item.label}
-          </AppText>
-          <AppText variant="body" weight="semibold" style={styles.composerMacroPillValue}>
-            {item.value}
-          </AppText>
-        </View>
-      ))}
-    </View>
+    shouldShowMacroPreview ? (
+      <View style={styles.composerMacroRow}>
+        {composerMacroPreview.map((item) => (
+          <View
+            key={item.key}
+            style={[
+              styles.composerMacroPill,
+              { backgroundColor: item.background, borderColor: item.border },
+            ]}
+          >
+            <AppText variant="label" style={[styles.composerMacroPillLabel, { color: item.accent }]}>
+              {item.label}
+            </AppText>
+            <AppText variant="body" weight="semibold" style={styles.composerMacroPillValue}>
+              {item.value}
+            </AppText>
+          </View>
+        ))}
+      </View>
+    ) : null
   );
 
   const renderComposerActions = () => (
@@ -2625,8 +2666,8 @@ export function NutritionScreen() {
           ref={searchInputRef}
           value={searchQuery}
           onChangeText={handleSearchQueryChange}
-          onKeyPress={(event) => handleSearchComposerKeyPress(event, autocompleteItems)}
-          onSubmitEditing={() => handleSearchComposerSubmit(autocompleteItems)}
+          onKeyPress={(event) => handleSearchComposerKeyPress(event, visibleAutocompleteItems)}
+          onSubmitEditing={() => handleSearchComposerSubmit(visibleAutocompleteItems)}
           placeholder={
             entryForm.name.trim()
               ? `Search to replace ${entryForm.name}`
@@ -2648,8 +2689,8 @@ export function NutritionScreen() {
               !trimmedSearchQuery && !canInstantLog ? styles.composerPrimaryButtonDisabled : null,
             ]}
             onPress={() => {
-              if (highlightedSuggestionIndex >= 0 && autocompleteItems[highlightedSuggestionIndex]) {
-                applyAutocompleteItem(autocompleteItems[highlightedSuggestionIndex]);
+              if (highlightedSuggestionIndex >= 0 && visibleAutocompleteItems[highlightedSuggestionIndex]) {
+                applyAutocompleteItem(visibleAutocompleteItems[highlightedSuggestionIndex]);
                 return;
               }
               if (trimmedSearchQuery) {
@@ -2667,7 +2708,7 @@ export function NutritionScreen() {
               name={
                 canInstantLog
                   ? 'checkmark'
-                  : highlightedSuggestionIndex >= 0 && autocompleteItems[highlightedSuggestionIndex]
+                  : highlightedSuggestionIndex >= 0 && visibleAutocompleteItems[highlightedSuggestionIndex]
                     ? 'return-up-forward-outline'
                     : 'create-outline'
               }
@@ -2992,7 +3033,7 @@ export function NutritionScreen() {
         {addFoodMode === 'search' ? (
           <>
             {renderSearchComposer()}
-            {renderSelectedItemCard()}
+            {shouldShowSelectedItemCard ? renderSelectedItemCard() : null}
             {trimmedSearchQuery || suggestionLoading || suggestionStatusKind === 'error' ? renderSuggestionPanel() : null}
             {renderComposerActions()}
             {photoDetectedFoods.length ? (
@@ -3127,7 +3168,7 @@ export function NutritionScreen() {
         {addFoodMode === 'manual' ? (
           <>
             {renderCustomComposer()}
-            {selectedSuggestion && !isManualSuggestion(selectedSuggestion) ? renderSelectedItemCard() : null}
+            {shouldShowSelectedItemCard ? renderSelectedItemCard() : null}
             {renderMacroInputFields()}
             <View style={styles.composerActionRow}>
               <TouchableOpacity
