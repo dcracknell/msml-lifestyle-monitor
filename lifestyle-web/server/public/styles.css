@@ -3806,30 +3806,35 @@ li.pending-delete { opacity: 0.38; pointer-events: none; transition: opacity 0.2
 }
 
 .btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 6px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: .04em;
+  letter-spacing: .03em;
   cursor: pointer;
-  transition: opacity .15s, transform .1s;
-  border: none;
+  transition: border-color .12s, background .12s, opacity .12s, transform .1s;
 }
 
-.btn-sm:hover { opacity: .85; transform: translateY(-1px); }
-.btn-sm:active { opacity: 1; transform: none; }
-.btn-sm:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.btn-sm:hover { transform: translateY(-1px); }
+.btn-sm:active { transform: none; }
+.btn-sm:disabled { opacity: .4; cursor: not-allowed; transform: none; }
 
 .btn-primary {
-  background: var(--teal, #2dd4bf);
-  color: #0d1f2d;
+  background: var(--teal);
+  color: #000;
+  border: none;
 }
+.btn-primary:hover { opacity: .88; }
 
 .btn-secondary {
-  background: rgba(255,255,255,0.08);
-  color: var(--text, #e2e8f0);
-  border: 1px solid rgba(255,255,255,0.12);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
 }
+.btn-secondary:hover { border-color: var(--border-2); background: var(--surface-2); }
 
 .ppg-status-text {
   font-size: 13px;
