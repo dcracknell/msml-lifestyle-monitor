@@ -16,6 +16,91 @@ const androidPackage =
   process.env.ANDROID_PACKAGE ||
   'com.dcracknell.msml.lifestyle';
 const appleTeamId = process.env.APPLE_TEAM_ID;
+const widgetsEnabled = process.env.MSML_DISABLE_WIDGETS !== '1';
+const appleHealthEnabled = process.env.MSML_DISABLE_HEALTHKIT !== '1';
+
+const plugins = [
+  'expo-secure-store',
+  'expo-font',
+  'expo-web-browser',
+  widgetsEnabled
+    ? [
+        'expo-widgets',
+        {
+          widgets: [
+            {
+              name: 'ActivityProgressWidget',
+              displayName: 'Weekly Progress',
+              description: 'See weekly activity goal progress on your Lock Screen.',
+              supportedFamilies: [
+                'systemSmall',
+                'systemMedium',
+                'accessoryCircular',
+                'accessoryRectangular',
+                'accessoryInline',
+              ],
+            },
+            {
+              name: 'CurrentRunWidget',
+              displayName: 'Current Run',
+              description: 'See live distance, pace, and elapsed time for your current or latest run.',
+              supportedFamilies: [
+                'systemSmall',
+                'systemMedium',
+                'accessoryCircular',
+                'accessoryRectangular',
+                'accessoryInline',
+              ],
+            },
+            {
+              name: 'DailyCaloriesWidget',
+              displayName: 'Daily Calories',
+              description: 'Track today’s calorie progress from the Home or Lock Screen.',
+              supportedFamilies: [
+                'systemSmall',
+                'systemMedium',
+                'accessoryCircular',
+                'accessoryRectangular',
+                'accessoryInline',
+              ],
+            },
+          ],
+        },
+      ]
+    : null,
+  [
+    'expo-notifications',
+    {
+      icon: './assets/icon.png',
+      color: '#00d2a5',
+      sounds: [],
+    },
+  ],
+  [
+    'expo-location',
+    {
+      locationWhenInUsePermission:
+        'Allow MSML Lifestyle to track route distance and pace during your workouts.',
+      locationAlwaysAndWhenInUsePermission:
+        'Allow MSML Lifestyle to keep tracking route distance and pace while the app is in the background.',
+      isIosBackgroundLocationEnabled: true,
+      isAndroidBackgroundLocationEnabled: true,
+    },
+  ],
+  [
+    'expo-image-picker',
+    {
+      photosPermission: 'Allow MSML Lifestyle to attach meal photos from your library.',
+      cameraPermission: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
+    },
+  ],
+  [
+    'expo-camera',
+    {
+      cameraPermission: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
+    },
+  ],
+].filter(Boolean);
 
 export default ({ config }) => ({
   ...config,
@@ -41,9 +126,13 @@ export default ({ config }) => ({
     bundleIdentifier: iosBundleIdentifier,
     icon: './assets/icon.png',
     ...(appleTeamId ? { appleTeamId } : {}),
-    entitlements: {
-      'com.apple.developer.healthkit': true,
-    },
+    ...(appleHealthEnabled
+      ? {
+          entitlements: {
+            'com.apple.developer.healthkit': true,
+          },
+        }
+      : {}),
     infoPlist: {
       NSBluetoothAlwaysUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
       NSBluetoothPeripheralUsageDescription: 'Allow MSML Lifestyle to connect to Bluetooth health sensors.',
@@ -93,88 +182,11 @@ export default ({ config }) => ({
   web: {
     favicon: './assets/icon.png',
   },
-  plugins: [
-    'expo-secure-store',
-    'expo-font',
-    'expo-web-browser',
-    [
-      'expo-widgets',
-      {
-        widgets: [
-          {
-            name: 'ActivityProgressWidget',
-            displayName: 'Weekly Progress',
-            description: 'See weekly activity goal progress on your Lock Screen.',
-            supportedFamilies: [
-              'systemSmall',
-              'systemMedium',
-              'accessoryCircular',
-              'accessoryRectangular',
-              'accessoryInline',
-            ],
-          },
-          {
-            name: 'CurrentRunWidget',
-            displayName: 'Current Run',
-            description: 'See live distance, pace, and elapsed time for your current or latest run.',
-            supportedFamilies: [
-              'systemSmall',
-              'systemMedium',
-              'accessoryCircular',
-              'accessoryRectangular',
-              'accessoryInline',
-            ],
-          },
-          {
-            name: 'DailyCaloriesWidget',
-            displayName: 'Daily Calories',
-            description: 'Track today’s calorie progress from the Home or Lock Screen.',
-            supportedFamilies: [
-              'systemSmall',
-              'systemMedium',
-              'accessoryCircular',
-              'accessoryRectangular',
-              'accessoryInline',
-            ],
-          },
-        ],
-      },
-    ],
-    [
-      'expo-notifications',
-      {
-        icon: './assets/icon.png',
-        color: '#00d2a5',
-        sounds: [],
-      },
-    ],
-    [
-      'expo-location',
-      {
-        locationWhenInUsePermission:
-          'Allow MSML Lifestyle to track route distance and pace during your workouts.',
-        locationAlwaysAndWhenInUsePermission:
-          'Allow MSML Lifestyle to keep tracking route distance and pace while the app is in the background.',
-        isIosBackgroundLocationEnabled: true,
-        isAndroidBackgroundLocationEnabled: true,
-      },
-    ],
-    [
-      'expo-image-picker',
-      {
-        photosPermission: 'Allow MSML Lifestyle to attach meal photos from your library.',
-        cameraPermission: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
-      },
-    ],
-    [
-      'expo-camera',
-      {
-        cameraPermission: 'Allow MSML Lifestyle to capture meals and scan nutrition barcodes.',
-      },
-    ],
-  ],
+  plugins,
   extra: {
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL || 'https://www.msmls.org',
+    appleHealthEnabled,
+    widgetsEnabled,
     webAppOrigin: process.env.EXPO_PUBLIC_WEB_APP_ORIGIN || 'https://www.msmls.org',
   },
 });

@@ -119,6 +119,24 @@ function run(command, args) {
   }
 }
 
+function applyDeviceBuildEnv(syncEnv) {
+  const forwardedKeys = [
+    'APPLE_TEAM_ID',
+    'MSML_IOS_FOR_DEVICE_BUILD',
+    'MSML_DISABLE_WIDGETS',
+    'MSML_DISABLE_HEALTHKIT',
+    'EXPO_WIDGETS_DISABLE_APP_GROUPS',
+  ];
+
+  for (const key of forwardedKeys) {
+    if (syncEnv[key]) {
+      process.env[key] = syncEnv[key];
+    } else {
+      delete process.env[key];
+    }
+  }
+}
+
 function runStreaming(command, args, options = {}) {
   const { cwd = projectRoot, env = process.env, outputLimit = 200000 } = options;
   console.log(`$ ${command} ${args.map(quoteArg).join(' ')}`);
@@ -416,6 +434,10 @@ function isBusyDestinationBuildError(output) {
   );
 }
 
+function isProvisioningAccountBuildError(output) {
+  return /No Accounts:\s*Add a new account in Accounts settings\./i.test(output);
+}
+
 async function buildForDevice(deviceUdid, deviceName, buildArgs) {
   const maxAttempts = 3;
 
@@ -444,6 +466,14 @@ async function buildForDevice(deviceUdid, deviceName, buildArgs) {
       fail(
         `${deviceName} stayed busy while Xcode was trying to connect.\n` +
           `Unlock the phone, keep it awake on the home screen, leave it plugged in, then rerun the same command.`
+      );
+    }
+
+    if (isProvisioningAccountBuildError(result.output)) {
+      fail(
+        'The Personal Team-compatible build is ready, but Xcode still has no usable Apple account/profile for signing on this Mac.\n' +
+          'Open Xcode > Settings > Accounts, sign in or refresh your Apple ID, then retry the same command.\n' +
+          'If the account already appears there, open ios/MSMLLifestyle.xcworkspace in Xcode once, select your iPhone, and let Xcode finish creating the development profile before rerunning the launcher.'
       );
     }
 
@@ -501,7 +531,11 @@ async function ensureEmbeddedBundleReady({
   console.log(
     'Embedded Debug JS bundle is missing after the build. Repairing the native bundle setup and rebuilding once before install...'
   );
-  syncIosNative(process.env);
+  const syncEnv = syncIosNative({
+    ...process.env,
+    MSML_IOS_FOR_DEVICE_BUILD: '1',
+  });
+  applyDeviceBuildEnv(syncEnv || {});
 
   const repairPreflightIssues = getDebugBundlePreflightIssues();
   if (repairPreflightIssues.length > 0) {
@@ -700,7 +734,11 @@ async function main() {
   let buildArgs = null;
 
   if (!options.noBuild) {
-    syncIosNative(process.env);
+    const syncEnv = syncIosNative({
+      ...process.env,
+      MSML_IOS_FOR_DEVICE_BUILD: '1',
+    });
+    applyDeviceBuildEnv(syncEnv || {});
 
     buildArgs = [
       '-workspace',

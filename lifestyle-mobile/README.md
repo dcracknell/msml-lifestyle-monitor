@@ -136,6 +136,8 @@ The default iOS scripts now use the embedded `main.jsbundle` in Debug builds, so
 
 If you're building straight onto a physical iPhone, `npm run ios:device` now builds, installs, and launches from the embedded bundle by default.
 
+When that helper detects a free Xcode Personal Team, it switches to a Personal-Team-safe native build by disabling widget extensions and HealthKit for that device build. Apple’s free Personal Team signing does not support the full capability set this app uses. Rebuild with an Apple Developer Program team when you need widgets or Apple Health on-device.
+
 After the first successful device install, you usually do not need to rebuild native code for JS-only changes. Use the faster launch-only path to reuse the installed dev build:
 
 ```bash

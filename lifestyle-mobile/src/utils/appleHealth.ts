@@ -4,6 +4,7 @@ import {
   AppleHealthQuantitySample,
   AppleHealthWorkoutSample,
 } from '../features/profile/appleHealthImport';
+import { APPLE_HEALTH_ENABLED } from '../config/env';
 
 type AppleHealthCallback<T> = (error?: unknown, results?: T) => void;
 type AppleHealthReadOptions = { startDate: string; endDate: string; [key: string]: unknown };
@@ -64,11 +65,12 @@ const APPLE_HEALTH_READ_PERMISSIONS = [
   'Workout',
 ];
 
-const APPLE_HEALTH_MISSING_MESSAGE =
-  'Apple Health sync is unavailable in this build. Install `react-native-health`, enable HealthKit in Xcode, and rebuild the iOS app.';
+const APPLE_HEALTH_MISSING_MESSAGE = APPLE_HEALTH_ENABLED
+  ? 'Apple Health sync is unavailable in this build. Install `react-native-health`, enable HealthKit in Xcode, and rebuild the iOS app.'
+  : 'Apple Health sync is disabled for this Personal Team device build so the app can be signed. Use an Apple Developer Program team and rebuild the iOS app to re-enable it.';
 
 function getNativeAppleHealthModule(): NativeAppleHealthModule | null {
-  if (Platform.OS !== 'ios') {
+  if (Platform.OS !== 'ios' || !APPLE_HEALTH_ENABLED) {
     return null;
   }
   const module = (NativeModules as { AppleHealthKit?: NativeAppleHealthModule }).AppleHealthKit;

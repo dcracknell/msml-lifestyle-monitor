@@ -211,8 +211,8 @@ function withAppleTeamId(env) {
   };
 }
 
-function withPersonalTeamWidgetFallback(env) {
-  if (!env.APPLE_TEAM_ID) {
+function withPersonalTeamDeviceCapabilityFallbacks(env) {
+  if (env.MSML_IOS_FOR_DEVICE_BUILD !== '1' || !env.APPLE_TEAM_ID) {
     return env;
   }
 
@@ -220,8 +220,13 @@ function withPersonalTeamWidgetFallback(env) {
     return env;
   }
 
+  console.log(
+    'Using Personal Team device-build fallback: disabling widgets and HealthKit so Xcode can sign the app.'
+  );
   return {
     ...env,
+    MSML_DISABLE_WIDGETS: '1',
+    MSML_DISABLE_HEALTHKIT: '1',
     EXPO_WIDGETS_DISABLE_APP_GROUPS: '1',
   };
 }
@@ -253,11 +258,13 @@ function ensurePlistFile(filePath, plistObject = {}) {
   fs.writeFileSync(filePath, plist.build(plistObject), 'utf8');
 }
 
-function stripUnsupportedWidgetCapabilities(teamId, env = process.env) {
+function stripUnsupportedPersonalTeamCapabilities(teamId, env = process.env) {
   if (!isFreeProvisioningTeam(teamId)) {
     return;
   }
 
+  const widgetsDisabled = env.MSML_DISABLE_WIDGETS === '1';
+  const healthKitDisabled = env.MSML_DISABLE_HEALTHKIT === '1';
   const bundleIdentifier = getIosBundleIdentifier(env);
   const widgetKeychainAccessGroup = `${teamId}.${bundleIdentifier}.widgets`;
   const appEntitlementsPath = path.join(iosRoot, 'MSMLLifestyle', 'MSMLLifestyle.entitlements');
@@ -265,47 +272,81 @@ function stripUnsupportedWidgetCapabilities(teamId, env = process.env) {
   const appInfoPlistPath = path.join(iosRoot, 'MSMLLifestyle', 'Info.plist');
   const widgetInfoPlistPath = path.join(iosRoot, 'ExpoWidgetsTarget', 'Info.plist');
 
-  ensurePlistFile(appEntitlementsPath, {
-    'com.apple.developer.healthkit': true,
-    'keychain-access-groups': [widgetKeychainAccessGroup],
-  });
-  ensurePlistFile(widgetEntitlementsPath, {
-    'keychain-access-groups': [widgetKeychainAccessGroup],
-  });
+  ensurePlistFile(appEntitlementsPath, {});
+  if (!widgetsDisabled) {
+    ensurePlistFile(widgetEntitlementsPath, {});
+  }
 
   let changedFiles = 0;
 
-  for (const entitlementsPath of [appEntitlementsPath, widgetEntitlementsPath]) {
-    if (
-      updatePlistFile(entitlementsPath, (entitlements) => {
-        delete entitlements['aps-environment'];
-        delete entitlements['com.apple.security.application-groups'];
+  if (
+    updatePlistFile(appEntitlementsPath, (entitlements) => {
+      delete entitlements['aps-environment'];
+      delete entitlements['com.apple.security.application-groups'];
+
+      if (healthKitDisabled) {
+        delete entitlements['com.apple.developer.healthkit'];
+      }
+
+      if (widgetsDisabled) {
+        delete entitlements['keychain-access-groups'];
+      } else {
         entitlements['keychain-access-groups'] = [widgetKeychainAccessGroup];
-        if (entitlementsPath === appEntitlementsPath) {
-          entitlements['com.apple.developer.healthkit'] = true;
-        }
-        return entitlements;
-      })
-    ) {
-      changedFiles += 1;
-    }
+      }
+
+      return entitlements;
+    })
+  ) {
+    changedFiles += 1;
   }
 
-  for (const infoPlistPath of [appInfoPlistPath, widgetInfoPlistPath]) {
-    if (
-      updatePlistFile(infoPlistPath, (infoPlist) => {
+  if (
+    !widgetsDisabled &&
+    updatePlistFile(widgetEntitlementsPath, (entitlements) => {
+      delete entitlements['aps-environment'];
+      delete entitlements['com.apple.security.application-groups'];
+      entitlements['keychain-access-groups'] = [widgetKeychainAccessGroup];
+      return entitlements;
+    })
+  ) {
+    changedFiles += 1;
+  }
+
+  if (
+    updatePlistFile(appInfoPlistPath, (infoPlist) => {
+      if (widgetsDisabled) {
+        delete infoPlist.ExpoWidgetsAppGroupIdentifier;
+        delete infoPlist.ExpoWidgetsKeychainAccessGroup;
+      } else {
         infoPlist.ExpoWidgetsKeychainAccessGroup = widgetKeychainAccessGroup;
-        return infoPlist;
-      })
-    ) {
-      changedFiles += 1;
-    }
+      }
+      return infoPlist;
+    })
+  ) {
+    changedFiles += 1;
+  }
+
+  if (
+    !widgetsDisabled &&
+    updatePlistFile(widgetInfoPlistPath, (infoPlist) => {
+      infoPlist.ExpoWidgetsKeychainAccessGroup = widgetKeychainAccessGroup;
+      return infoPlist;
+    })
+  ) {
+    changedFiles += 1;
   }
 
   if (changedFiles > 0) {
-    console.log(
-      `Stripped unsupported Personal Team widget capabilities and enabled shared keychain fallback via ${widgetKeychainAccessGroup}.`
-    );
+    const adjustments = [];
+    if (widgetsDisabled) {
+      adjustments.push('widget extensions');
+    } else {
+      adjustments.push(`widget capabilities via ${widgetKeychainAccessGroup}`);
+    }
+    if (healthKitDisabled) {
+      adjustments.push('HealthKit');
+    }
+    console.log(`Adjusted Personal Team signing fallbacks for ${adjustments.join(' and ')}.`);
   }
 }
 
@@ -850,9 +891,9 @@ function clearLegacyExpoCaches() {
   removeDuplicateEntriesInDirectory(expoRoot);
 }
 
-function syncIosNative(overrides = {}) {
-  const env = withUtf8Locale(
-    withPersonalTeamWidgetFallback(
+function createIosSyncEnv(overrides = {}) {
+  return withUtf8Locale(
+    withPersonalTeamDeviceCapabilityFallbacks(
       withAppleTeamId({
         ...process.env,
         ...overrides,
@@ -861,10 +902,14 @@ function syncIosNative(overrides = {}) {
       })
     )
   );
+}
+
+function syncIosNative(overrides = {}) {
+  const env = createIosSyncEnv(overrides);
 
   if (env.MSML_SKIP_IOS_NATIVE_SYNC === '1') {
     console.log('Skipping iOS native sync because MSML_SKIP_IOS_NATIVE_SYNC=1.');
-    return;
+    return env;
   }
 
   // expo-widgets duplicates widget file references on incremental prebuilds in this Expo 54 setup,
@@ -885,7 +930,7 @@ function syncIosNative(overrides = {}) {
   ensureExpoWidgetsImportCompatibility();
   ensureDebugBundleFallbackInAppDelegate();
   ensureDebugBundlingOverrides();
-  stripUnsupportedWidgetCapabilities(env.APPLE_TEAM_ID, env);
+  stripUnsupportedPersonalTeamCapabilities(env.APPLE_TEAM_ID, env);
   run('pod', ['install'], { cwd: iosRoot, env });
   // Expo autolinking removes `.xcode.env.updates` unless EX_UPDATES_NATIVE_DEBUG is set,
   // so restore our Debug bundling override after Pods finish.
@@ -897,6 +942,8 @@ function syncIosNative(overrides = {}) {
       `Embedded-bundle preflight failed after iOS sync:\n- ${debugBundlePreflightIssues.join('\n- ')}`
     );
   }
+
+  return env;
 }
 
 if (require.main === module) {
@@ -909,6 +956,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  createIosSyncEnv,
   detectAppleTeamId,
   getDebugBundlePreflightIssues,
   isFreeProvisioningTeam,

@@ -3,6 +3,8 @@ import Constants from 'expo-constants';
 
 type Extra = {
   apiBaseUrl?: string;
+  appleHealthEnabled?: boolean;
+  widgetsEnabled?: boolean;
   webAppOrigin?: string;
 };
 
@@ -57,6 +59,10 @@ function resolveBaseUrl() {
 }
 
 export const API_BASE_URL = resolveBaseUrl();
+
+export const APPLE_HEALTH_ENABLED = runtimeExtra.appleHealthEnabled !== false;
+
+export const WIDGETS_ENABLED = runtimeExtra.widgetsEnabled !== false;
 
 export const WEB_APP_ORIGIN =
   process.env.EXPO_PUBLIC_WEB_APP_ORIGIN || runtimeExtra.webAppOrigin || API_BASE_URL;
