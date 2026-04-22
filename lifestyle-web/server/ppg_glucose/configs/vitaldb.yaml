@@ -1,0 +1,35 @@
+# VitalDB PPG-Glucose Pipeline Configuration
+# ============================================
+# This file defines all dataset-specific settings.
+# The generalizable pipeline (Section B) reads from this config
+# so it works identically regardless of dataset.
+
+dataset_name: vitaldb
+data_dir: data/vitaldb              # folder containing .npy and .csv files
+output_dir: outputs                 # all results saved here
+
+# --- File names (inside data_dir) ---
+glucose_file: final_glucose.csv     # columns: caseid, glucose_time_sec, name, glucose_mg_dl
+demographics_file: selected_demographics.csv
+download_log_file: download_log.csv
+cases_file: final_cases.csv
+
+# --- PPG signal settings ---
+ppg_sampling_rate: 500              # Hz (VitalDB SNUADC/PLETH)
+ppg_file_pattern: "ppg/{caseid}.npy"    # one .npy per case, named by caseid
+
+# --- Preprocessing ---
+bandpass_low: 0.5                   # Hz — removes baseline wander
+bandpass_high: 8.0                  # Hz — removes high-freq noise
+bandpass_order: 4                   # Butterworth filter order
+window_minutes: 15                  # current PPG window before glucose timestamp
+lag_minutes: 15                     # lagged window: [t-30min, t-15min]
+min_coverage: 0.80                  # reject windows with <80% valid samples
+
+# --- Feature extraction ---
+max_imfs: 7                         # max IMFs for EMD (Satter paper uses 7)
+n_top_features: 50                  # number of features to select
+
+# --- Subjects (20 surgical cases) ---
+subjects: [184, 241, 626, 750, 1004, 1157, 1327, 1407, 1492, 1558,
+           1803, 2160, 3146, 3255, 3962, 4245, 4251, 4670, 5311, 6337]

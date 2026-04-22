@@ -1,0 +1,26 @@
+# Core pipeline dependencies
+numpy
+pandas
+scipy
+scikit-learn
+EMD-signal
+catboost
+xgboost
+lightgbm
+matplotlib
+seaborn
+pyyaml
+pyarrow
+
+# SQL integration (SQLAlchemy supports PostgreSQL, MySQL, SQLite)
+sqlalchemy>=2.0
+
+# PostgreSQL driver (install if using PostgreSQL)
+psycopg2-binary
+
+# MySQL driver (install if using MySQL/MariaDB)
+pymysql
+cryptography
+
+# Testing
+pytest>=7.0

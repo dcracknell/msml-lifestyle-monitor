@@ -1,0 +1,12 @@
+numpy
+pandas
+scipy
+scikit-learn
+EMD-signal
+catboost
+xgboost
+lightgbm
+matplotlib
+seaborn
+pyyaml
+pyarrow
