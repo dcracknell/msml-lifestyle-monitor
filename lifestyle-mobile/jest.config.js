@@ -10,4 +10,7 @@ module.exports = {
   transform: {
     '^.+\\.(ts|tsx)$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.jest.json' }],
   },
+  moduleNameMapper: {
+    '^expo-constants$': '<rootDir>/src/__mocks__/expo-constants.ts',
+  },
 };
