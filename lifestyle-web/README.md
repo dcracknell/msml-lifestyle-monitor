@@ -119,7 +119,7 @@ The client stores that value in `localStorage` under `msml.api.base-url` and reu
 | `PASSWORD_ENCRYPTION_KEY` | Secret used to derive the AES-256-GCM key that encrypts stored password digests | `msml-lifestyle-monitor-passwords` |
 | `DB_STORAGE_DIR` | Optional override for writable SQLite directory | `./database/storage` |
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
-| `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference | `python` |
+| `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference. Local dev auto-detects `.venv/bin/python`, then `python3`, then `python`. | auto |
 | `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/nut_estimator.py` |
 | `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/checkpoint/canet_NUT.pth` |
 | `NUT_MODEL_LABELS` | Optional path to a custom FoodSeg103 label map JSON (built-in labels are used if omitted) | — |
@@ -277,7 +277,7 @@ This deletes `database/storage/lifestyle_monitor.db*`, replays the SQL seed, and
 The nutrition route can now accept a photo-only payload and create a food-register entry from the server-side NUT model. To enable that path:
 ```bash
 cd lifestyle-web/server
-python -m pip install -r NUT_model/requirements.txt
+python3 -m pip install -r NUT_model/requirements.txt
 npm run check:nut-model
 ```
 To run inference on a single test image (and verify the model is reading your files correctly), use:

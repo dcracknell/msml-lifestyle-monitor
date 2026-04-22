@@ -19,7 +19,7 @@
     "restart": "node scripts/kill-port.js && node src/server.js",
     "prereset": "node scripts/ensure-native-deps.js",
     "reset": "node scripts/reset-db.js && node scripts/kill-port.js && node src/server.js",
-    "check:nut-model": "bash -lc 'PY=\"${NUT_MODEL_PYTHON_BIN:-}\"; if [ -z \"$PY\" ]; then if [ -x NUT_model/.venv/bin/python ]; then PY=\"NUT_model/.venv/bin/python\"; else PY=\"python\"; fi; fi; \"$PY\" NUT_model/nut_estimator.py --self-check --model NUT_model/checkpoint/canet_NUT.pth'"
+    "check:nut-model": "bash ./scripts/check-nut-model.sh"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",

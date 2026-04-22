@@ -3,6 +3,7 @@ const fsSync = require('fs');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const { resolvePythonRuntime } = require('../utils/resolve-python-runtime');
 
 function parseIntegerEnv(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
   const parsed = Number.parseInt(value, 10);
@@ -54,13 +55,12 @@ const LOCAL_VENV_WINDOWS_PYTHON = path.resolve(
   'Scripts',
   'python.exe'
 );
-const DEFAULT_PYTHON_BIN =
-  process.env.NUT_MODEL_PYTHON_BIN ||
-  (fsSync.existsSync(LOCAL_VENV_PYTHON)
-    ? LOCAL_VENV_PYTHON
-    : fsSync.existsSync(LOCAL_VENV_WINDOWS_PYTHON)
-      ? LOCAL_VENV_WINDOWS_PYTHON
-      : 'python');
+const DEFAULT_PYTHON_BIN = resolvePythonRuntime({
+  envOverride: process.env.NUT_MODEL_PYTHON_BIN,
+  localVenvPython: LOCAL_VENV_PYTHON,
+  localVenvWindowsPython: LOCAL_VENV_WINDOWS_PYTHON,
+  existsSync: fsSync.existsSync,
+});
 const DEFAULT_SCRIPT_PATH =
   process.env.NUT_MODEL_SCRIPT ||
   path.resolve(__dirname, '..', '..', 'NUT_model', 'nut_estimator.py');
