@@ -1193,6 +1193,10 @@ function markStartupReady() {
   appLoadingScreen?.classList.add('hidden');
 }
 
+// Failsafe: if something in the startup chain hangs or throws before
+// markStartupReady is reached, forcibly clear the loading screen after 10s.
+setTimeout(markStartupReady, 10000);
+
 function decodeBase64Sample(value) {
   if (!value || typeof value !== 'string') {
     return null;
@@ -8176,11 +8180,7 @@ async function completeAuthentication(session) {
   dashboard.classList.remove('hidden');
 
   await fetchRoster();
-  await loadMetrics();
-  await loadNutrition();
-  await loadActivity();
-  await loadVitals();
-  await loadWeight();
+  await Promise.all([loadMetrics(), loadNutrition(), loadActivity(), loadVitals(), loadWeight()]);
   setWeightDateDefault();
 
   queueChartResize();
