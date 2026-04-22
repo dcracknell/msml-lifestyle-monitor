@@ -791,4 +791,27 @@ function ensureSensorStreamTables() {
 
 ensureSensorStreamTables();
 
+function ensureRevokedTokensTable() {
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS revoked_tokens (
+      id INTEGER PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      user_id INTEGER,
+      expires_at INTEGER NOT NULL
+    )`
+  ).run();
+  db.prepare(
+    'CREATE INDEX IF NOT EXISTS idx_revoked_tokens_hash ON revoked_tokens(token_hash)'
+  ).run();
+  // Purge already-expired entries on startup.
+  db.prepare('DELETE FROM revoked_tokens WHERE expires_at <= ?').run(Date.now());
+}
+
+ensureRevokedTokensTable();
+
+// Re-hash seed user passwords with the current key on every startup so that
+// rotating SESSION_SECRET or PASSWORD_ENCRYPTION_KEY doesn't permanently lock
+// out the demo accounts.
+rehashSeedUserPasswords();
+
 module.exports = db;

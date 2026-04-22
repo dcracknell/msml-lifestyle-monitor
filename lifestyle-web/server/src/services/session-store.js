@@ -1,10 +1,10 @@
 const crypto = require('crypto');
 const { encryptPayload, decryptPayload } = require('../utils/crypto');
+const db = require('../db');
 
 const HOURS = parseInt(process.env.SESSION_TTL_HOURS || '12', 10);
 const TTL_MS = HOURS * 60 * 60 * 1000;
 
-const revokedTokens = new Map();
 const CLEANUP_INTERVAL_MS = Math.max(15 * 60 * 1000, Math.min(TTL_MS, 60 * 60 * 1000)); // between 15min and 1h
 
 function sanitizeSessionUser(user = {}) {
@@ -54,12 +54,7 @@ function hashToken(token) {
 }
 
 function purgeRevoked() {
-  const now = Date.now();
-  for (const [tokenHash, expiresAt] of revokedTokens.entries()) {
-    if (expiresAt <= now) {
-      revokedTokens.delete(tokenHash);
-    }
-  }
+  db.prepare('DELETE FROM revoked_tokens WHERE expires_at <= ?').run(Date.now());
 }
 
 const cleanupTimer = setInterval(purgeRevoked, CLEANUP_INTERVAL_MS);
@@ -78,22 +73,26 @@ function createSession(user) {
 
 function isRevoked(token) {
   const tokenHash = hashToken(token);
-  const expiresAt = revokedTokens.get(tokenHash);
+  const row = db.prepare('SELECT expires_at FROM revoked_tokens WHERE token_hash = ?').get(tokenHash);
 
-  if (!expiresAt) {
+  if (!row) {
     return false;
   }
 
-  if (expiresAt < Date.now()) {
-    revokedTokens.delete(tokenHash);
+  if (row.expires_at < Date.now()) {
+    db.prepare('DELETE FROM revoked_tokens WHERE token_hash = ?').run(tokenHash);
     return false;
   }
 
   return true;
 }
 
-function destroySession(token) {
-  revokedTokens.set(hashToken(token), Date.now() + TTL_MS);
+function destroySession(token, userId) {
+  const tokenHash = hashToken(token);
+  const expiresAt = Date.now() + TTL_MS;
+  db.prepare(
+    'INSERT OR REPLACE INTO revoked_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)'
+  ).run(tokenHash, userId ?? null, expiresAt);
 }
 
 function authenticate(req, res, next) {

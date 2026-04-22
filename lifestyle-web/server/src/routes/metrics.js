@@ -184,7 +184,7 @@ function convertToOunces(amount, unit) {
     return Math.round(value * OUNCES_PER_ML * 10) / 10;
   }
   if (normalizedUnit === 'g') {
-    return Math.round(value * OUNCES_PER_ML * 10) / 10;
+    return null;
   }
   return null;
 }

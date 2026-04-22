@@ -72,19 +72,26 @@ router.post('/demote', (req, res) => {
 });
 
 const deleteUser = db.transaction((userId) => {
+  db.prepare('DELETE FROM coach_athlete_links WHERE coach_id = ? OR athlete_id = ?').run(userId, userId);
+  db.prepare('DELETE FROM strava_oauth_states WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM strava_connections WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM activity_splits WHERE session_id IN (SELECT id FROM activity_sessions WHERE user_id = ?)').run(userId);
+  db.prepare('DELETE FROM activity_sessions WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM nutrition_entries WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM weight_logs WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM health_markers WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM sensor_stream_samples WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM sync_outbox WHERE payload LIKE ? OR payload LIKE ?').run(`%"user_id":${userId},%`, `%"user_id":${userId}}`);
+  db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').run(userId);
+  db.prepare('DELETE FROM revoked_tokens WHERE user_id = ?').run(userId);
   [
-    'coach_athlete_links',
     'daily_metrics',
     'heart_rate_zones',
     'nutrition_macros',
     'hydration_logs',
     'sleep_stages',
   ].forEach((table) => {
-    if (table === 'coach_athlete_links') {
-      db.prepare(`DELETE FROM ${table} WHERE coach_id = ? OR athlete_id = ?`).run(userId, userId);
-    } else {
-      db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(userId);
-    }
+    db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).run(userId);
   });
   db.prepare('DELETE FROM users WHERE id = ?').run(userId);
 });

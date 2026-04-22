@@ -523,9 +523,9 @@ async function analyzeNutritionPhotoExpress({
     os.tmpdir(),
     `msml-nutrition-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
   );
-  await fs.writeFile(tempFile, imageBuffer);
 
   try {
+    await fs.writeFile(tempFile, imageBuffer);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 

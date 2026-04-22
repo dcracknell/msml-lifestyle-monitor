@@ -96,7 +96,7 @@ router.post('/', (req, res) => {
 });
 
 router.post('/logout', authenticate, (req, res) => {
-  destroySession(req.token);
+  destroySession(req.token, req.user && req.user.id);
   return res.status(204).send();
 });
 

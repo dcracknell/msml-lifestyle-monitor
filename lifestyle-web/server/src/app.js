@@ -254,18 +254,6 @@ function createApp(options = {}) {
     })
   );
 
-  app.use((error, req, res, next) => {
-    if (error && error.type === 'entity.too.large') {
-      return res.status(413).json({
-        message: `Upload too large. Try a smaller image or reduce quality (request limit: ${bodyLimit}).`,
-      });
-    }
-    if (error) {
-      return res.status(400).json({ message: error.message || 'Invalid request payload.' });
-    }
-    return next();
-  });
-
   app.use('/api/login', require('./routes/auth'));
   app.use('/api/signup', require('./routes/signup'));
   app.use('/api/metrics', require('./routes/metrics'));
@@ -289,6 +277,19 @@ function createApp(options = {}) {
 
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+  });
+
+  // Error handler must come after routes so it catches both body-parser and route errors.
+  app.use((error, req, res, next) => {
+    if (error && error.type === 'entity.too.large') {
+      return res.status(413).json({
+        message: `Upload too large. Try a smaller image or reduce quality (request limit: ${bodyLimit}).`,
+      });
+    }
+    if (error) {
+      return res.status(400).json({ message: error.message || 'Invalid request payload.' });
+    }
+    return next();
   });
 
   return app;

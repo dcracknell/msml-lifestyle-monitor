@@ -114,6 +114,9 @@ class ApiClient {
       if (error instanceof ApiError) {
         throw error;
       }
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ApiError('Request timed out', { isNetworkError: true });
+      }
       throw new ApiError('Network request failed', { isNetworkError: true });
     }
   }

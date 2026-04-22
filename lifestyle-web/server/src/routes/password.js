@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const db = require('../db');
 const { hashPassword } = require('../utils/hash-password');
@@ -18,6 +19,13 @@ router.post('/forgot', (req, res) => {
     .get(normalizedEmail);
 
   if (user) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const createdAt = new Date().toISOString();
+    db.prepare(
+      'INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at) VALUES (?, ?, ?, ?)'
+    ).run(user.id, token, expiresAt, createdAt);
+
     const headCoach = db
       .prepare(
         `SELECT id, email, name
@@ -30,11 +38,11 @@ router.post('/forgot', (req, res) => {
 
     if (headCoach) {
       console.log(
-        `[Password reset request] Notify head coach ${headCoach.email} that ${user.email} needs assistance resetting their password.`
+        `[Password reset] Head coach ${headCoach.email}: share this token with ${user.email} so they can reset their password (expires in 24h): ${token}`
       );
     } else {
       console.log(
-        `[Password reset request] ${user.email} requested assistance, but no head coach account is available to notify.`
+        `[Password reset] No head coach found. Token for ${user.email} (expires in 24h): ${token}`
       );
     }
   }

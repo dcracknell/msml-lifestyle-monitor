@@ -834,7 +834,7 @@ async function saveStravaActivity(userId, activity, accessToken) {
   if (detail && Array.isArray(detail.splits_metric) && detail.splits_metric.length) {
     const splits = detail.splits_metric
       .map((split, index) => {
-        const distanceMeters = coerceNumber(split.distance) ? Number(split.distance) * 1000 : null;
+        const distanceMeters = coerceNumber(split.distance) ? Number(split.distance) : null;
         const moving = coerceNumber(split.moving_time);
         const paceSeconds = computePace(distanceMeters, moving) || coerceNumber(split.pace);
         return {
