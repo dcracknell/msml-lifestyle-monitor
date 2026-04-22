@@ -3783,3 +3783,97 @@ li.pending-delete { opacity: 0.38; pointer-events: none; transition: opacity 0.2
     grid-column: auto;
   }
 }
+
+/* ─── PPG Glucose Model Card ─────────────────────────────────────────────── */
+
+.ppg-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ppg-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ppg-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: opacity .15s, transform .1s;
+  border: none;
+}
+
+.btn-sm:hover { opacity: .85; transform: translateY(-1px); }
+.btn-sm:active { opacity: 1; transform: none; }
+.btn-sm:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+.btn-primary {
+  background: var(--teal, #2dd4bf);
+  color: #0d1f2d;
+}
+
+.btn-secondary {
+  background: rgba(255,255,255,0.08);
+  color: var(--text, #e2e8f0);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+
+.ppg-status-text {
+  font-size: 13px;
+  color: #9bb0d6;
+  margin: 0;
+}
+
+.ppg-status-text.ppg-running { color: var(--teal, #2dd4bf); }
+.ppg-status-text.ppg-error   { color: #f87171; }
+.ppg-status-text.ppg-done    { color: #86efac; }
+
+.ppg-metrics-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ppg-metric-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 120px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.ppg-metric-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: #9bb0d6;
+}
+
+.ppg-metric-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-top: 2px;
+}
+
+.ppg-metric-sub {
+  font-size: 11px;
+  color: #9bb0d6;
+}

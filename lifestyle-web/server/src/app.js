@@ -277,6 +277,7 @@ function createApp(options = {}) {
   app.use('/api/nutrition', require('./routes/nutrition'));
   app.use('/api/activity', require('./routes/activity'));
   app.use('/api/vitals', require('./routes/vitals'));
+  app.use('/api/ppg', require('./routes/ppg'));
   app.use('/api/weight', require('./routes/weight'));
   app.use('/api/streams', require('./routes/streams'));
 

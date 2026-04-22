@@ -1,0 +1,8 @@
+model,accuracy,precision_hyper,recall_hyper,f1_hyper,AUROC,TN,FP,FN,TP
+Ridge,0.941,0.0,0.0,0.0,N/A,16,1,0,0
+SVC,1.0,0.0,0.0,0.0,N/A,N/A,N/A,N/A,N/A
+HistGBC,1.0,0.0,0.0,0.0,N/A,N/A,N/A,N/A,N/A
+RandomForest,1.0,0.0,0.0,0.0,N/A,N/A,N/A,N/A,N/A
+XGBoost,1.0,0.0,0.0,0.0,N/A,N/A,N/A,N/A,N/A
+CatBoost,1.0,0.0,0.0,0.0,N/A,N/A,N/A,N/A,N/A
+LightGBM,1.0,0.0,0.0,0.0,N/A,N/A,N/A,N/A,N/A

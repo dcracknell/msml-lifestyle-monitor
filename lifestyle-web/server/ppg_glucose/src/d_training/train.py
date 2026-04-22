@@ -273,6 +273,10 @@ def train_classification(df, feature_cols, cv_splits):
             X_train, X_test = X[train_idx], X[test_idx]
             y_train = y_class[train_idx]
 
+            # Skip folds where training set has only one class (e.g. small demo)
+            if len(np.unique(y_train)) < 2:
+                continue
+
             pipeline.fit(X_train, y_train)
             oof_preds[test_idx] = pipeline.predict(X_test)
 
@@ -348,19 +352,29 @@ def train_multiclass(df, feature_cols, cv_splits):
             X_train, X_test = X[train_idx], X[test_idx]
             y_train = y_class[train_idx]
 
-            pipeline.fit(X_train, y_train)
-            oof_preds[test_idx] = pipeline.predict(X_test).ravel()
+            # Skip folds where training set has fewer than 2 classes
+            if len(np.unique(y_train)) < 2:
+                continue
+
+            # Remap labels to contiguous 0-based range for models that require it
+            # (e.g. XGBoost errors when labels are not 0..n-1)
+            orig_classes = np.unique(y_train)
+            remap = {c: i for i, c in enumerate(orig_classes)}
+            unmap = {i: c for c, i in remap.items()}
+            y_train_enc = np.array([remap[v] for v in y_train])
+
+            pipeline.fit(X_train, y_train_enc)
+            raw_preds = pipeline.predict(X_test).ravel()
+            # Decode back to original class indices
+            oof_preds[test_idx] = np.array([unmap.get(int(p), int(p)) for p in raw_preds])
 
             model_step = pipeline.named_steps.get("model")
             if hasattr(model_step, "predict_proba"):
                 proba = pipeline.predict_proba(X_test)
-                classes = np.array(model_step.classes_, dtype=int)
-                if proba.shape[1] == NUM_CLASSES:
-                    oof_proba[test_idx] = proba
-                else:
-                    # Not all classes seen in this training fold
-                    for ci, cls in enumerate(classes):
-                        oof_proba[test_idx, cls] = proba[:, ci]
+                # Map encoded class positions back to original class slots
+                for enc_i, orig_c in unmap.items():
+                    if enc_i < proba.shape[1] and orig_c < NUM_CLASSES:
+                        oof_proba[test_idx, orig_c] = proba[:, enc_i]
 
         elapsed  = time.time() - t0
         mask     = oof_preds >= 0

@@ -938,6 +938,40 @@
             <p class="form-feedback" id="vitalsFeedback"></p>
           </article>
 
+          <!-- 5 · PPG Glucose Model -->
+          <article class="card ppg-model-card">
+            <div class="ppg-card-header">
+              <p class="section-eyebrow">PPG Glucose Model</p>
+              <div class="ppg-actions">
+                <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm">Run Demo</button>
+                <button id="ppgRunFull" type="button" class="btn-primary btn-sm">Run on Latest Data</button>
+              </div>
+            </div>
+            <p id="ppgStatusText" class="ppg-status-text">No run yet. Press a button to start the pipeline.</p>
+            <div id="ppgResults" class="hidden">
+              <div class="ppg-metrics-row">
+                <div class="ppg-metric-block">
+                  <span class="ppg-metric-label">Best Regression</span>
+                  <span id="ppgBestRegModel" class="ppg-metric-value">—</span>
+                  <span id="ppgBestRegMAE" class="ppg-metric-sub">MAE —</span>
+                </div>
+                <div class="ppg-metric-block">
+                  <span class="ppg-metric-label">Best Classification</span>
+                  <span id="ppgBestClsModel" class="ppg-metric-value">—</span>
+                  <span id="ppgBestClsF1" class="ppg-metric-sub">F1 —</span>
+                </div>
+                <div class="ppg-metric-block">
+                  <span class="ppg-metric-label">Best Multiclass</span>
+                  <span id="ppgBestMcModel" class="ppg-metric-value">—</span>
+                  <span id="ppgBestMcF1" class="ppg-metric-sub">Macro F1 —</span>
+                </div>
+              </div>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="ppgModelChart"></canvas>
+              </div>
+            </div>
+          </article>
+
           <!-- Hidden for app.js compat -->
           <canvas id="vitalsTrendChart" class="hidden" height="1" aria-hidden="true"></canvas>
           <span id="vitalsRestingHrNote" class="hidden" aria-hidden="true"></span>

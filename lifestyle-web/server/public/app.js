@@ -7219,6 +7219,8 @@ function setActivePage(targetPage = 'overview') {
   }
   if (targetPage === 'vitals') {
     loadVitals(state.viewing?.id ?? state.user?.id);
+  } else {
+    stopPpgPoll();
   }
   if (targetPage === 'weight') {
     loadWeight(state.viewing?.id ?? state.user?.id);
@@ -8580,6 +8582,8 @@ async function loadVitals(subjectOverrideId) {
     if (vitalsFeedback) {
       vitalsFeedback.textContent = '';
     }
+    loadPpgResults();
+    loadPpgStatus();
   } catch (error) {
     if (vitalsFeedback) {
       vitalsFeedback.textContent = 'Unable to load vitals right now.';
@@ -12112,6 +12116,262 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
     }
   });
 }
+
+// ─── PPG Glucose Model ────────────────────────────────────────────────────
+
+const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
+const ppgRunFullBtn = document.getElementById('ppgRunFull');
+const ppgStatusText = document.getElementById('ppgStatusText');
+const ppgResultsDiv = document.getElementById('ppgResults');
+const ppgBestRegModel = document.getElementById('ppgBestRegModel');
+const ppgBestRegMAE   = document.getElementById('ppgBestRegMAE');
+const ppgBestClsModel = document.getElementById('ppgBestClsModel');
+const ppgBestClsF1    = document.getElementById('ppgBestClsF1');
+const ppgBestMcModel  = document.getElementById('ppgBestMcModel');
+const ppgBestMcF1     = document.getElementById('ppgBestMcF1');
+
+let ppgPollTimer = null;
+let ppgDatasetStatus = null;
+
+function setPpgButtonsDisabled(disabled, dataset = ppgDatasetStatus) {
+  ppgDatasetStatus = dataset ?? ppgDatasetStatus;
+
+  if (ppgRunDemoBtn) {
+    ppgRunDemoBtn.disabled = disabled;
+    ppgRunDemoBtn.title = disabled ? 'Pipeline running.' : '';
+  }
+
+  if (ppgRunFullBtn) {
+    const fullRunReady = ppgDatasetStatus?.ready !== false;
+    ppgRunFullBtn.disabled = disabled || !fullRunReady;
+    if (!fullRunReady) {
+      ppgRunFullBtn.title =
+        ppgDatasetStatus?.message || 'Full run unavailable until the full dataset is present.';
+    } else {
+      ppgRunFullBtn.title = disabled ? 'Pipeline running.' : '';
+    }
+  }
+}
+
+function setPpgStatus(text, cls) {
+  if (!ppgStatusText) return;
+  ppgStatusText.textContent = text;
+  ppgStatusText.className = 'ppg-status-text' + (cls ? ` ${cls}` : '');
+}
+
+function getPpgDatasetNote(dataset = ppgDatasetStatus) {
+  if (!dataset || dataset.ready !== false) return '';
+  if (!Number.isFinite(dataset.availableCount) || !Number.isFinite(dataset.expectedCount)) return '';
+  return ` Full run unavailable (${dataset.availableCount}/${dataset.expectedCount} PPG files found).`;
+}
+
+function stopPpgPoll() {
+  if (ppgPollTimer) {
+    clearInterval(ppgPollTimer);
+    ppgPollTimer = null;
+  }
+}
+
+function startPpgPoll() {
+  stopPpgPoll();
+  ppgPollTimer = setInterval(async () => {
+    try {
+      const res = await apiFetch('/api/ppg/status', { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.running) {
+        stopPpgPoll();
+        setPpgButtonsDisabled(false, data.dataset);
+        if (data.latestRun?.status === 'completed') {
+          const mode = data.latestRun.is_demo ? 'demo' : 'full';
+          const mins = data.latestRun.elapsed_seconds
+            ? `${(data.latestRun.elapsed_seconds / 60).toFixed(1)} min`
+            : '';
+          const completedText = `Last ${mode} run completed${mins ? ` in ${mins}` : ''}.`;
+          setPpgStatus(
+            `${completedText}${getPpgDatasetNote(data.dataset)}`,
+            'ppg-done'
+          );
+          loadPpgResults();
+        } else if (data.inMemory?.status === 'failed' || data.latestRun?.status === 'failed') {
+          const message = data.inMemory?.error || data.latestRun?.error_message || 'unknown error';
+          setPpgStatus(`Run failed: ${message}`, 'ppg-error');
+        }
+      }
+    } catch { /* ignore poll errors */ }
+  }, 5000);
+}
+
+async function triggerPpg(isDemo) {
+  if (!state.token) return;
+  setPpgButtonsDisabled(true);
+  setPpgStatus(`Starting ${isDemo ? 'demo' : 'full'} pipeline…`, 'ppg-running');
+  try {
+    const res = await apiFetch('/api/ppg/run', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ demo: isDemo }),
+    });
+    if (res.status === 409) {
+      setPpgStatus('Pipeline already running…', 'ppg-running');
+      startPpgPoll();
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setPpgStatus(`Failed to start: ${err.message || res.statusText}`, 'ppg-error');
+      setPpgButtonsDisabled(false);
+      return;
+    }
+    const estMins = isDemo ? '5–10' : '15–30';
+    setPpgStatus(
+      `Pipeline running (${isDemo ? 'demo · 3 subjects' : 'full · 20 subjects'}, ~${estMins} min)…`,
+      'ppg-running'
+    );
+    startPpgPoll();
+  } catch (err) {
+    setPpgStatus(`Error: ${err.message}`, 'ppg-error');
+    setPpgButtonsDisabled(false);
+  }
+}
+
+function renderPpgModelChart(models) {
+  const canvas = document.getElementById('ppgModelChart');
+  if (!canvas) return;
+  const regModels = models
+    .filter((m) => m.task === 'regression' && Number.isFinite(m.mae))
+    .sort((a, b) => a.mae - b.mae);
+  if (!regModels.length) return;
+
+  state.charts.ppgModel?.destroy();
+  const ctx = canvas.getContext('2d');
+  state.charts.ppgModel = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: regModels.map((m) => m.model_name),
+      datasets: [
+        {
+          label: 'MAE (mg/dL)',
+          data: regModels.map((m) => Math.round(m.mae * 10) / 10),
+          backgroundColor: regModels.map((_, i) =>
+            i === 0 ? 'rgba(67,217,201,0.75)' : 'rgba(167,139,250,0.5)'
+          ),
+          borderColor: regModels.map((_, i) =>
+            i === 0 ? '#43d9c9' : '#a78bfa'
+          ),
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+      ],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` MAE ${ctx.raw} mg/dL`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6', callback: (v) => `${v} mg/dL` },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+async function loadPpgStatus() {
+  if (!state.token) return;
+  try {
+    const res = await apiFetch('/api/ppg/status', { headers: { Authorization: `Bearer ${state.token}` } });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data.running) {
+      const mode = data.inMemory?.isDemo ? 'demo' : 'full';
+      setPpgButtonsDisabled(true, data.dataset);
+      setPpgStatus(`Pipeline running (${mode} mode)…`, 'ppg-running');
+      startPpgPoll();
+      return;
+    }
+
+    stopPpgPoll();
+    setPpgButtonsDisabled(false, data.dataset);
+
+    if (data.inMemory?.status === 'failed' || data.latestRun?.status === 'failed') {
+      const message = data.inMemory?.error || data.latestRun?.error_message || 'unknown error';
+      setPpgStatus(`Run failed: ${message}`, 'ppg-error');
+      return;
+    }
+
+    if (data.latestRun?.status === 'completed') {
+      const mode = data.latestRun.is_demo ? 'demo' : 'full';
+      const mins = data.latestRun.elapsed_seconds
+        ? `${(data.latestRun.elapsed_seconds / 60).toFixed(1)} min`
+        : '';
+      const completedText = `Last ${mode} run completed${mins ? ` in ${mins}` : ''}.`;
+      setPpgStatus(
+        `${completedText}${getPpgDatasetNote(data.dataset)}`,
+        'ppg-done'
+      );
+      return;
+    }
+
+    setPpgStatus(`No run yet. Press a button to start the pipeline.${getPpgDatasetNote(data.dataset)}`);
+  } catch { /* ignore */ }
+}
+
+async function loadPpgResults() {
+  if (!state.token) return;
+  try {
+    const res = await apiFetch('/api/ppg/results', { headers: { Authorization: `Bearer ${state.token}` } });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.run || !data.models.length) {
+      if (ppgResultsDiv) ppgResultsDiv.classList.add('hidden');
+      return;
+    }
+
+    const reg = data.models.filter((m) => m.task === 'regression').sort((a, b) => a.mae - b.mae);
+    const cls = data.models.filter((m) => m.task === 'classification').sort((a, b) => (b.f1_hyper ?? 0) - (a.f1_hyper ?? 0));
+    const mc  = data.models.filter((m) => m.task === 'multiclass').sort((a, b) => (b.macro_f1 ?? 0) - (a.macro_f1 ?? 0));
+
+    if (ppgBestRegModel && reg[0]) {
+      ppgBestRegModel.textContent = reg[0].model_name;
+      if (ppgBestRegMAE) ppgBestRegMAE.textContent = `MAE ${reg[0].mae?.toFixed(1) ?? '—'} mg/dL`;
+    }
+    if (ppgBestClsModel && cls[0]) {
+      ppgBestClsModel.textContent = cls[0].model_name;
+      if (ppgBestClsF1) ppgBestClsF1.textContent = `F1 ${cls[0].f1_hyper?.toFixed(3) ?? '—'}`;
+    }
+    if (ppgBestMcModel && mc[0]) {
+      ppgBestMcModel.textContent = mc[0].model_name;
+      if (ppgBestMcF1) ppgBestMcF1.textContent = `Macro F1 ${mc[0].macro_f1?.toFixed(3) ?? '—'}`;
+    }
+
+    if (ppgResultsDiv) ppgResultsDiv.classList.remove('hidden');
+    renderPpgModelChart(data.models);
+
+    if (!ppgStatusText?.textContent || ppgStatusText.textContent.includes('No run yet')) {
+      const mode = data.run.is_demo ? 'demo' : 'full';
+      const mins = data.run.elapsed_seconds ? `${(data.run.elapsed_seconds / 60).toFixed(1)} min` : '';
+      setPpgStatus(`Last ${mode} run completed ${mins ? `in ${mins}` : ''}.`, 'ppg-done');
+    }
+  } catch { /* ignore */ }
+}
+
+if (ppgRunDemoBtn) ppgRunDemoBtn.addEventListener('click', () => triggerPpg(true));
+if (ppgRunFullBtn) ppgRunFullBtn.addEventListener('click', () => triggerPpg(false));
 
 updateNutritionFilterButtons();
 syncActivityWidgetGoalInputs(state.activity.widgetGoals);
