@@ -32,13 +32,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let isMounted = true;
     (async () => {
-      const stored = await readSession();
-      if (!isMounted) return;
-      if (stored) {
-        setSession(stored);
-        apiClient.setAuthToken(stored.token);
+      try {
+        const stored = await readSession();
+        if (!isMounted) return;
+        if (stored) {
+          setSession(stored);
+          apiClient.setAuthToken(stored.token);
+        }
+      } catch (error) {
+        console.warn('Unable to restore session', error);
+      } finally {
+        if (isMounted) {
+          setIsRestoring(false);
+        }
       }
-      setIsRestoring(false);
     })();
     return () => {
       isMounted = false;
