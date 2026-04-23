@@ -2,6 +2,7 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const helmet = require('helmet');
 
 // Ensure database initializes before routes use it.
@@ -18,6 +19,8 @@ const defaultOrigins = [
   'http://127.0.0.1:8083',
   'http://localhost:19006',
 ];
+const IMMUTABLE_STATIC_ASSET_PATTERN =
+  /\.(?:css|js|mjs|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$/i;
 
 function expandOriginsWithSchemes(origins = []) {
   const expanded = new Set(origins);
@@ -73,6 +76,17 @@ function createHttpsMiddleware(requireHttps) {
     }
     return res.status(403).json({ message: 'HTTPS required.' });
   };
+}
+
+function setStaticAssetHeaders(res, filePath) {
+  if (IMMUTABLE_STATIC_ASSET_PATTERN.test(filePath)) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return;
+  }
+
+  if (/\.html?$/i.test(filePath)) {
+    res.setHeader('Cache-Control', 'no-cache');
+  }
 }
 
 function resolveRequestProtocol(req) {
@@ -264,6 +278,11 @@ function createApp(options = {}) {
     app.use(httpsMiddleware);
   }
 
+  app.use(
+    compression({
+      threshold: 1024,
+    })
+  );
   app.use(cors(corsOptionsDelegate));
   app.use(express.json({ limit: bodyLimit }));
   app.use(
@@ -292,7 +311,11 @@ function createApp(options = {}) {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use(
+    express.static(path.join(__dirname, '..', 'public'), {
+      setHeaders: setStaticAssetHeaders,
+    })
+  );
 
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));

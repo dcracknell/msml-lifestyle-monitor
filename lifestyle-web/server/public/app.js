@@ -45,6 +45,17 @@ function normalizeApiBaseUrl(value) {
   }
 }
 
+function resolveCurrentOrigin() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  const origin = typeof window.location?.origin === 'string' ? window.location.origin : '';
+  if (!origin || origin === 'null') {
+    return '';
+  }
+  return normalizeApiBaseUrl(origin);
+}
+
 function persistApiBaseUrl(value) {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
@@ -61,8 +72,9 @@ function persistApiBaseUrl(value) {
 
 function resolveApiBaseUrl() {
   if (typeof window === 'undefined') {
-    return '';
+    return { url: '', source: 'server' };
   }
+  const currentOrigin = resolveCurrentOrigin();
 
   try {
     const params = new URLSearchParams(window.location?.search || '');
@@ -70,8 +82,12 @@ function resolveApiBaseUrl() {
       const queryOverride = normalizeApiBaseUrl(params.get(API_BASE_QUERY_PARAM) || '');
       persistApiBaseUrl(queryOverride);
       if (queryOverride) {
-        return queryOverride;
+        return {
+          url: queryOverride === currentOrigin ? '' : queryOverride,
+          source: 'query',
+        };
       }
+      return { url: '', source: 'query' };
     }
   } catch (error) {
     // Ignore query parsing issues.
@@ -79,48 +95,123 @@ function resolveApiBaseUrl() {
 
   const runtimeOverride = normalizeApiBaseUrl(window.__MSML_API_BASE_URL || '');
   if (runtimeOverride) {
-    return runtimeOverride;
+    return {
+      url: runtimeOverride === currentOrigin ? '' : runtimeOverride,
+      source: 'runtime',
+    };
   }
 
   const metaOverride = normalizeApiBaseUrl(
     document.querySelector('meta[name="msml-api-base-url"]')?.content || ''
   );
   if (metaOverride) {
-    return metaOverride;
+    return {
+      url: metaOverride === currentOrigin ? '' : metaOverride,
+      source: 'meta',
+    };
   }
 
   try {
     const stored = normalizeApiBaseUrl(window.localStorage?.getItem(API_BASE_STORAGE_KEY) || '');
     if (stored) {
-      return stored;
+      return {
+        url: stored === currentOrigin ? '' : stored,
+        source: 'storage',
+      };
     }
   } catch (error) {
     // Ignore storage failures.
   }
 
   if (window.location?.protocol === 'file:') {
-    return 'http://localhost:4000';
+    return { url: 'http://localhost:4000', source: 'file' };
   }
 
-  return '';
+  return { url: '', source: 'same-origin' };
 }
 
-const API_BASE_URL = resolveApiBaseUrl();
+const initialApiBase = resolveApiBaseUrl();
+let apiBaseUrl = initialApiBase.url;
+let apiBaseSource = initialApiBase.source;
+let apiBaseFallbackUsed = false;
 const nativeFetch =
   typeof window !== 'undefined' && typeof window.fetch === 'function'
     ? window.fetch.bind(window)
     : null;
 
-function resolveApiRequestUrl(targetUrl) {
-  if (!API_BASE_URL || typeof targetUrl !== 'string') {
+function resolveApiRequestUrl(targetUrl, baseUrl = apiBaseUrl) {
+  if (!baseUrl || typeof targetUrl !== 'string') {
     return targetUrl;
   }
 
   if (/^\/api(?:\/|$)/i.test(targetUrl)) {
-    return `${API_BASE_URL}${targetUrl}`;
+    return `${baseUrl}${targetUrl}`;
   }
 
   return targetUrl;
+}
+
+function isCrossOriginApiBase(baseUrl = apiBaseUrl) {
+  const currentOrigin = resolveCurrentOrigin();
+  return Boolean(baseUrl && currentOrigin && normalizeApiBaseUrl(baseUrl) !== currentOrigin);
+}
+
+function isRetryableRelativeApiRequest(input) {
+  if (typeof input === 'string') {
+    return /^\/api(?:\/|$)/i.test(input);
+  }
+  if (typeof URL !== 'undefined' && input instanceof URL) {
+    return /^\/api(?:\/|$)/i.test(input.pathname || '');
+  }
+  return false;
+}
+
+function shouldRetryWithSameOriginApi(input, error, baseUrl = apiBaseUrl) {
+  if (apiBaseFallbackUsed || !isCrossOriginApiBase(baseUrl) || !isRetryableRelativeApiRequest(input)) {
+    return false;
+  }
+  const message = String(error?.message || '').trim().toLowerCase();
+  return (
+    !message ||
+    message === 'failed to fetch' ||
+    message.includes('networkerror') ||
+    message.includes('load failed') ||
+    message.includes('cors')
+  );
+}
+
+function fallbackToSameOriginApi(reason) {
+  const previousBaseUrl = apiBaseUrl;
+  const previousSource = apiBaseSource;
+  if (previousSource === 'storage') {
+    persistApiBaseUrl('');
+  }
+  apiBaseUrl = '';
+  apiBaseSource = 'same-origin-fallback';
+  apiBaseFallbackUsed = true;
+  const suffix = reason ? ` (${reason})` : '';
+  console.warn(
+    `Falling back to same-origin API after ${previousSource} API base failed: ${previousBaseUrl || '(none)'}${suffix}`
+  );
+}
+
+function resolveFetchInput(input, baseUrl = apiBaseUrl) {
+  if (typeof input === 'string') {
+    return resolveApiRequestUrl(input, baseUrl);
+  }
+
+  if (typeof URL !== 'undefined' && input instanceof URL) {
+    return resolveApiRequestUrl(input.toString(), baseUrl);
+  }
+
+  if (typeof Request !== 'undefined' && input instanceof Request) {
+    const resolvedUrl = resolveApiRequestUrl(input.url, baseUrl);
+    if (resolvedUrl !== input.url) {
+      return new Request(resolvedUrl, input);
+    }
+  }
+
+  return input;
 }
 
 async function finalizeApiResponse(response) {
@@ -148,6 +239,10 @@ async function finalizeApiResponse(response) {
   throw new Error('Session expired. Please sign in again.');
 }
 
+async function performApiFetch(input, initWithSignal, baseUrl = apiBaseUrl) {
+  return finalizeApiResponse(await nativeFetch(resolveFetchInput(input, baseUrl), initWithSignal));
+}
+
 async function apiFetch(input, init) {
   if (!nativeFetch) {
     throw new Error('Fetch is unavailable in this browser.');
@@ -160,22 +255,15 @@ async function apiFetch(input, init) {
     : { signal: controller.signal };
 
   try {
-    if (typeof input === 'string') {
-      return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input), initWithSignal));
-    }
-
-    if (typeof URL !== 'undefined' && input instanceof URL) {
-      return finalizeApiResponse(await nativeFetch(resolveApiRequestUrl(input.toString()), initWithSignal));
-    }
-
-    if (typeof Request !== 'undefined' && input instanceof Request) {
-      const resolvedUrl = resolveApiRequestUrl(input.url);
-      if (resolvedUrl !== input.url) {
-        return finalizeApiResponse(await nativeFetch(new Request(resolvedUrl, input), initWithSignal));
+    try {
+      return await performApiFetch(input, initWithSignal);
+    } catch (error) {
+      if (shouldRetryWithSameOriginApi(input, error)) {
+        fallbackToSameOriginApi(error?.message || 'network error');
+        return performApiFetch(input, initWithSignal, '');
       }
+      throw error;
     }
-
-    return finalizeApiResponse(await nativeFetch(input, initWithSignal));
   } finally {
     clearTimeout(timeoutId);
   }
@@ -7385,6 +7473,39 @@ profileAvatarUrlInput?.addEventListener('input', handleProfileAvatarUrlInput);
 athleteSwitcher?.addEventListener('change', (event) =>
   handleAthleteSelection(event.target.value)
 );
+
+function scheduleDeferredTask(task, { timeout = 1200, delayMs = 150 } = {}) {
+  const runTask = () => {
+    Promise.resolve()
+      .then(task)
+      .catch((error) => {
+        console.error('Deferred task failed.', error);
+      });
+  };
+
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(runTask, { timeout });
+    return;
+  }
+
+  setTimeout(runTask, delayMs);
+}
+
+function warmAuthenticatedDashboard() {
+  const activeSubjectId = state.viewing?.id ?? state.user?.id;
+  fetchRoster();
+  loadMetrics(activeSubjectId);
+  scheduleDeferredTask(() => {
+    const subjectId = state.viewing?.id ?? state.user?.id ?? activeSubjectId;
+    return Promise.allSettled([
+      loadNutrition(subjectId),
+      loadActivity(subjectId),
+      loadVitals(subjectId),
+      loadWeight(subjectId),
+    ]);
+  });
+}
+
 const shiftNutritionDate = (delta) => {
   const current = getActiveNutritionDate();
   const next = shiftIsoDate(current, delta);
@@ -8178,9 +8299,9 @@ async function completeAuthentication(session) {
   // dashboard during the fetch phase, so the user sees no flicker.
   loginPanel.classList.add('hidden');
   dashboard.classList.remove('hidden');
+  markStartupReady();
 
-  await fetchRoster();
-  await Promise.all([loadMetrics(), loadNutrition(), loadActivity(), loadVitals(), loadWeight()]);
+  warmAuthenticatedDashboard();
   setWeightDateDefault();
 
   queueChartResize();

@@ -24,6 +24,7 @@
   "dependencies": {
     "better-sqlite3": "^12.8.0",
     "chart.js": "^4.5.1",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.1",
     "express": "^4.19.2",

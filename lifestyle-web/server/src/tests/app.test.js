@@ -55,6 +55,25 @@ describe('Health check', () => {
   });
 });
 
+describe('Static asset delivery', () => {
+  it('serves bundled assets with immutable cache headers', async () => {
+    const response = await request(app).get('/app.js?v=13');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['cache-control']).toContain('max-age=31536000');
+    expect(response.headers['cache-control']).toContain('immutable');
+  });
+
+  it('compresses sizeable static assets when gzip is requested', async () => {
+    const response = await request(app)
+      .get('/app.js?v=13')
+      .set('Accept-Encoding', 'gzip');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-encoding']).toBe('gzip');
+  });
+});
+
 describe('Authentication flow', () => {
   it('logs in a seeded athlete by email and password', async () => {
     const { token, user } = await loginAsCoach();
