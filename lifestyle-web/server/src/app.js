@@ -22,6 +22,39 @@ const defaultOrigins = [
 const IMMUTABLE_STATIC_ASSET_PATTERN =
   /\.(?:css|js|mjs|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$/i;
 
+function isPublicHostnameAliasCandidate(hostname = '') {
+  const normalized = stripIpv6Brackets(String(hostname || '').trim().toLowerCase());
+  if (!normalized || isLoopbackHostname(normalized) || isPrivateIpv4Address(normalized)) {
+    return false;
+  }
+  return normalized.includes('.');
+}
+
+function expandOriginHostAliases(origin) {
+  if (origin === '*' || !/^https?:\/\//.test(origin)) {
+    return [];
+  }
+
+  try {
+    const parsed = new URL(origin);
+    const hostname = stripIpv6Brackets(parsed.hostname.toLowerCase());
+    if (!isPublicHostnameAliasCandidate(hostname)) {
+      return [];
+    }
+
+    const aliasHostname = hostname.startsWith('www.') ? hostname.slice(4) : `www.${hostname}`;
+    if (!aliasHostname || aliasHostname === hostname) {
+      return [];
+    }
+
+    const aliasUrl = new URL(origin);
+    aliasUrl.hostname = aliasHostname;
+    return [normalizeOrigin(aliasUrl.toString())];
+  } catch (error) {
+    return [];
+  }
+}
+
 function expandOriginsWithSchemes(origins = []) {
   const expanded = new Set(origins);
   origins.forEach((origin) => {
@@ -32,6 +65,8 @@ function expandOriginsWithSchemes(origins = []) {
       ? origin.replace(/^https:\/\//, 'http://')
       : origin.replace(/^http:\/\//, 'https://');
     expanded.add(alternate);
+    expandOriginHostAliases(origin).forEach((alias) => expanded.add(alias));
+    expandOriginHostAliases(alternate).forEach((alias) => expanded.add(alias));
   });
   return [...expanded];
 }
@@ -80,7 +115,7 @@ function createHttpsMiddleware(requireHttps) {
 
 function setStaticAssetHeaders(res, filePath) {
   if (IMMUTABLE_STATIC_ASSET_PATTERN.test(filePath)) {
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
     return;
   }
 

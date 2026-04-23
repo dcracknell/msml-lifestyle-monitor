@@ -27,29 +27,49 @@ function normalizeApiBaseUrl(value) {
   }
 }
 
-function resolveApiBaseUrl() {
+function resolveCurrentOrigin() {
   if (typeof window === 'undefined') {
     return '';
   }
+  const origin = typeof window.location?.origin === 'string' ? window.location.origin : '';
+  if (!origin || origin === 'null') {
+    return '';
+  }
+  return normalizeApiBaseUrl(origin);
+}
+
+function persistApiBaseUrl(value) {
+  try {
+    if (window.localStorage) {
+      if (value) {
+        window.localStorage.setItem(API_BASE_STORAGE_KEY, value);
+      } else {
+        window.localStorage.removeItem(API_BASE_STORAGE_KEY);
+      }
+    }
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
+
+function resolveApiBaseUrl() {
+  if (typeof window === 'undefined') {
+    return { url: '', source: 'server' };
+  }
+  const currentOrigin = resolveCurrentOrigin();
 
   try {
     const params = new URLSearchParams(window.location?.search || '');
     if (params.has(API_BASE_QUERY_PARAM)) {
       const queryOverride = normalizeApiBaseUrl(params.get(API_BASE_QUERY_PARAM) || '');
-      try {
-        if (window.localStorage) {
-          if (queryOverride) {
-            window.localStorage.setItem(API_BASE_STORAGE_KEY, queryOverride);
-          } else {
-            window.localStorage.removeItem(API_BASE_STORAGE_KEY);
-          }
-        }
-      } catch (error) {
-        // Ignore storage failures.
-      }
+      persistApiBaseUrl(queryOverride);
       if (queryOverride) {
-        return queryOverride;
+        return {
+          url: queryOverride === currentOrigin ? '' : queryOverride,
+          source: 'query',
+        };
       }
+      return { url: '', source: 'query' };
     }
   } catch (error) {
     // Ignore query parsing errors.
@@ -57,69 +77,168 @@ function resolveApiBaseUrl() {
 
   const runtimeOverride = normalizeApiBaseUrl(window.__MSML_API_BASE_URL || '');
   if (runtimeOverride) {
-    return runtimeOverride;
+    return {
+      url: runtimeOverride === currentOrigin ? '' : runtimeOverride,
+      source: 'runtime',
+    };
   }
 
   const metaOverride = normalizeApiBaseUrl(
     document.querySelector('meta[name="msml-api-base-url"]')?.content || ''
   );
   if (metaOverride) {
-    return metaOverride;
+    return {
+      url: metaOverride === currentOrigin ? '' : metaOverride,
+      source: 'meta',
+    };
   }
 
   try {
     const stored = normalizeApiBaseUrl(window.localStorage?.getItem(API_BASE_STORAGE_KEY) || '');
     if (stored) {
-      return stored;
+      return {
+        url: stored === currentOrigin ? '' : stored,
+        source: 'storage',
+      };
     }
   } catch (error) {
     // Ignore storage failures.
   }
 
   if (window.location?.protocol === 'file:') {
-    return 'http://localhost:4000';
+    return { url: 'http://localhost:4000', source: 'file' };
   }
 
-  return '';
+  return { url: '', source: 'same-origin' };
 }
 
-const API_BASE_URL = resolveApiBaseUrl();
+const initialApiBase = resolveApiBaseUrl();
+let apiBaseUrl = initialApiBase.url;
+let apiBaseSource = initialApiBase.source;
+let apiBaseFallbackUsed = false;
 const nativeFetch =
   typeof window !== 'undefined' && typeof window.fetch === 'function'
     ? window.fetch.bind(window)
     : null;
 
-function resolveApiRequestUrl(targetUrl) {
-  if (!API_BASE_URL || typeof targetUrl !== 'string') {
+function resolveApiRequestUrl(targetUrl, baseUrl = apiBaseUrl) {
+  if (!baseUrl || typeof targetUrl !== 'string') {
     return targetUrl;
   }
   if (/^\/api(?:\/|$)/i.test(targetUrl)) {
-    return `${API_BASE_URL}${targetUrl}`;
+    return `${baseUrl}${targetUrl}`;
   }
   return targetUrl;
 }
 
-function apiFetch(input, init) {
+function isCrossOriginApiBase(baseUrl = apiBaseUrl) {
+  const currentOrigin = resolveCurrentOrigin();
+  return Boolean(baseUrl && currentOrigin && normalizeApiBaseUrl(baseUrl) !== currentOrigin);
+}
+
+function isRetryableRelativeApiRequest(input) {
+  if (typeof input === 'string') {
+    return /^\/api(?:\/|$)/i.test(input);
+  }
+  if (typeof URL !== 'undefined' && input instanceof URL) {
+    return /^\/api(?:\/|$)/i.test(input.pathname || '');
+  }
+  return false;
+}
+
+function fallbackToSameOriginApi(reason) {
+  const previousBaseUrl = apiBaseUrl;
+  const previousSource = apiBaseSource;
+  if (previousSource === 'storage' || previousSource === 'query') {
+    persistApiBaseUrl('');
+  }
+  if (previousSource === 'query' && typeof window !== 'undefined' && window.history?.replaceState) {
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete(API_BASE_QUERY_PARAM);
+      window.history.replaceState({}, '', nextUrl.toString());
+    } catch (error) {
+      // Ignore URL rewrite failures.
+    }
+  }
+  apiBaseUrl = '';
+  apiBaseSource = 'same-origin-fallback';
+  apiBaseFallbackUsed = true;
+  const suffix = reason ? ` (${reason})` : '';
+  console.warn(
+    `Bluetooth page falling back to same-origin API after ${previousSource} API base failed: ${previousBaseUrl || '(none)'}${suffix}`
+  );
+}
+
+function resolveFetchInput(input, baseUrl = apiBaseUrl) {
+  if (typeof input === 'string') {
+    return resolveApiRequestUrl(input, baseUrl);
+  }
+
+  if (typeof URL !== 'undefined' && input instanceof URL) {
+    return resolveApiRequestUrl(input.toString(), baseUrl);
+  }
+
+  if (typeof Request !== 'undefined' && input instanceof Request) {
+    const resolvedUrl = resolveApiRequestUrl(input.url, baseUrl);
+    if (resolvedUrl !== input.url) {
+      return new Request(resolvedUrl, input);
+    }
+  }
+
+  return input;
+}
+
+async function isCorsRejectionResponse(response) {
+  if (!response || response.ok || response.status !== 400) {
+    return false;
+  }
+  const responseUrl = typeof response.url === 'string' ? response.url : '';
+  if (!/\/api(?:\/|$)/i.test(responseUrl)) {
+    return false;
+  }
+  try {
+    const bodyText = await response.clone().text();
+    return /not allowed by cors/i.test(bodyText);
+  } catch (error) {
+    return false;
+  }
+}
+
+async function apiFetch(input, init) {
   if (!nativeFetch) {
     throw new Error('Fetch is unavailable in this browser.');
   }
 
-  if (typeof input === 'string') {
-    return nativeFetch(resolveApiRequestUrl(input), init);
-  }
-
-  if (typeof URL !== 'undefined' && input instanceof URL) {
-    return nativeFetch(resolveApiRequestUrl(input.toString()), init);
-  }
-
-  if (typeof Request !== 'undefined' && input instanceof Request) {
-    const resolvedUrl = resolveApiRequestUrl(input.url);
-    if (resolvedUrl !== input.url) {
-      return nativeFetch(new Request(resolvedUrl, input), init);
+  try {
+    const response = await nativeFetch(resolveFetchInput(input), init);
+    if (
+      !apiBaseFallbackUsed &&
+      isCrossOriginApiBase() &&
+      isRetryableRelativeApiRequest(input) &&
+      (await isCorsRejectionResponse(response))
+    ) {
+      fallbackToSameOriginApi('CORS rejection');
+      return nativeFetch(resolveFetchInput(input, ''), init);
     }
+    return response;
+  } catch (error) {
+    const message = String(error?.message || '').trim().toLowerCase();
+    const shouldRetry =
+      !apiBaseFallbackUsed &&
+      isCrossOriginApiBase() &&
+      isRetryableRelativeApiRequest(input) &&
+      (!message ||
+        message === 'failed to fetch' ||
+        message.includes('networkerror') ||
+        message.includes('load failed') ||
+        message.includes('cors'));
+    if (shouldRetry) {
+      fallbackToSameOriginApi(error?.message || 'network error');
+      return nativeFetch(resolveFetchInput(input, ''), init);
+    }
+    throw error;
   }
-
-  return nativeFetch(input, init);
 }
 
 const bluetoothForm = document.getElementById('bluetoothForm');

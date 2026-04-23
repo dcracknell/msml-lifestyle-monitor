@@ -183,8 +183,17 @@ function shouldRetryWithSameOriginApi(input, error, baseUrl = apiBaseUrl) {
 function fallbackToSameOriginApi(reason) {
   const previousBaseUrl = apiBaseUrl;
   const previousSource = apiBaseSource;
-  if (previousSource === 'storage') {
+  if (previousSource === 'storage' || previousSource === 'query') {
     persistApiBaseUrl('');
+  }
+  if (previousSource === 'query' && typeof window !== 'undefined' && window.history?.replaceState) {
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete(API_BASE_QUERY_PARAM);
+      window.history.replaceState({}, '', nextUrl.toString());
+    } catch (error) {
+      // Ignore URL rewrite failures.
+    }
   }
   apiBaseUrl = '';
   apiBaseSource = 'same-origin-fallback';
@@ -239,6 +248,24 @@ async function finalizeApiResponse(response) {
   throw new Error('Session expired. Please sign in again.');
 }
 
+async function isCorsRejectionResponse(response) {
+  if (!response || response.ok || response.status !== 400) {
+    return false;
+  }
+
+  const responseUrl = typeof response.url === 'string' ? response.url : '';
+  if (!/\/api(?:\/|$)/i.test(responseUrl)) {
+    return false;
+  }
+
+  try {
+    const bodyText = await response.clone().text();
+    return /not allowed by cors/i.test(bodyText);
+  } catch (error) {
+    return false;
+  }
+}
+
 async function performApiFetch(input, initWithSignal, baseUrl = apiBaseUrl) {
   return finalizeApiResponse(await nativeFetch(resolveFetchInput(input, baseUrl), initWithSignal));
 }
@@ -256,7 +283,17 @@ async function apiFetch(input, init) {
 
   try {
     try {
-      return await performApiFetch(input, initWithSignal);
+      const response = await performApiFetch(input, initWithSignal);
+      if (
+        !apiBaseFallbackUsed &&
+        isCrossOriginApiBase() &&
+        isRetryableRelativeApiRequest(input) &&
+        (await isCorsRejectionResponse(response))
+      ) {
+        fallbackToSameOriginApi('CORS rejection');
+        return performApiFetch(input, initWithSignal, '');
+      }
+      return response;
     } catch (error) {
       if (shouldRetryWithSameOriginApi(input, error)) {
         fallbackToSameOriginApi(error?.message || 'network error');

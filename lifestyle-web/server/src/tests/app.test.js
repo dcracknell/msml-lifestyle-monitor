@@ -56,17 +56,17 @@ describe('Health check', () => {
 });
 
 describe('Static asset delivery', () => {
-  it('serves bundled assets with immutable cache headers', async () => {
-    const response = await request(app).get('/app.js?v=13');
+  it('serves bundled assets with cache headers that still allow updates to roll out', async () => {
+    const response = await request(app).get('/app.js?v=14');
 
     expect(response.status).toBe(200);
-    expect(response.headers['cache-control']).toContain('max-age=31536000');
-    expect(response.headers['cache-control']).toContain('immutable');
+    expect(response.headers['cache-control']).toContain('max-age=3600');
+    expect(response.headers['cache-control']).toContain('must-revalidate');
   });
 
   it('compresses sizeable static assets when gzip is requested', async () => {
     const response = await request(app)
-      .get('/app.js?v=13')
+      .get('/app.js?v=14')
       .set('Accept-Encoding', 'gzip');
 
     expect(response.status).toBe(200);
@@ -638,6 +638,23 @@ describe('CORS configuration', () => {
         'http://msmls.org',
       ])
     );
+  });
+
+  it('automatically trusts apex and www aliases for configured public origins', async () => {
+    const customApp = createApp({ appOrigin: 'https://msmls.org' });
+    const { allowedOrigins = [] } = customApp.locals.cors || {};
+
+    expect(allowedOrigins).toEqual(
+      expect.arrayContaining(['https://msmls.org', 'https://www.msmls.org'])
+    );
+
+    const response = await request(customApp)
+      .get('/api/health')
+      .set('Host', 'api.msmls.test')
+      .set('Origin', 'https://www.msmls.org');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('status', 'ok');
   });
 
   it('allows requests originating from the same host even if not explicitly configured', async () => {
