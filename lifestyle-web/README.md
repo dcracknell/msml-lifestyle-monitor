@@ -231,6 +231,40 @@ The app will then be reachable on `http://<pi-ip>:30040`.
 3. Expose the chosen TCP port in your firewall/router. When fronting with HTTPS, point your reverse proxy at `http://127.0.0.1:PORT` and include the public HTTPS origin in `APP_ORIGIN`.
 4. Restart the server (`npm run start` or your process manager) and verify an external request works with `curl http://<public-host>:PORT/api/health`.
 
+### Cloudflare Tunnel
+Cloudflare Tunnel works well with the bundled UI because the browser can stay same-origin all the way through the public hostname. The server now trusts loopback/local proxy hops, so HTTPS redirects and same-origin checks honor forwarded `Host` / `X-Forwarded-*` headers from a local `cloudflared` process.
+
+Recommended server settings in `server/.env`:
+```env
+HOST=0.0.0.0
+PORT=4000
+REQUIRE_HTTPS=true
+APP_ORIGIN=https://your-public-hostname.example
+```
+
+Quick tunnel for testing:
+```bash
+cd lifestyle-web/server
+npm run start
+cloudflared tunnel --url http://127.0.0.1:4000
+```
+
+Named tunnel example (`~/.cloudflared/config.yml`):
+```yaml
+tunnel: <tunnel-uuid>
+credentials-file: /Users/<you>/.cloudflared/<tunnel-uuid>.json
+
+ingress:
+  - hostname: dashboard.example.com
+    service: http://127.0.0.1:4000
+  - service: http_status:404
+```
+
+Notes:
+- The bundled web app does not need a separate API origin when loaded through the tunnel hostname.
+- If a browser previously stored `?apiBaseUrl=http://localhost:4000`, the frontend will fall back to same-origin automatically after that cross-origin request fails.
+- Leave `httpHostHeader` unset unless you intentionally need Cloudflare to overwrite the public host seen by the app.
+
 ### Ubuntu + nginx + Let's Encrypt
 If you are hosting the Node server directly on a Linux machine and want `https://msmls.org` and `https://www.msmls.org`, use the checked-in nginx site config at `server/nginx.conf`.
 

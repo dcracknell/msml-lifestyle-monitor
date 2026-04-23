@@ -680,6 +680,19 @@ describe('CORS configuration', () => {
     expect(response.body).toHaveProperty('status', 'ok');
   });
 
+  it('treats forwarded tunnel hostnames as same-origin requests', async () => {
+    const customApp = createApp({ appOrigin: 'http://localhost:4000' });
+    const response = await request(customApp)
+      .get('/api/health')
+      .set('Host', '127.0.0.1:4000')
+      .set('X-Forwarded-Host', 'misty-river.trycloudflare.com, 127.0.0.1:4000')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Origin', 'https://misty-river.trycloudflare.com');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('status', 'ok');
+  });
+
   it('allows loopback dev origins even when the port is not pre-listed', async () => {
     const customApp = createApp({ appOrigin: 'http://localhost:4000' });
     const origins = [
@@ -785,6 +798,22 @@ describe('CORS configuration', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('HTTPS enforcement behind trusted proxies', () => {
+  it('redirects to the forwarded public host instead of localhost', async () => {
+    const customApp = createApp({ requireHttps: true, appOrigin: 'http://localhost:4000' });
+    const response = await request(customApp)
+      .get('/dashboard?view=athlete')
+      .set('Host', '127.0.0.1:4000')
+      .set('X-Forwarded-Host', 'misty-river.trycloudflare.com, 127.0.0.1:4000')
+      .set('X-Forwarded-Proto', 'http');
+
+    expect(response.status).toBe(301);
+    expect(response.headers.location).toBe(
+      'https://misty-river.trycloudflare.com/dashboard?view=athlete'
+    );
   });
 });
 

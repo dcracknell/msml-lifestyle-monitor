@@ -22,6 +22,24 @@ const defaultOrigins = [
 const IMMUTABLE_STATIC_ASSET_PATTERN =
   /\.(?:css|js|mjs|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$/i;
 
+function getFirstForwardedHeaderValue(req, headerName) {
+  const value = String(req.get(headerName) || '').trim();
+  if (!value) {
+    return '';
+  }
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .find(Boolean);
+}
+
+function resolveRequestHostHeader(req) {
+  return (
+    getFirstForwardedHeaderValue(req, 'x-forwarded-host') ||
+    String(req.get('host') || '').trim()
+  );
+}
+
 function isPublicHostnameAliasCandidate(hostname = '') {
   const normalized = stripIpv6Brackets(String(hostname || '').trim().toLowerCase());
   if (!normalized || isLoopbackHostname(normalized) || isPrivateIpv4Address(normalized)) {
@@ -104,7 +122,7 @@ function createHttpsMiddleware(requireHttps) {
     }
 
     if (req.method === 'GET' || req.method === 'HEAD') {
-      const host = req.get('host');
+      const host = resolveRequestHostHeader(req);
       if (host) {
         return res.redirect(301, `https://${host}${req.originalUrl}`);
       }
@@ -133,7 +151,7 @@ function resolveRequestProtocol(req) {
 }
 
 function resolveRequestOrigin(req) {
-  const host = (req.get('host') || '').trim();
+  const host = resolveRequestHostHeader(req);
   if (!host) {
     return null;
   }
@@ -142,7 +160,7 @@ function resolveRequestOrigin(req) {
 }
 
 function resolveRequestHost(req) {
-  return (req.get('host') || '').trim().toLowerCase();
+  return resolveRequestHostHeader(req).toLowerCase();
 }
 
 function parseOriginHost(origin) {
@@ -243,7 +261,7 @@ function isLocalNetworkOrigin(origin = '') {
 }
 
 function isLocalNetworkRequest(req) {
-  const hostname = parseHostHeaderHostname(req.get('host') || '');
+  const hostname = parseHostHeaderHostname(resolveRequestHostHeader(req));
   return isLocalNetworkHostname(hostname || '');
 }
 
@@ -263,6 +281,10 @@ function createApp(options = {}) {
   const { allowAllOrigins, allowedOrigins, allowedOriginsSet } = resolveAllowedOrigins(
     options.appOrigin
   );
+
+  // Trust only local/private proxy hops so Express can honor forwarded
+  // host/protocol values from cloudflared and other same-machine proxies.
+  app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 
   const corsOptionsDelegate = (req, callback) => {
     const originHeader = req.get('origin');
