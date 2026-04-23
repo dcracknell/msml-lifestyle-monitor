@@ -111,6 +111,11 @@ function stripIpv6Brackets(hostname = '') {
   return hostname.replace(/^\[(.*)\]$/, '$1');
 }
 
+function isLoopbackHostname(hostname = '') {
+  const normalized = stripIpv6Brackets(String(hostname || '').trim().toLowerCase());
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '0.0.0.0';
+}
+
 function parseHostHeaderHostname(hostHeader = '') {
   if (!hostHeader) {
     return null;
@@ -149,16 +154,28 @@ function isLocalNetworkHostname(hostname = '') {
   if (!normalized) {
     return false;
   }
-  if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') {
-    return true;
-  }
-  if (normalized === '0.0.0.0') {
+  if (isLoopbackHostname(normalized)) {
     return true;
   }
   if (normalized.endsWith('.local')) {
     return true;
   }
   return isPrivateIpv4Address(normalized);
+}
+
+function isLoopbackOrigin(origin = '') {
+  if (!origin) {
+    return false;
+  }
+  try {
+    const parsed = new URL(origin);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return false;
+    }
+    return isLoopbackHostname(parsed.hostname);
+  } catch (error) {
+    return false;
+  }
 }
 
 function isLocalNetworkOrigin(origin = '') {
@@ -207,12 +224,14 @@ function createApp(options = {}) {
     const normalizedOrigin = normalizeOrigin(originHeader);
     const nullOriginLocalRequest =
       normalizedOrigin === 'null' && isLocalNetworkRequest(req);
+    const loopbackDevOrigin = isLoopbackOrigin(normalizedOrigin);
     const localNetworkDevOrigin =
       isLocalNetworkOrigin(normalizedOrigin) && isLocalNetworkRequest(req);
 
     if (
       allowedOriginsSet.has(normalizedOrigin) ||
       isRequestSelfOrigin(req, normalizedOrigin) ||
+      loopbackDevOrigin ||
       localNetworkDevOrigin ||
       nullOriginLocalRequest
     ) {

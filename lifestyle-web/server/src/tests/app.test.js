@@ -668,6 +668,27 @@ describe('CORS configuration', () => {
     }
   });
 
+  it('allows loopback dev origins against a public host for local frontend development', async () => {
+    const customApp = createApp({ appOrigin: 'https://www.msmls.org' });
+    const origins = [
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+      'https://localhost:7443',
+      'http://0.0.0.0:8080',
+    ];
+
+    for (const origin of origins) {
+      // eslint-disable-next-line no-await-in-loop
+      const response = await request(customApp)
+        .get('/api/health')
+        .set('Host', 'www.msmls.org')
+        .set('Origin', origin);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('status', 'ok');
+    }
+  });
+
   it('allows null origins for local-network hosts', async () => {
     const customApp = createApp({ appOrigin: 'http://localhost:4000' });
     const response = await request(customApp)
