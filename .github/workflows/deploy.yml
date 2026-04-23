@@ -173,6 +173,46 @@ jobs:
           }
 
           cd "${DEPLOY_ROOT}/lifestyle-web"
+          deploy_port="${LIFESTYLE_WEB_HOST_PORT:-4000}"
+          export LIFESTYLE_WEB_HOST_PORT="${deploy_port}"
+
+          stop_conflicting_host_listener() {
+            local port="$1"
+            local listener_pids cmd cwd remaining_pids
+
+            if ! command -v lsof >/dev/null 2>&1; then
+              echo "lsof is required on the self-hosted deploy runner."
+              return 1
+            fi
+
+            listener_pids="$(lsof -tiTCP:${port} -sTCP:LISTEN 2>/dev/null || true)"
+            [ -n "${listener_pids}" ] || return 0
+
+            for pid in ${listener_pids}; do
+              cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+              cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+              echo "tcp:${port} already in use by pid ${pid}: ${cmd} (cwd: ${cwd})"
+
+              case "${cwd}" in
+                "${DEPLOY_ROOT}/lifestyle-web/server"|\
+                "${DEPLOY_ROOT}/lifestyle-web/server/"*)
+                  echo "Stopping stale lifestyle-web host process ${pid}."
+                  kill "${pid}"
+                  ;;
+                *)
+                  echo "Refusing to stop unrelated process on tcp:${port}."
+                  return 1
+                  ;;
+              esac
+            done
+
+            sleep 2
+            remaining_pids="$(lsof -tiTCP:${port} -sTCP:LISTEN 2>/dev/null || true)"
+            if [ -n "${remaining_pids}" ]; then
+              echo "tcp:${port} is still occupied after cleanup: ${remaining_pids}"
+              return 1
+            fi
+          }
 
           pulled_image=false
           if docker pull "${LIFESTYLE_WEB_IMAGE}"; then
@@ -188,11 +228,12 @@ jobs:
             echo "Using locally built image for ${LIFESTYLE_WEB_IMAGE}."
           fi
 
+          stop_conflicting_host_listener "${deploy_port}"
           compose up -d --remove-orphans portainer
           compose up -d --remove-orphans --force-recreate lifestyle-web
 
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:4000/api/health >/dev/null; then
+            if curl -fsS "http://127.0.0.1:${deploy_port}/api/health" >/dev/null; then
               docker image prune -f
               exit 0
             fi

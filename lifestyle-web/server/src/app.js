@@ -19,6 +19,21 @@ const defaultOrigins = [
   'http://127.0.0.1:8083',
   'http://localhost:19006',
 ];
+const defaultConnectSrc = [
+  "'self'",
+  'http://localhost:*',
+  'https://localhost:*',
+  'http://127.0.0.1:*',
+  'https://127.0.0.1:*',
+  'http://0.0.0.0:*',
+  'https://0.0.0.0:*',
+  'http://[::1]:*',
+  'https://[::1]:*',
+  'http://*.local:*',
+  'https://*.local:*',
+  'http://10.0.2.2:*',
+  'https://10.0.2.2:*',
+];
 const IMMUTABLE_STATIC_ASSET_PATTERN =
   /\.(?:css|js|mjs|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf)$/i;
 
@@ -108,6 +123,14 @@ function resolveAllowedOrigins(override) {
     allowedOrigins,
     allowedOriginsSet: new Set(allowedOrigins),
   };
+}
+
+function resolveConnectSrc(allowAllOrigins, allowedOrigins = []) {
+  if (allowAllOrigins) {
+    return ["'self'", 'http:', 'https:'];
+  }
+
+  return [...new Set([...defaultConnectSrc, ...allowedOrigins])];
 }
 
 function createHttpsMiddleware(requireHttps) {
@@ -281,6 +304,7 @@ function createApp(options = {}) {
   const { allowAllOrigins, allowedOrigins, allowedOriginsSet } = resolveAllowedOrigins(
     options.appOrigin
   );
+  const connectSrc = resolveConnectSrc(allowAllOrigins, allowedOrigins);
 
   // Trust only local/private proxy hops so Express can honor forwarded
   // host/protocol values from cloudflared and other same-machine proxies.
@@ -323,6 +347,9 @@ function createApp(options = {}) {
       contentSecurityPolicy: {
         useDefaults: true,
         directives: {
+          // The dashboard supports targeting a different API origin via
+          // ?apiBaseUrl=... so fetch/XHR must be allowed to those same hosts.
+          'connect-src': connectSrc,
           // Allow remote HTTPS avatars plus data URLs generated from uploads.
           'img-src': ["'self'", 'data:', 'https:'],
         },

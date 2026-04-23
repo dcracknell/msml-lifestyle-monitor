@@ -74,6 +74,35 @@ describe('Static asset delivery', () => {
   });
 });
 
+describe('Content security policy', () => {
+  it('allows documented cross-origin API targets for browser fetch requests', async () => {
+    const customApp = createApp({ appOrigin: 'https://msmls.org' });
+    const response = await request(customApp).get('/');
+
+    expect(response.status).toBe(200);
+
+    const policy = response.headers['content-security-policy'] || '';
+    expect(policy).toContain('connect-src');
+    expect(policy).toContain("'self'");
+    expect(policy).toContain('https://msmls.org');
+    expect(policy).toContain('https://www.msmls.org');
+    expect(policy).toContain('http://localhost:*');
+    expect(policy).toContain('http://127.0.0.1:*');
+  });
+
+  it('widens connect-src when all origins are explicitly allowed', async () => {
+    const customApp = createApp({ appOrigin: '*' });
+    const response = await request(customApp).get('/');
+
+    expect(response.status).toBe(200);
+
+    const policy = response.headers['content-security-policy'] || '';
+    expect(policy).toContain('connect-src');
+    expect(policy).toContain('http:');
+    expect(policy).toContain('https:');
+  });
+});
+
 describe('Authentication flow', () => {
   it('logs in a seeded athlete by email and password', async () => {
     const { token, user } = await loginAsCoach();
