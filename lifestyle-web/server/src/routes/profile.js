@@ -43,6 +43,62 @@ function normalizeAvatarPhoto(value) {
   return trimmed;
 }
 
+function normalizeNullableNumber(value, { field, min, max, integer = false }) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || value === '') {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    throw new Error(`${field} must be a number.`);
+  }
+  if (numeric < min || numeric > max) {
+    throw new Error(`${field} must be between ${min} and ${max}.`);
+  }
+
+  return integer ? Math.round(numeric) : Math.round(numeric * 100) / 100;
+}
+
+function normalizeNullableSex(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || value === '') {
+    return null;
+  }
+  const token = String(value).trim().toLowerCase();
+  if (token === 'm' || token === 'male' || token === '1') {
+    return 'M';
+  }
+  if (token === 'f' || token === 'female' || token === '0') {
+    return 'F';
+  }
+  throw new Error('Sex must be M or F.');
+}
+
+function normalizeNullableBoolean(value, field) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || value === '') {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0;
+  }
+  const token = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y'].includes(token)) {
+    return 1;
+  }
+  if (['0', 'false', 'no', 'n'].includes(token)) {
+    return 0;
+  }
+  throw new Error(`${field} must be yes/no or true/false.`);
+}
+
 router.put('/', (req, res) => {
   const {
     name,
@@ -56,6 +112,12 @@ router.put('/', (req, res) => {
     avatar,
     avatarPhoto,
     goalSleep,
+    age,
+    sex,
+    bmi,
+    preopDm,
+    preopHb,
+    preopCr,
   } = req.body || {};
   const trimmedName = typeof name === 'string' ? name.trim() : '';
   const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
@@ -83,6 +145,12 @@ router.put('/', (req, res) => {
               goal_calories,
               goal_sleep,
               goal_readiness,
+              age,
+              sex,
+              bmi,
+              preop_dm,
+              preop_hb,
+              preop_cr,
               password_hash,
               strava_client_id,
               strava_client_secret,
@@ -126,6 +194,12 @@ router.put('/', (req, res) => {
     avatar_url: user.avatar_url || null,
     avatar_photo: user.avatar_photo || null,
     goal_sleep: user.goal_sleep ?? null,
+    age: user.age ?? null,
+    sex: user.sex ?? null,
+    bmi: user.bmi ?? null,
+    preop_dm: user.preop_dm ?? null,
+    preop_hb: user.preop_hb ?? null,
+    preop_cr: user.preop_cr ?? null,
   };
 
   if (wantsNameChange) {
@@ -240,6 +314,57 @@ router.put('/', (req, res) => {
     }
   }
 
+  try {
+    const normalizedAge = normalizeNullableNumber(age, {
+      field: 'Age',
+      min: 1,
+      max: 120,
+      integer: true,
+    });
+    if (normalizedAge !== undefined) {
+      updates.age = normalizedAge;
+    }
+
+    const normalizedSex = normalizeNullableSex(sex);
+    if (normalizedSex !== undefined) {
+      updates.sex = normalizedSex;
+    }
+
+    const normalizedBmi = normalizeNullableNumber(bmi, {
+      field: 'BMI',
+      min: 10,
+      max: 80,
+    });
+    if (normalizedBmi !== undefined) {
+      updates.bmi = normalizedBmi;
+    }
+
+    const normalizedPreopDm = normalizeNullableBoolean(preopDm, 'Pre-op diabetes');
+    if (normalizedPreopDm !== undefined) {
+      updates.preop_dm = normalizedPreopDm;
+    }
+
+    const normalizedPreopHb = normalizeNullableNumber(preopHb, {
+      field: 'Pre-op Hb',
+      min: 0,
+      max: 25,
+    });
+    if (normalizedPreopHb !== undefined) {
+      updates.preop_hb = normalizedPreopHb;
+    }
+
+    const normalizedPreopCr = normalizeNullableNumber(preopCr, {
+      field: 'Pre-op creatinine',
+      min: 0,
+      max: 20,
+    });
+    if (normalizedPreopCr !== undefined) {
+      updates.preop_cr = normalizedPreopCr;
+    }
+  } catch (error) {
+    return res.status(400).json({ message: error.message || 'Invalid BGL profile fields.' });
+  }
+
   db.prepare(
     `UPDATE users
         SET name = ?,
@@ -251,7 +376,13 @@ router.put('/', (req, res) => {
             strava_redirect_uri = ?,
             avatar_url = ?,
             avatar_photo = ?,
-            goal_sleep = ?
+            goal_sleep = ?,
+            age = ?,
+            sex = ?,
+            bmi = ?,
+            preop_dm = ?,
+            preop_hb = ?,
+            preop_cr = ?
       WHERE id = ?`
   ).run(
     updates.name,
@@ -264,6 +395,12 @@ router.put('/', (req, res) => {
     updates.avatar_url,
     updates.avatar_photo,
     updates.goal_sleep,
+    updates.age,
+    updates.sex,
+    updates.bmi,
+    updates.preop_dm,
+    updates.preop_hb,
+    updates.preop_cr,
     req.user.id
   );
 
@@ -277,6 +414,12 @@ router.put('/', (req, res) => {
     strava_redirect_uri: updates.strava_redirect_uri,
     avatar_url: updates.avatar_url,
     avatar_photo: updates.avatar_photo,
+    age: updates.age,
+    sex: updates.sex,
+    bmi: updates.bmi,
+    preop_dm: updates.preop_dm,
+    preop_hb: updates.preop_hb,
+    preop_cr: updates.preop_cr,
     password_hash: undefined,
     role: coerceRole(user.role) || ROLES.ATHLETE,
   };
@@ -293,6 +436,12 @@ router.put('/', (req, res) => {
     goal_calories: user.goal_calories,
     goal_sleep: updates.goal_sleep,
     goal_readiness: user.goal_readiness,
+    age: updates.age,
+    sex: updates.sex,
+    bmi: updates.bmi,
+    preop_dm: updates.preop_dm,
+    preop_hb: updates.preop_hb,
+    preop_cr: updates.preop_cr,
     strava_client_id: updates.strava_client_id,
     strava_client_secret: updates.strava_client_secret,
     strava_redirect_uri: updates.strava_redirect_uri,

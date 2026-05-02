@@ -1,4 +1,14 @@
 """
+TODO: per-pulse features migrating to pyPPG.
+
+The window-level features here (mean, std, min, max, median, iqr,
+rms, peak_to_peak, skew, kurtosis, d1_*, d2_*) are still valid
+and stay. The peak-detection-derived features (hr_bpm, ibi_std,
+mean_peak_amp, std_peak_amp) will move to pyPPG-based extraction
+in v2 because they share the manual detector's noise sensitivity.
+"""
+
+"""
 Step B1: Summary Statistics Feature Extraction
 ===============================================
 Extracts 22 basic statistical features from each PPG window.

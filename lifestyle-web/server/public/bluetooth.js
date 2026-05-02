@@ -341,6 +341,7 @@ const PROFILES = {
   ble_hrm:               { serviceUUID: '180D',   characteristicUUID: '2A37',   metric: 'exercise.hr',      parser: 'ble_hrm'  },
   arduino_hm10:          { serviceUUID: 'FFE0',   characteristicUUID: 'FFE1',   metric: 'vitals.heart_rate',parser: 'jsontext' },
   apple_watch_companion: { serviceUUID: 'FFF0',   characteristicUUID: 'FFF1',   metric: 'exercise.hr',      parser: 'jsontext' },
+  ppg_raw_500hz:         { serviceUUID: '',       characteristicUUID: '',       metric: 'ppg.raw',          parser: 'float32'  },
 };
 
 if (profileSelect) {

@@ -33,6 +33,7 @@
           <li>Enter the service + characteristic UUID exposed by your device.</li>
           <li>Choose a parser (uint8/16 or float32) and click <strong>Connect</strong>.</li>
           <li>Measurements stream into `/api/streams` using the metric name you provide.</li>
+          <li>For BGL inference, stream a single-channel `ppg.raw` signal at 500 Hz for 15 minutes.</li>
         </ul>
       </div>
       <a class="outline-link" href="https://web.dev/bluetooth/" target="_blank" rel="noreferrer">
@@ -57,6 +58,7 @@
             <option value="ble_hrm">BLE Heart Rate Monitor (0x180D)</option>
             <option value="arduino_hm10">Arduino + HM-10 (0xFFE0)</option>
             <option value="apple_watch_companion">Apple Watch companion (0xFFF0)</option>
+            <option value="ppg_raw_500hz">PPG raw stream (metric `ppg.raw`)</option>
           </select>
         </label>
         <label>

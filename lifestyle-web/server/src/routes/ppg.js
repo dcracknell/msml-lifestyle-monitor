@@ -1,30 +1,194 @@
+const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fsSync = require('fs');
-const Database = require('better-sqlite3');
 const express = require('express');
+const db = require('../db');
 const { authenticate } = require('../services/session-store');
+const { coerceRole, isHeadCoach } = require('../utils/role');
 const { resolvePythonRuntime } = require('../utils/resolve-python-runtime');
 
 const router = express.Router();
 
 const PPG_DIR = path.resolve(__dirname, '..', '..', 'ppg_glucose');
-const PIPELINE_DB_PATH = path.join(PPG_DIR, 'outputs', 'pipeline_results.db');
-const FULL_DATA_CASES_PATH = path.join(PPG_DIR, 'data', 'vitaldb', 'final_cases.csv');
-const FULL_DATA_PPG_DIR = path.join(PPG_DIR, 'data', 'vitaldb', 'ppg');
+const MODEL_DIR = path.join(PPG_DIR, 'models', 'bgl_catboost_current_ppg_demo_no_preop');
+const DEMO_SIGNAL_PATH = path.join(PPG_DIR, 'examples', 'bgl', 'demo.signal.npy');
+const DEMO_DEMOGRAPHICS_PATH = path.join(PPG_DIR, 'examples', 'bgl', 'demo.example.json');
 const LOCAL_VENV_PYTHON = path.join(PPG_DIR, '.venv', 'bin', 'python');
 const LOCAL_VENV_WINDOWS_PYTHON = path.join(PPG_DIR, '.venv', 'Scripts', 'python.exe');
-const PPG_PYTHON_BIN = resolvePythonRuntime({
-  envOverride: process.env.PPG_MODEL_PYTHON_BIN || process.env.PPG_PYTHON_BIN,
-  localVenvPython: LOCAL_VENV_PYTHON,
-  localVenvWindowsPython: LOCAL_VENV_WINDOWS_PYTHON,
-  existsSync: fsSync.existsSync,
-});
+const SIGNAL_METRIC = (process.env.PPG_BGL_SIGNAL_METRIC || 'ppg.raw').trim() || 'ppg.raw';
+const DEFAULT_FS_HZ = Math.max(1, parseInt(process.env.PPG_BGL_FS_HZ || '500', 10));
+const DEFAULT_WINDOW_SECONDS = Math.max(
+  1,
+  parseInt(process.env.PPG_BGL_WINDOW_SECONDS || '900', 10)
+);
+const WINDOW_SAMPLE_COUNT = DEFAULT_FS_HZ * DEFAULT_WINDOW_SECONDS;
+const WINDOW_SPAN_TOLERANCE_MS = Math.max(
+  1000,
+  parseInt(process.env.PPG_BGL_WINDOW_TOLERANCE_MS || '30000', 10)
+);
 const MAX_LOG_TAIL_CHARS = 4000;
 const MAX_ERROR_CHARS = 600;
+const RUNTIME_CHECK_TIMEOUT_MS = 10000;
+const REQUIRED_MODEL_FILES = [
+  'catboost_model.cbm',
+  'final_features.txt',
+  'model_metadata.json',
+  'training_schema.json',
+];
+const REQUIRED_PYTHON_MODULES = [
+  'numpy',
+  'pandas',
+  'scipy',
+  'sklearn',
+  'PyEMD',
+  'catboost',
+  'dotmap',
+  'yaml',
+  'pyPPG',
+];
+
+const subjectStatement = db.prepare(
+  `SELECT id,
+          name,
+          email,
+          role,
+          avatar_url,
+          avatar_photo,
+          weight_category,
+          goal_steps,
+          goal_calories,
+          goal_sleep,
+          goal_readiness,
+          age,
+          sex,
+          bmi,
+          preop_dm,
+          preop_hb,
+          preop_cr
+     FROM users
+    WHERE id = ?`
+);
+
+const accessStatement = db.prepare(
+  `SELECT 1
+     FROM coach_athlete_links
+    WHERE coach_id = ?
+      AND athlete_id = ?`
+);
+
+const latestSignalWindowStatusStatement = db.prepare(
+  `SELECT COUNT(*) AS count,
+          MIN(ts) AS minTs,
+          MAX(ts) AS maxTs
+     FROM (
+       SELECT ts
+         FROM sensor_stream_samples
+        WHERE user_id = ?
+          AND metric = ?
+        ORDER BY ts DESC
+        LIMIT ?
+     ) recent`
+);
+
+const latestSignalSamplesStatement = db.prepare(
+  `SELECT ts, value
+     FROM sensor_stream_samples
+    WHERE user_id = ?
+      AND metric = ?
+    ORDER BY ts DESC
+    LIMIT ?`
+);
+
+const insertRunStatement = db.prepare(
+  `INSERT INTO bgl_inference_runs (
+      user_id,
+      requested_by_user_id,
+      mode,
+      status,
+      signal_metric,
+      signal_started_at,
+      signal_ended_at,
+      signal_sample_count,
+      signal_duration_ms,
+      fs_hz,
+      strict_length
+    ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)`
+);
+
+const completeRunStatement = db.prepare(
+  `UPDATE bgl_inference_runs
+      SET status = 'completed',
+          model_name = ?,
+          model_version = ?,
+          label = ?,
+          prob_low = ?,
+          prob_elevated = ?,
+          prob_hyper = ?,
+          mean_sqi = ?,
+          min_sqi = ?,
+          n_subwindows_attempted = ?,
+          n_subwindows_used = ?,
+          warnings_json = ?,
+          result_json = ?,
+          error_message = NULL,
+          completed_at = CURRENT_TIMESTAMP
+    WHERE id = ?`
+);
+
+const failRunStatement = db.prepare(
+  `UPDATE bgl_inference_runs
+      SET status = 'failed',
+          model_name = COALESCE(?, model_name),
+          model_version = COALESCE(?, model_version),
+          warnings_json = ?,
+          result_json = ?,
+          error_message = ?,
+          completed_at = CURRENT_TIMESTAMP
+    WHERE id = ?`
+);
+
+const latestRunByUserStatement = db.prepare(
+  `SELECT id,
+          user_id AS userId,
+          requested_by_user_id AS requestedByUserId,
+          mode,
+          status,
+          signal_metric AS signalMetric,
+          signal_started_at AS signalStartedAt,
+          signal_ended_at AS signalEndedAt,
+          signal_sample_count AS signalSampleCount,
+          signal_duration_ms AS signalDurationMs,
+          fs_hz AS fsHz,
+          strict_length AS strictLength,
+          model_name AS modelName,
+          model_version AS modelVersion,
+          label,
+          prob_low AS probLow,
+          prob_elevated AS probElevated,
+          prob_hyper AS probHyper,
+          mean_sqi AS meanSqi,
+          min_sqi AS minSqi,
+          n_subwindows_attempted AS nSubwindowsAttempted,
+          n_subwindows_used AS nSubwindowsUsed,
+          error_message AS errorMessage,
+          warnings_json AS warningsJson,
+          result_json AS resultJson,
+          started_at AS startedAt,
+          completed_at AS completedAt,
+          created_at AS createdAt
+     FROM bgl_inference_runs
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT 1`
+);
 
 let activeProcess = null;
-let lastRunStatus = null; // { status, runId, isDemo, startedAt, error }
+let activeRunState = null;
+
+function hasNumericValue(value) {
+  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+}
 
 function appendLogTail(current, chunk) {
   const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk ?? '');
@@ -50,143 +214,587 @@ function formatProcessError(code, stderrTail, stdoutTail) {
   return `Process exited with code ${code}: ${compactDetail}`;
 }
 
-function getFullDatasetStatus() {
+function createRunDirectory() {
+  return fsSync.mkdtempSync(path.join(os.tmpdir(), 'msml-bgl-'));
+}
+
+function cleanupRunDirectory(runDir) {
+  if (!runDir) {
+    return;
+  }
+
   try {
-    const rawCases = fsSync.readFileSync(FULL_DATA_CASES_PATH, 'utf8');
-    const expectedCaseIds = rawCases
-      .split(/\r?\n/)
-      .slice(1)
-      .map((line) => Number.parseInt(String(line).split(',')[0], 10))
-      .filter(Number.isFinite);
+    fsSync.rmSync(runDir, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
 
-    if (!expectedCaseIds.length) {
-      return {
-        ready: false,
-        availableCount: 0,
-        expectedCount: 0,
-        missingCaseIds: [],
-        message: 'Full dataset unavailable: no case manifest was found.',
-      };
-    }
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
 
-    const missingCaseIds = expectedCaseIds.filter(
-      (caseId) => !fsSync.existsSync(path.join(FULL_DATA_PPG_DIR, `${caseId}.npy`))
-    );
-    const availableCount = expectedCaseIds.length - missingCaseIds.length;
+function writeJson(filePath, value) {
+  fsSync.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
 
-    if (missingCaseIds.length === 0) {
-      return {
-        ready: true,
-        availableCount,
-        expectedCount: expectedCaseIds.length,
-        missingCaseIds: [],
-        message: 'Full dataset ready.',
-      };
-    }
+function writeFloat32Npy(filePath, values) {
+  const length = values.length;
+  const dict = `{'descr': '<f4', 'fortran_order': False, 'shape': (${length},), }`;
+  const preambleLength = 10;
+  const paddingLength = (16 - ((preambleLength + Buffer.byteLength(dict, 'ascii') + 1) % 16)) % 16;
+  const header = `${dict}${' '.repeat(paddingLength)}\n`;
+  const headerBuffer = Buffer.from(header, 'ascii');
+  const magicBuffer = Buffer.from([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 0x01, 0x00]);
+  const headerLengthBuffer = Buffer.alloc(2);
+  headerLengthBuffer.writeUInt16LE(headerBuffer.length, 0);
 
-    const preview = missingCaseIds.slice(0, 5).join(', ');
-    const suffix =
-      missingCaseIds.length > 5 ? `, +${missingCaseIds.length - 5} more` : '';
+  const dataBuffer = Buffer.alloc(length * 4);
+  for (let index = 0; index < length; index += 1) {
+    dataBuffer.writeFloatLE(values[index], index * 4);
+  }
+
+  fsSync.writeFileSync(
+    filePath,
+    Buffer.concat([magicBuffer, headerLengthBuffer, headerBuffer, dataBuffer])
+  );
+}
+
+function resolvePpgPythonBin() {
+  return resolvePythonRuntime({
+    envOverride: process.env.PPG_MODEL_PYTHON_BIN || process.env.PPG_PYTHON_BIN,
+    localVenvPython: LOCAL_VENV_PYTHON,
+    localVenvWindowsPython: LOCAL_VENV_WINDOWS_PYTHON,
+    existsSync: fsSync.existsSync,
+  });
+}
+
+function getPpgRuntimeStatus() {
+  const pythonBin = resolvePpgPythonBin();
+  const moduleList = JSON.stringify(REQUIRED_PYTHON_MODULES);
+  const probeScript = `
+import importlib.util
+import json
+import sys
+
+required = ${moduleList}
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+print(json.dumps({"missing": missing}))
+sys.exit(0 if not missing else 1)
+`.trim();
+
+  const probe = spawnSync(pythonBin, ['-c', probeScript], {
+    cwd: PPG_DIR,
+    encoding: 'utf8',
+    timeout: RUNTIME_CHECK_TIMEOUT_MS,
+    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+  });
+
+  if (probe.error) {
     return {
       ready: false,
-      availableCount,
-      expectedCount: expectedCaseIds.length,
-      missingCaseIds,
+      pythonBin,
+      missingModules: [],
       message:
-        `Full dataset unavailable: found ${availableCount}/${expectedCaseIds.length} PPG files.` +
-        ` Missing case IDs: ${preview}${suffix}.`,
+        `BGL inference Python runtime '${pythonBin}' is unavailable: ${probe.error.message}. ` +
+        "Run 'npm run setup:ppg-model' in lifestyle-web/server or set " +
+        "'PPG_MODEL_PYTHON_BIN' to a Python environment with " +
+        "'ppg_glucose/requirements_server.txt' installed.",
     };
+  }
+
+  let missingModules = [];
+  try {
+    missingModules = JSON.parse(probe.stdout || '{}').missing || [];
   } catch {
+    missingModules = [];
+  }
+
+  if (probe.status !== 0 || missingModules.length) {
+    const missingDetail = missingModules.length
+      ? ` Missing modules: ${missingModules.join(', ')}.`
+      : '';
     return {
       ready: false,
-      availableCount: 0,
-      expectedCount: 0,
-      missingCaseIds: [],
-      message: 'Full dataset unavailable: required VitalDB files are missing.',
+      pythonBin,
+      missingModules,
+      message:
+        `BGL inference Python runtime '${pythonBin}' is not ready.${missingDetail} ` +
+        "Run 'npm run setup:ppg-model' in lifestyle-web/server or set " +
+        "'PPG_MODEL_PYTHON_BIN' to a Python environment with " +
+        "'ppg_glucose/requirements_server.txt' installed.",
     };
   }
+
+  return {
+    ready: true,
+    pythonBin,
+    missingModules: [],
+    message: `BGL inference Python runtime '${pythonBin}' is ready.`,
+  };
 }
 
-function openPipelineDb() {
+function getModelBundleStatus() {
+  const missingFiles = REQUIRED_MODEL_FILES.filter(
+    (fileName) => !fsSync.existsSync(path.join(MODEL_DIR, fileName))
+  );
+
+  if (missingFiles.length) {
+    return {
+      ready: false,
+      modelDir: MODEL_DIR,
+      missingFiles,
+      message: `BGL model bundle is incomplete. Missing file(s): ${missingFiles.join(', ')}.`,
+    };
+  }
+
+  return {
+    ready: true,
+    modelDir: MODEL_DIR,
+    missingFiles: [],
+    message: 'BGL model bundle is ready.',
+  };
+}
+
+function getDemoInputStatus() {
+  const missing = [];
+  if (!fsSync.existsSync(DEMO_SIGNAL_PATH)) {
+    missing.push(path.relative(PPG_DIR, DEMO_SIGNAL_PATH));
+  }
+  if (!fsSync.existsSync(DEMO_DEMOGRAPHICS_PATH)) {
+    missing.push(path.relative(PPG_DIR, DEMO_DEMOGRAPHICS_PATH));
+  }
+
+  if (missing.length) {
+    return {
+      ready: false,
+      signalPath: DEMO_SIGNAL_PATH,
+      demographicsPath: DEMO_DEMOGRAPHICS_PATH,
+      message: `Bundled demo input is missing: ${missing.join(', ')}.`,
+    };
+  }
+
+  return {
+    ready: true,
+    signalPath: DEMO_SIGNAL_PATH,
+    demographicsPath: DEMO_DEMOGRAPHICS_PATH,
+    message: 'Bundled demo input is ready.',
+  };
+}
+
+function parseRequestedSubjectId(rawValue) {
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveSubject(req, rawSubjectId) {
+  req.user = { ...req.user, role: coerceRole(req.user.role) };
+  const viewerId = req.user.id;
+  const requestedId = parseRequestedSubjectId(rawSubjectId);
+  const subjectId = requestedId || viewerId;
+
+  if (subjectId !== viewerId && !isHeadCoach(req.user.role)) {
+    const hasAccess = accessStatement.get(viewerId, subjectId);
+    if (!hasAccess) {
+      return { error: 'Not authorized to view that athlete.', statusCode: 403 };
+    }
+  }
+
+  const subject = subjectStatement.get(subjectId);
+  if (!subject) {
+    return { error: 'Athlete not found.', statusCode: 404 };
+  }
+
+  subject.role = coerceRole(subject.role);
+  return { subject };
+}
+
+function buildProfileStatus(subject) {
+  const missingFields = [];
+  if (!hasNumericValue(subject?.age)) {
+    missingFields.push('age');
+  }
+  if (!subject?.sex || !String(subject.sex).trim()) {
+    missingFields.push('sex');
+  }
+  if (!hasNumericValue(subject?.bmi)) {
+    missingFields.push('bmi');
+  }
+  if (subject?.preop_dm === null || subject?.preop_dm === undefined || subject?.preop_dm === '') {
+    missingFields.push('preop_dm');
+  }
+
+  if (missingFields.length) {
+    return {
+      ready: false,
+      missingFields,
+      message:
+        `BGL profile is incomplete for ${subject?.name || 'this user'}. ` +
+        `Add ${missingFields.join(', ')} in Profile before running live inference.`,
+    };
+  }
+
+  return {
+    ready: true,
+    missingFields: [],
+    message: 'BGL profile is ready.',
+  };
+}
+
+function buildDemographicsPayload(subject) {
+  const demographics = {
+    age: Number(subject.age),
+    sex: String(subject.sex).trim(),
+    bmi: Number(subject.bmi),
+    preop_dm: Boolean(Number(subject.preop_dm)),
+  };
+
+  if (hasNumericValue(subject.preop_hb)) {
+    demographics.preop_hb = Number(subject.preop_hb);
+  }
+  if (hasNumericValue(subject.preop_cr)) {
+    demographics.preop_cr = Number(subject.preop_cr);
+  }
+
+  return demographics;
+}
+
+function getLatestSignalWindowStatus(subjectId) {
+  const row = latestSignalWindowStatusStatement.get(subjectId, SIGNAL_METRIC, WINDOW_SAMPLE_COUNT);
+  const count = Number(row?.count || 0);
+  const minTs = Number(row?.minTs);
+  const maxTs = Number(row?.maxTs);
+
+  if (count < WINDOW_SAMPLE_COUNT) {
+    return {
+      ready: false,
+      metric: SIGNAL_METRIC,
+      sampleCount: count,
+      requiredSamples: WINDOW_SAMPLE_COUNT,
+      fsHz: DEFAULT_FS_HZ,
+      windowSeconds: DEFAULT_WINDOW_SECONDS,
+      message:
+        `Latest ${SIGNAL_METRIC} window is incomplete. ` +
+        `Need ${WINDOW_SAMPLE_COUNT} samples at ${DEFAULT_FS_HZ} Hz; found ${count}.`,
+    };
+  }
+
+  if (!Number.isFinite(minTs) || !Number.isFinite(maxTs)) {
+    return {
+      ready: false,
+      metric: SIGNAL_METRIC,
+      sampleCount: count,
+      requiredSamples: WINDOW_SAMPLE_COUNT,
+      fsHz: DEFAULT_FS_HZ,
+      windowSeconds: DEFAULT_WINDOW_SECONDS,
+      message: `Latest ${SIGNAL_METRIC} window timestamps are unavailable.`,
+    };
+  }
+
+  const spanMs = Math.max(0, maxTs - minTs);
+  const expectedSpanMs = Math.round(((WINDOW_SAMPLE_COUNT - 1) / DEFAULT_FS_HZ) * 1000);
+  if (Math.abs(spanMs - expectedSpanMs) > WINDOW_SPAN_TOLERANCE_MS) {
+    return {
+      ready: false,
+      metric: SIGNAL_METRIC,
+      sampleCount: count,
+      requiredSamples: WINDOW_SAMPLE_COUNT,
+      fsHz: DEFAULT_FS_HZ,
+      windowSeconds: DEFAULT_WINDOW_SECONDS,
+      spanMs,
+      expectedSpanMs,
+      message:
+        `Latest ${SIGNAL_METRIC} window spans ${(spanMs / 1000).toFixed(1)}s; ` +
+        `expected about ${DEFAULT_WINDOW_SECONDS}s at ${DEFAULT_FS_HZ} Hz.`,
+    };
+  }
+
+  return {
+    ready: true,
+    metric: SIGNAL_METRIC,
+    sampleCount: count,
+    requiredSamples: WINDOW_SAMPLE_COUNT,
+    fsHz: DEFAULT_FS_HZ,
+    windowSeconds: DEFAULT_WINDOW_SECONDS,
+    spanMs,
+    expectedSpanMs,
+    message: `Latest ${SIGNAL_METRIC} window is ready.`,
+  };
+}
+
+function loadLatestSignalWindow(subjectId) {
+  const status = getLatestSignalWindowStatus(subjectId);
+  if (!status.ready) {
+    return { error: status.message, statusCode: 400 };
+  }
+
+  const rows = latestSignalSamplesStatement.all(subjectId, SIGNAL_METRIC, WINDOW_SAMPLE_COUNT);
+  if (!Array.isArray(rows) || rows.length !== WINDOW_SAMPLE_COUNT) {
+    return {
+      error:
+        `Latest ${SIGNAL_METRIC} window could not be assembled. ` +
+        `Expected ${WINDOW_SAMPLE_COUNT} samples and found ${rows?.length || 0}.`,
+      statusCode: 400,
+    };
+  }
+
+  const ascending = [...rows].reverse();
+  const samples = new Float32Array(WINDOW_SAMPLE_COUNT);
+
+  for (let index = 0; index < ascending.length; index += 1) {
+    const numeric = Number(ascending[index]?.value);
+    if (!Number.isFinite(numeric)) {
+      return {
+        error: `Latest ${SIGNAL_METRIC} window contains a non-numeric sample.`,
+        statusCode: 400,
+      };
+    }
+    samples[index] = numeric;
+  }
+
+  const startedAtMs = Number(ascending[0]?.ts);
+  const endedAtMs = Number(ascending[ascending.length - 1]?.ts);
+
+  return {
+    samples,
+    signalMetric: SIGNAL_METRIC,
+    signalSampleCount: ascending.length,
+    signalDurationMs: Math.max(0, endedAtMs - startedAtMs),
+    signalStartedAt: Number.isFinite(startedAtMs) ? new Date(startedAtMs).toISOString() : null,
+    signalEndedAt: Number.isFinite(endedAtMs) ? new Date(endedAtMs).toISOString() : null,
+  };
+}
+
+function summarisePrediction(payload) {
+  const probabilities = payload?.prediction?.probabilities || {};
+  const topProbability = Math.max(
+    0,
+    ...Object.values(probabilities)
+      .map((value) => Number(value))
+      .filter(Number.isFinite)
+  );
+
+  return {
+    label: payload?.prediction?.label || null,
+    confidence: topProbability,
+    modelName: payload?.model_name || null,
+    meanSqi: Number.isFinite(payload?.quality?.mean_sqi) ? payload.quality.mean_sqi : null,
+    usedSubwindows: Number.isFinite(payload?.quality?.n_subwindows_used)
+      ? payload.quality.n_subwindows_used
+      : null,
+    attemptedSubwindows: Number.isFinite(payload?.quality?.n_subwindows_attempted)
+      ? payload.quality.n_subwindows_attempted
+      : null,
+  };
+}
+
+function serializeRunRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  const startedAtMs = row.startedAt ? Date.parse(row.startedAt) : NaN;
+  const completedAtMs = row.completedAt ? Date.parse(row.completedAt) : NaN;
+  const probabilities = [row.probLow, row.probElevated, row.probHyper]
+    .map((value) => Number(value))
+    .filter(Number.isFinite);
+  const confidence = probabilities.length ? Math.max(...probabilities) : null;
+
+  return {
+    id: row.id,
+    userId: row.userId,
+    requestedByUserId: row.requestedByUserId,
+    mode: row.mode,
+    isDemo: row.mode === 'demo',
+    status: row.status,
+    startedAt: row.startedAt || row.createdAt || null,
+    completedAt: row.completedAt || null,
+    elapsedSeconds:
+      Number.isFinite(startedAtMs) && Number.isFinite(completedAtMs)
+        ? Math.max(0, (completedAtMs - startedAtMs) / 1000)
+        : null,
+    error: row.errorMessage || null,
+    request: {
+      signalMetric: row.signalMetric || null,
+      signalSampleCount: Number.isFinite(Number(row.signalSampleCount))
+        ? Number(row.signalSampleCount)
+        : null,
+      signalStartedAt: row.signalStartedAt || null,
+      signalEndedAt: row.signalEndedAt || null,
+      signalDurationMs: Number.isFinite(Number(row.signalDurationMs))
+        ? Number(row.signalDurationMs)
+        : null,
+      fsHz: Number.isFinite(Number(row.fsHz)) ? Number(row.fsHz) : null,
+      strictLength: Boolean(row.strictLength),
+    },
+    resultSummary: {
+      label: row.label || null,
+      confidence,
+      modelName: row.modelName || null,
+      meanSqi: Number.isFinite(Number(row.meanSqi)) ? Number(row.meanSqi) : null,
+      usedSubwindows: Number.isFinite(Number(row.nSubwindowsUsed))
+        ? Number(row.nSubwindowsUsed)
+        : null,
+      attemptedSubwindows: Number.isFinite(Number(row.nSubwindowsAttempted))
+        ? Number(row.nSubwindowsAttempted)
+        : null,
+    },
+  };
+}
+
+function extractPredictionPayload(row) {
+  if (!row?.resultJson) {
+    return null;
+  }
   try {
-    return new Database(PIPELINE_DB_PATH, { readonly: true });
+    const payload = JSON.parse(row.resultJson);
+    return payload && !payload.error ? payload : null;
   } catch {
     return null;
   }
 }
 
-function getLatestRun(db) {
-  try {
-    return db
-      .prepare(
-        `SELECT run_id, is_demo, n_subjects, status, error_message,
-                started_at, completed_at, elapsed_seconds
-           FROM pipeline_runs
-          ORDER BY started_at DESC
-          LIMIT 1`
-      )
-      .get();
-  } catch {
-    return null;
+function prepareDemoRunConfig() {
+  const demoInput = getDemoInputStatus();
+  if (!demoInput.ready) {
+    return { error: demoInput.message, statusCode: 500 };
   }
+
+  const runDir = createRunDirectory();
+  return {
+    mode: 'demo',
+    signalPath: demoInput.signalPath,
+    demographicsPath: demoInput.demographicsPath,
+    outputPath: path.join(runDir, 'prediction.json'),
+    runDir,
+    fsHz: DEFAULT_FS_HZ,
+    strictLength: false,
+    signalMetric: 'demo.signal',
+    signalSampleCount: null,
+    signalDurationMs: null,
+    signalStartedAt: null,
+    signalEndedAt: null,
+  };
 }
 
-function getModelResults(db, runId) {
-  try {
-    return db
-      .prepare(
-        `SELECT task, model_name, mae, rmse, r2, zone_a_pct, zone_ab_pct,
-                accuracy, precision_hyper, recall_hyper, f1_hyper, auroc,
-                macro_f1, weighted_f1, off_by_one_acc
-           FROM model_results
-          WHERE run_id = ?
-          ORDER BY task, CASE WHEN mae IS NULL THEN 1 ELSE 0 END, mae ASC`
-      )
-      .all(runId);
-  } catch {
-    return [];
+function prepareLiveRunConfig(subject) {
+  const profileStatus = buildProfileStatus(subject);
+  if (!profileStatus.ready) {
+    return { error: profileStatus.message, statusCode: 400 };
   }
+
+  const latestWindow = loadLatestSignalWindow(subject.id);
+  if (latestWindow.error) {
+    return latestWindow;
+  }
+
+  const runDir = createRunDirectory();
+  const signalPath = path.join(runDir, 'window.npy');
+  const demographicsPath = path.join(runDir, 'demographics.json');
+  const outputPath = path.join(runDir, 'prediction.json');
+
+  writeFloat32Npy(signalPath, latestWindow.samples);
+  writeJson(demographicsPath, buildDemographicsPayload(subject));
+
+  return {
+    mode: 'latest',
+    signalPath,
+    demographicsPath,
+    outputPath,
+    runDir,
+    fsHz: DEFAULT_FS_HZ,
+    strictLength: true,
+    signalMetric: latestWindow.signalMetric,
+    signalSampleCount: latestWindow.signalSampleCount,
+    signalDurationMs: latestWindow.signalDurationMs,
+    signalStartedAt: latestWindow.signalStartedAt,
+    signalEndedAt: latestWindow.signalEndedAt,
+  };
 }
 
-function getGlucoseSamples(db, runId) {
-  try {
-    return db
-      .prepare(
-        `SELECT sid, glucose_time_sec, glucose_mgdl
-           FROM features_master
-          WHERE run_id = ?
-          ORDER BY sid, glucose_time_sec
-          LIMIT 300`
-      )
-      .all(runId);
-  } catch {
-    return [];
-  }
-}
-
-function spawnPipeline(isDemo) {
-  if (activeProcess) return false;
-
-  const args = ['run_pipeline.py', '--db-url', `sqlite:///${PIPELINE_DB_PATH}`];
-  if (isDemo) {
-    args.push('--demo');
-    args.push('--protocol', 'loso'); // 3 subjects → can't do 5-fold; loso works with any N
+function spawnInference(runConfig, subject, requestedByUserId) {
+  if (activeProcess) {
+    return { started: false, statusCode: 409, error: 'BGL inference already running.' };
   }
 
-  const proc = spawn(PPG_PYTHON_BIN, args, {
+  const runtime = getPpgRuntimeStatus();
+  if (!runtime.ready) {
+    return { started: false, statusCode: 500, error: runtime.message };
+  }
+
+  const modelBundle = getModelBundleStatus();
+  if (!modelBundle.ready) {
+    return { started: false, statusCode: 500, error: modelBundle.message };
+  }
+
+  const args = [
+    '-m',
+    'src.inference.predict',
+    '--signal',
+    runConfig.signalPath,
+    '--demographics',
+    runConfig.demographicsPath,
+    '--output',
+    runConfig.outputPath,
+    '--model-dir',
+    MODEL_DIR,
+    '--fs',
+    String(runConfig.fsHz),
+  ];
+
+  if (!runConfig.strictLength) {
+    args.push('--no-strict-length');
+  }
+
+  const insertResult = insertRunStatement.run(
+    subject.id,
+    requestedByUserId,
+    runConfig.mode,
+    runConfig.signalMetric,
+    runConfig.signalStartedAt,
+    runConfig.signalEndedAt,
+    runConfig.signalSampleCount,
+    runConfig.signalDurationMs,
+    runConfig.fsHz,
+    runConfig.strictLength ? 1 : 0
+  );
+
+  const runId = insertResult.lastInsertRowid;
+  const proc = spawn(runtime.pythonBin, args, {
     cwd: PPG_DIR,
     stdio: 'pipe',
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
   });
+
   let stdoutTail = '';
   let stderrTail = '';
 
   activeProcess = proc;
-  lastRunStatus = {
+  activeRunState = {
+    id: runId,
+    userId: subject.id,
+    requestedByUserId,
+    mode: runConfig.mode,
+    isDemo: runConfig.mode === 'demo',
     status: 'running',
-    isDemo,
     startedAt: new Date().toISOString(),
+    completedAt: null,
+    elapsedSeconds: null,
     error: null,
+    request: {
+      signalMetric: runConfig.signalMetric,
+      signalSampleCount: runConfig.signalSampleCount,
+      signalStartedAt: runConfig.signalStartedAt,
+      signalEndedAt: runConfig.signalEndedAt,
+      signalDurationMs: runConfig.signalDurationMs,
+      fsHz: runConfig.fsHz,
+      strictLength: runConfig.strictLength,
+    },
+    resultSummary: null,
   };
 
   proc.stdout?.on('data', (chunk) => {
@@ -199,81 +807,159 @@ function spawnPipeline(isDemo) {
 
   proc.on('close', (code) => {
     activeProcess = null;
-    if (lastRunStatus) {
-      lastRunStatus.status = code === 0 ? 'completed' : 'failed';
-      if (code !== 0) {
-        lastRunStatus.error = formatProcessError(code, stderrTail, stdoutTail);
+    const completedAt = new Date();
+    const payload = readJsonFile(runConfig.outputPath);
+
+    if (activeRunState?.id === runId) {
+      activeRunState.completedAt = completedAt.toISOString();
+      const startedAtMs = activeRunState.startedAt ? Date.parse(activeRunState.startedAt) : NaN;
+      activeRunState.elapsedSeconds = Number.isFinite(startedAtMs)
+        ? Math.max(0, (completedAt.getTime() - startedAtMs) / 1000)
+        : null;
+    }
+
+    if (code === 0 && payload && !payload.error) {
+      const probabilities = payload?.prediction?.probabilities || {};
+      completeRunStatement.run(
+        payload?.model_name || null,
+        payload?.model_version || null,
+        payload?.prediction?.label || null,
+        Number.isFinite(Number(probabilities.low)) ? Number(probabilities.low) : null,
+        Number.isFinite(Number(probabilities.elevated)) ? Number(probabilities.elevated) : null,
+        Number.isFinite(Number(probabilities.hyper)) ? Number(probabilities.hyper) : null,
+        Number.isFinite(Number(payload?.quality?.mean_sqi)) ? Number(payload.quality.mean_sqi) : null,
+        Number.isFinite(Number(payload?.quality?.min_sqi)) ? Number(payload.quality.min_sqi) : null,
+        Number.isFinite(Number(payload?.quality?.n_subwindows_attempted))
+          ? Number(payload.quality.n_subwindows_attempted)
+          : null,
+        Number.isFinite(Number(payload?.quality?.n_subwindows_used))
+          ? Number(payload.quality.n_subwindows_used)
+          : null,
+        Array.isArray(payload?.warnings) ? JSON.stringify(payload.warnings) : null,
+        JSON.stringify(payload),
+        runId
+      );
+
+      if (activeRunState?.id === runId) {
+        activeRunState.status = 'completed';
+        activeRunState.resultSummary = summarisePrediction(payload);
+      }
+    } else {
+      const errorMessage =
+        payload?.error?.message ||
+        formatProcessError(code, stderrTail, stdoutTail) ||
+        'Inference failed.';
+      failRunStatement.run(
+        payload?.model_name || null,
+        payload?.model_version || null,
+        Array.isArray(payload?.warnings) ? JSON.stringify(payload.warnings) : null,
+        payload ? JSON.stringify(payload) : null,
+        errorMessage,
+        runId
+      );
+
+      if (activeRunState?.id === runId) {
+        activeRunState.status = 'failed';
+        activeRunState.error = errorMessage;
       }
     }
+
+    cleanupRunDirectory(runConfig.runDir);
   });
 
   proc.on('error', (err) => {
     activeProcess = null;
-    if (lastRunStatus) {
-      lastRunStatus.status = 'failed';
-      lastRunStatus.error = err.message;
+    failRunStatement.run(null, null, null, null, err.message, runId);
+    if (activeRunState?.id === runId) {
+      activeRunState.status = 'failed';
+      activeRunState.completedAt = new Date().toISOString();
+      activeRunState.error = err.message;
     }
+    cleanupRunDirectory(runConfig.runDir);
   });
 
-  return true;
+  return { started: true };
 }
 
-// POST /api/ppg/run  (body: { demo: true|false })
 router.post('/run', authenticate, (req, res) => {
+  const requestedSubject = resolveSubject(req, req.body?.athleteId);
+  if (requestedSubject.error) {
+    return res.status(requestedSubject.statusCode || 400).json({ message: requestedSubject.error });
+  }
+
   if (activeProcess) {
-    return res.status(409).json({ message: 'Pipeline already running.' });
+    return res.status(409).json({ message: 'BGL inference already running.' });
   }
-  const isDemo = req.body?.demo === true;
-  const dataset = getFullDatasetStatus();
-  if (!isDemo && !dataset.ready) {
-    return res.status(400).json({ message: dataset.message, dataset });
-  }
-  const started = spawnPipeline(isDemo);
-  if (!started) {
-    return res.status(409).json({ message: 'Pipeline already running.' });
-  }
-  return res.json({ message: 'Pipeline started.', isDemo });
-});
 
-// GET /api/ppg/status
-router.get('/status', authenticate, (req, res) => {
-  const running = !!activeProcess;
-  const dataset = getFullDatasetStatus();
+  const runConfig =
+    req.body?.demo === true
+      ? prepareDemoRunConfig()
+      : prepareLiveRunConfig(requestedSubject.subject);
 
-  // Merge in-memory status with last DB run
-  const db = openPipelineDb();
-  let dbRun = null;
-  if (db) {
-    dbRun = getLatestRun(db);
-    db.close();
+  if (runConfig.error) {
+    return res.status(runConfig.statusCode || 400).json({ message: runConfig.error });
+  }
+
+  const started = spawnInference(runConfig, requestedSubject.subject, req.user.id);
+  if (!started.started) {
+    cleanupRunDirectory(runConfig.runDir);
+    return res.status(started.statusCode || 500).json({ message: started.error });
   }
 
   return res.json({
-    running,
-    inMemory: lastRunStatus,
-    latestRun: dbRun || null,
-    dataset,
+    message: 'BGL inference started.',
+    mode: runConfig.mode,
+    fsHz: runConfig.fsHz,
+    strictLength: runConfig.strictLength,
+    metric: runConfig.signalMetric,
+    athleteId: requestedSubject.subject.id,
   });
 });
 
-// GET /api/ppg/results
+router.get('/status', authenticate, (req, res) => {
+  const requestedSubject = resolveSubject(req, req.query?.athleteId);
+  if (requestedSubject.error) {
+    return res.status(requestedSubject.statusCode || 400).json({ message: requestedSubject.error });
+  }
+
+  const subject = requestedSubject.subject;
+  const latestRunRow = latestRunByUserStatement.get(subject.id);
+  const latestRun = serializeRunRow(latestRunRow);
+  const inMemory =
+    activeRunState && activeRunState.userId === subject.id ? activeRunState : null;
+
+  return res.json({
+    running: Boolean(inMemory && inMemory.status === 'running'),
+    inMemory,
+    latestRun: inMemory || latestRun,
+    latestPrediction: latestRunRow ? extractPredictionPayload(latestRunRow) : null,
+    runtime: getPpgRuntimeStatus(),
+    bundle: getModelBundleStatus(),
+    demoInput: getDemoInputStatus(),
+    liveInput: getLatestSignalWindowStatus(subject.id),
+    profile: buildProfileStatus(subject),
+    signalMetric: SIGNAL_METRIC,
+    subject: {
+      id: subject.id,
+      name: subject.name,
+      role: subject.role,
+    },
+  });
+});
+
 router.get('/results', authenticate, (req, res) => {
-  const db = openPipelineDb();
-  if (!db) {
-    return res.json({ run: null, models: [], glucoseSamples: [] });
+  const requestedSubject = resolveSubject(req, req.query?.athleteId);
+  if (requestedSubject.error) {
+    return res.status(requestedSubject.statusCode || 400).json({ message: requestedSubject.error });
   }
 
-  const run = getLatestRun(db);
-  if (!run) {
-    db.close();
-    return res.json({ run: null, models: [], glucoseSamples: [] });
-  }
+  const latestRunRow = latestRunByUserStatement.get(requestedSubject.subject.id);
+  const latestRun = serializeRunRow(latestRunRow);
 
-  const models = getModelResults(db, run.run_id);
-  const glucoseSamples = getGlucoseSamples(db, run.run_id);
-  db.close();
-
-  return res.json({ run, models, glucoseSamples });
+  return res.json({
+    run: latestRun,
+    prediction: latestRunRow ? extractPredictionPayload(latestRunRow) : null,
+  });
 });
 
 module.exports = router;

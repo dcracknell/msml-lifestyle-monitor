@@ -1263,6 +1263,12 @@ const profileWeightCategorySelect = document.getElementById('profileWeightCatego
 const profileEmailInput = document.getElementById('profileEmail');
 const profilePasswordInput = document.getElementById('profilePassword');
 const profileCurrentPasswordInput = document.getElementById('profileCurrentPassword');
+const profileAgeInput = document.getElementById('profileAge');
+const profileSexSelect = document.getElementById('profileSex');
+const profileBmiInput = document.getElementById('profileBmi');
+const profilePreopDmSelect = document.getElementById('profilePreopDm');
+const profilePreopHbInput = document.getElementById('profilePreopHb');
+const profilePreopCrInput = document.getElementById('profilePreopCr');
 const profileFeedback = document.getElementById('profileFeedback');
 const profileStravaClientIdInput = document.getElementById('profileStravaClientId');
 const profileStravaClientSecretInput = document.getElementById('profileStravaClientSecret');
@@ -7085,6 +7091,25 @@ function prefillProfileForm(user) {
   if (profileEmailInput) profileEmailInput.value = user.email || '';
   if (profilePasswordInput) profilePasswordInput.value = '';
   if (profileCurrentPasswordInput) profileCurrentPasswordInput.value = '';
+  if (profileAgeInput) profileAgeInput.value = Number.isFinite(Number(user.age)) ? String(user.age) : '';
+  if (profileSexSelect) profileSexSelect.value = user.sex || '';
+  if (profileBmiInput) profileBmiInput.value = Number.isFinite(Number(user.bmi)) ? String(user.bmi) : '';
+  if (profilePreopDmSelect) {
+    profilePreopDmSelect.value =
+      user.preop_dm === null || user.preop_dm === undefined || user.preop_dm === ''
+        ? ''
+        : Number(user.preop_dm) === 1
+        ? 'true'
+        : 'false';
+  }
+  if (profilePreopHbInput) {
+    profilePreopHbInput.value =
+      Number.isFinite(Number(user.preop_hb)) ? String(user.preop_hb) : '';
+  }
+  if (profilePreopCrInput) {
+    profilePreopCrInput.value =
+      Number.isFinite(Number(user.preop_cr)) ? String(user.preop_cr) : '';
+  }
   if (profileFeedback) profileFeedback.textContent = '';
   if (profileStravaClientIdInput) profileStravaClientIdInput.value = user.strava_client_id || '';
   if (profileStravaClientSecretInput) {
@@ -8249,6 +8274,12 @@ profileForm?.addEventListener('submit', async (event) => {
   const email = profileEmailInput?.value.trim().toLowerCase();
   const password = profilePasswordInput?.value;
   const currentPassword = profileCurrentPasswordInput?.value || '';
+  const age = profileAgeInput?.value ?? '';
+  const sex = profileSexSelect?.value ?? '';
+  const bmi = profileBmiInput?.value ?? '';
+  const preopDmRaw = profilePreopDmSelect?.value ?? '';
+  const preopHb = profilePreopHbInput?.value ?? '';
+  const preopCr = profilePreopCrInput?.value ?? '';
   const weightCategory = profileWeightCategorySelect?.value || '';
   const stravaClientId = profileStravaClientIdInput?.value.trim() || '';
   const stravaClientSecret = profileStravaClientSecretInput?.value.trim() || '';
@@ -8272,6 +8303,13 @@ profileForm?.addEventListener('submit', async (event) => {
         email,
         password: password || undefined,
         currentPassword,
+        age,
+        sex,
+        bmi,
+        preopDm:
+          preopDmRaw === '' ? null : preopDmRaw === 'true',
+        preopHb,
+        preopCr,
         weightCategory,
         stravaClientId,
         stravaClientSecret,
@@ -12281,32 +12319,132 @@ const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
 const ppgRunFullBtn = document.getElementById('ppgRunFull');
 const ppgStatusText = document.getElementById('ppgStatusText');
 const ppgResultsDiv = document.getElementById('ppgResults');
-const ppgBestRegModel = document.getElementById('ppgBestRegModel');
-const ppgBestRegMAE   = document.getElementById('ppgBestRegMAE');
-const ppgBestClsModel = document.getElementById('ppgBestClsModel');
-const ppgBestClsF1    = document.getElementById('ppgBestClsF1');
-const ppgBestMcModel  = document.getElementById('ppgBestMcModel');
-const ppgBestMcF1     = document.getElementById('ppgBestMcF1');
+const ppgPredictionLabel = document.getElementById('ppgPredictionLabel');
+const ppgPredictionSub = document.getElementById('ppgPredictionSub');
+const ppgConfidenceValue = document.getElementById('ppgConfidenceValue');
+const ppgConfidenceSub = document.getElementById('ppgConfidenceSub');
+const ppgQualityValue = document.getElementById('ppgQualityValue');
+const ppgQualitySub = document.getElementById('ppgQualitySub');
 
 let ppgPollTimer = null;
-let ppgDatasetStatus = null;
+let ppgLiveInputStatus = null;
+let ppgDemoInputStatus = null;
+let ppgRuntimeStatus = null;
+let ppgBundleStatus = null;
+let ppgProfileStatus = null;
+const PPG_ZONE_ORDER = ['low', 'elevated', 'hyper'];
+const PPG_ZONE_COLORS = {
+  low: {
+    fill: 'rgba(67,217,201,0.75)',
+    border: '#43d9c9',
+  },
+  elevated: {
+    fill: 'rgba(245,158,11,0.7)',
+    border: '#f59e0b',
+  },
+  hyper: {
+    fill: 'rgba(239,68,68,0.72)',
+    border: '#ef4444',
+  },
+  muted: {
+    fill: 'rgba(148,163,184,0.28)',
+    border: 'rgba(148,163,184,0.65)',
+  },
+};
 
-function setPpgButtonsDisabled(disabled, dataset = ppgDatasetStatus) {
-  ppgDatasetStatus = dataset ?? ppgDatasetStatus;
+function capitalizePpgLabel(value) {
+  if (typeof value !== 'string' || !value.trim()) return '—';
+  return value
+    .trim()
+    .split(/[\s_-]+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatPpgPercent(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${Math.round(numeric * 100)}%` : '—';
+}
+
+function getPpgChartEntries(prediction) {
+  const probabilities = prediction?.prediction?.probabilities || {};
+  const predictedLabel =
+    typeof prediction?.prediction?.label === 'string'
+      ? prediction.prediction.label.trim().toLowerCase()
+      : '';
+  const orderedKeys = [
+    ...PPG_ZONE_ORDER,
+    ...Object.keys(probabilities).filter((key) => !PPG_ZONE_ORDER.includes(key)),
+  ];
+
+  return orderedKeys
+    .map((key) => {
+      const numeric = Number(probabilities[key]);
+      if (!Number.isFinite(numeric)) {
+        return null;
+      }
+
+      const zoneColors = PPG_ZONE_COLORS[key] || PPG_ZONE_COLORS.muted;
+      const isPredicted = key === predictedLabel;
+      return {
+        key,
+        label: capitalizePpgLabel(key),
+        value: numeric,
+        isPredicted,
+        fill: isPredicted ? zoneColors.fill : PPG_ZONE_COLORS.muted.fill,
+        border: isPredicted ? zoneColors.border : PPG_ZONE_COLORS.muted.border,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getPpgBlockingMessage() {
+  if (ppgRuntimeStatus?.ready === false) return ppgRuntimeStatus.message;
+  if (ppgBundleStatus?.ready === false) return ppgBundleStatus.message;
+  return '';
+}
+
+function getCurrentPpgSubjectQuery() {
+  const targetId = state.viewing?.id ?? state.user?.id;
+  if (!targetId || targetId === state.user?.id) {
+    return '';
+  }
+  return `?athleteId=${encodeURIComponent(targetId)}`;
+}
+
+function setPpgButtonsDisabled(disabled, status = {}) {
+  ppgLiveInputStatus = status.liveInput ?? ppgLiveInputStatus;
+  ppgDemoInputStatus = status.demoInput ?? ppgDemoInputStatus;
+  ppgRuntimeStatus = status.runtime ?? ppgRuntimeStatus;
+  ppgBundleStatus = status.bundle ?? ppgBundleStatus;
+  ppgProfileStatus = status.profile ?? ppgProfileStatus;
+
+  const blockingMessage = getPpgBlockingMessage();
+  const baseReady = !blockingMessage;
+  const demoReady = baseReady && ppgDemoInputStatus?.ready !== false;
+  const liveReady =
+    baseReady && ppgProfileStatus?.ready === true && ppgLiveInputStatus?.ready === true;
 
   if (ppgRunDemoBtn) {
-    ppgRunDemoBtn.disabled = disabled;
-    ppgRunDemoBtn.title = disabled ? 'Pipeline running.' : '';
+    ppgRunDemoBtn.disabled = disabled || !demoReady;
+    if (!demoReady) {
+      ppgRunDemoBtn.title =
+        blockingMessage || ppgDemoInputStatus?.message || 'Bundled demo inference is unavailable.';
+    } else {
+      ppgRunDemoBtn.title = disabled ? 'BGL inference running.' : '';
+    }
   }
 
   if (ppgRunFullBtn) {
-    const fullRunReady = ppgDatasetStatus?.ready !== false;
-    ppgRunFullBtn.disabled = disabled || !fullRunReady;
-    if (!fullRunReady) {
+    ppgRunFullBtn.disabled = disabled || !liveReady;
+    if (!liveReady) {
       ppgRunFullBtn.title =
-        ppgDatasetStatus?.message || 'Full run unavailable until the full dataset is present.';
+        blockingMessage ||
+        ppgProfileStatus?.message ||
+        ppgLiveInputStatus?.message ||
+        'Latest PPG window inference is unavailable.';
     } else {
-      ppgRunFullBtn.title = disabled ? 'Pipeline running.' : '';
+      ppgRunFullBtn.title = disabled ? 'BGL inference running.' : '';
     }
   }
 }
@@ -12317,10 +12455,20 @@ function setPpgStatus(text, cls) {
   ppgStatusText.className = 'ppg-status-text' + (cls ? ` ${cls}` : '');
 }
 
-function getPpgDatasetNote(dataset = ppgDatasetStatus) {
-  if (!dataset || dataset.ready !== false) return '';
-  if (!Number.isFinite(dataset.availableCount) || !Number.isFinite(dataset.expectedCount)) return '';
-  return ` Full run unavailable (${dataset.availableCount}/${dataset.expectedCount} PPG files found).`;
+function getPpgIdleText() {
+  if (getPpgBlockingMessage()) {
+    return getPpgBlockingMessage();
+  }
+  if (ppgProfileStatus?.ready === false) {
+    return ppgProfileStatus.message;
+  }
+  if (ppgLiveInputStatus?.ready === true) {
+    return 'No inference run yet. Run the latest PPG window or the bundled demo.';
+  }
+  return (
+    ppgLiveInputStatus?.message ||
+    'No inference run yet. Stream a 15-minute ppg.raw window or run the bundled demo.'
+  );
 }
 
 function stopPpgPoll() {
@@ -12334,26 +12482,27 @@ function startPpgPoll() {
   stopPpgPoll();
   ppgPollTimer = setInterval(async () => {
     try {
-      const res = await apiFetch('/api/ppg/status', { headers: { Authorization: `Bearer ${state.token}` } });
+      const res = await apiFetch(`/api/ppg/status${getCurrentPpgSubjectQuery()}`, {
+        headers: { Authorization: `Bearer ${state.token}` },
+      });
       if (!res.ok) return;
       const data = await res.json();
       if (!data.running) {
         stopPpgPoll();
-        setPpgButtonsDisabled(false, data.dataset);
+        setPpgButtonsDisabled(false, data);
         if (data.latestRun?.status === 'completed') {
-          const mode = data.latestRun.is_demo ? 'demo' : 'full';
-          const mins = data.latestRun.elapsed_seconds
-            ? `${(data.latestRun.elapsed_seconds / 60).toFixed(1)} min`
+          const mode = data.latestRun.mode || (data.latestRun.isDemo ? 'demo' : 'latest');
+          const secs = Number.isFinite(data.latestRun.elapsedSeconds)
+            ? `${data.latestRun.elapsedSeconds.toFixed(1)} s`
             : '';
-          const completedText = `Last ${mode} run completed${mins ? ` in ${mins}` : ''}.`;
-          setPpgStatus(
-            `${completedText}${getPpgDatasetNote(data.dataset)}`,
-            'ppg-done'
-          );
+          const label = data.latestRun.resultSummary?.label
+            ? ` Predicted ${capitalizePpgLabel(data.latestRun.resultSummary.label)}.`
+            : '';
+          setPpgStatus(`Last ${mode} inference completed${secs ? ` in ${secs}` : ''}.${label}`, 'ppg-done');
           loadPpgResults();
         } else if (data.inMemory?.status === 'failed' || data.latestRun?.status === 'failed') {
-          const message = data.inMemory?.error || data.latestRun?.error_message || 'unknown error';
-          setPpgStatus(`Run failed: ${message}`, 'ppg-error');
+          const message = data.inMemory?.error || data.latestRun?.error || 'unknown error';
+          setPpgStatus(`Inference failed: ${message}`, 'ppg-error');
         }
       }
     } catch { /* ignore poll errors */ }
@@ -12363,15 +12512,19 @@ function startPpgPoll() {
 async function triggerPpg(isDemo) {
   if (!state.token) return;
   setPpgButtonsDisabled(true);
-  setPpgStatus(`Starting ${isDemo ? 'demo' : 'full'} pipeline…`, 'ppg-running');
+  setPpgStatus(`Starting ${isDemo ? 'demo' : 'live'} BGL inference…`, 'ppg-running');
   try {
+    const targetId = state.viewing?.id ?? state.user?.id;
     const res = await apiFetch('/api/ppg/run', {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ demo: isDemo }),
+      body: JSON.stringify({
+        demo: isDemo,
+        athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
+      }),
     });
     if (res.status === 409) {
-      setPpgStatus('Pipeline already running…', 'ppg-running');
+      setPpgStatus('BGL inference already running…', 'ppg-running');
       startPpgPoll();
       return;
     }
@@ -12381,9 +12534,8 @@ async function triggerPpg(isDemo) {
       setPpgButtonsDisabled(false);
       return;
     }
-    const estMins = isDemo ? '5–10' : '15–30';
     setPpgStatus(
-      `Pipeline running (${isDemo ? 'demo · 3 subjects' : 'full · 20 subjects'}, ~${estMins} min)…`,
+      `BGL inference running (${isDemo ? 'bundled demo' : 'latest PPG window'}, this can take 1–3 minutes)…`,
       'ppg-running'
     );
     startPpgPoll();
@@ -12393,31 +12545,28 @@ async function triggerPpg(isDemo) {
   }
 }
 
-function renderPpgModelChart(models) {
+function renderPpgModelChart(prediction) {
   const canvas = document.getElementById('ppgModelChart');
   if (!canvas) return;
-  const regModels = models
-    .filter((m) => m.task === 'regression' && Number.isFinite(m.mae))
-    .sort((a, b) => a.mae - b.mae);
-  if (!regModels.length) return;
+  const entries = getPpgChartEntries(prediction);
+  if (!entries.length) {
+    state.charts.ppgModel?.destroy();
+    return;
+  }
 
   state.charts.ppgModel?.destroy();
   const ctx = canvas.getContext('2d');
   state.charts.ppgModel = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: regModels.map((m) => m.model_name),
+      labels: entries.map((entry) => entry.label),
       datasets: [
         {
-          label: 'MAE (mg/dL)',
-          data: regModels.map((m) => Math.round(m.mae * 10) / 10),
-          backgroundColor: regModels.map((_, i) =>
-            i === 0 ? 'rgba(67,217,201,0.75)' : 'rgba(167,139,250,0.5)'
-          ),
-          borderColor: regModels.map((_, i) =>
-            i === 0 ? '#43d9c9' : '#a78bfa'
-          ),
-          borderWidth: 1,
+          label: 'Probability (%)',
+          data: entries.map((entry) => Math.round(entry.value * 1000) / 10),
+          backgroundColor: entries.map((entry) => entry.fill),
+          borderColor: entries.map((entry) => entry.border),
+          borderWidth: entries.map((entry) => (entry.isPredicted ? 2 : 1)),
           borderRadius: 4,
         },
       ],
@@ -12430,13 +12579,18 @@ function renderPpgModelChart(models) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: (ctx) => ` MAE ${ctx.raw} mg/dL`,
+            label: (ctx) => {
+              const rawEntry = entries[ctx.dataIndex];
+              const predictedSuffix = rawEntry?.isPredicted ? ' · predicted zone' : '';
+              return ` Probability ${ctx.raw}%${predictedSuffix}`;
+            },
           },
         },
       },
       scales: {
         x: {
-          ticks: { color: '#9bb0d6', callback: (v) => `${v} mg/dL` },
+          max: 100,
+          ticks: { color: '#9bb0d6', callback: (v) => `${v}%` },
           grid: { color: 'rgba(255,255,255,0.05)' },
         },
         y: {
@@ -12451,79 +12605,118 @@ function renderPpgModelChart(models) {
 async function loadPpgStatus() {
   if (!state.token) return;
   try {
-    const res = await apiFetch('/api/ppg/status', { headers: { Authorization: `Bearer ${state.token}` } });
+    const res = await apiFetch(`/api/ppg/status${getCurrentPpgSubjectQuery()}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
     if (!res.ok) return;
     const data = await res.json();
 
     if (data.running) {
-      const mode = data.inMemory?.isDemo ? 'demo' : 'full';
-      setPpgButtonsDisabled(true, data.dataset);
-      setPpgStatus(`Pipeline running (${mode} mode)…`, 'ppg-running');
+      const mode = data.inMemory?.mode || (data.inMemory?.isDemo ? 'demo' : 'latest');
+      setPpgButtonsDisabled(true, data);
+      setPpgStatus(`BGL inference running (${mode} mode)…`, 'ppg-running');
       startPpgPoll();
       return;
     }
 
     stopPpgPoll();
-    setPpgButtonsDisabled(false, data.dataset);
+    setPpgButtonsDisabled(false, data);
+
+    if (getPpgBlockingMessage()) {
+      setPpgStatus(getPpgBlockingMessage(), 'ppg-error');
+      return;
+    }
 
     if (data.inMemory?.status === 'failed' || data.latestRun?.status === 'failed') {
-      const message = data.inMemory?.error || data.latestRun?.error_message || 'unknown error';
-      setPpgStatus(`Run failed: ${message}`, 'ppg-error');
+      const message = data.inMemory?.error || data.latestRun?.error || 'unknown error';
+      setPpgStatus(`Inference failed: ${message}`, 'ppg-error');
       return;
     }
 
     if (data.latestRun?.status === 'completed') {
-      const mode = data.latestRun.is_demo ? 'demo' : 'full';
-      const mins = data.latestRun.elapsed_seconds
-        ? `${(data.latestRun.elapsed_seconds / 60).toFixed(1)} min`
+      const mode = data.latestRun.mode || (data.latestRun.isDemo ? 'demo' : 'latest');
+      const secs = Number.isFinite(data.latestRun.elapsedSeconds)
+        ? `${data.latestRun.elapsedSeconds.toFixed(1)} s`
         : '';
-      const completedText = `Last ${mode} run completed${mins ? ` in ${mins}` : ''}.`;
-      setPpgStatus(
-        `${completedText}${getPpgDatasetNote(data.dataset)}`,
-        'ppg-done'
-      );
+      const label = data.latestRun.resultSummary?.label
+        ? ` Predicted ${capitalizePpgLabel(data.latestRun.resultSummary.label)}.`
+        : '';
+      setPpgStatus(`Last ${mode} inference completed${secs ? ` in ${secs}` : ''}.${label}`, 'ppg-done');
       return;
     }
 
-    setPpgStatus(`No run yet. Press a button to start the pipeline.${getPpgDatasetNote(data.dataset)}`);
+    setPpgStatus(getPpgIdleText());
   } catch { /* ignore */ }
 }
 
 async function loadPpgResults() {
   if (!state.token) return;
   try {
-    const res = await apiFetch('/api/ppg/results', { headers: { Authorization: `Bearer ${state.token}` } });
+    const res = await apiFetch(`/api/ppg/results${getCurrentPpgSubjectQuery()}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
     if (!res.ok) return;
     const data = await res.json();
-    if (!data.run || !data.models.length) {
+    if (!data.run || !data.prediction) {
       if (ppgResultsDiv) ppgResultsDiv.classList.add('hidden');
+      state.charts.ppgModel?.destroy();
       return;
     }
 
-    const reg = data.models.filter((m) => m.task === 'regression').sort((a, b) => a.mae - b.mae);
-    const cls = data.models.filter((m) => m.task === 'classification').sort((a, b) => (b.f1_hyper ?? 0) - (a.f1_hyper ?? 0));
-    const mc  = data.models.filter((m) => m.task === 'multiclass').sort((a, b) => (b.macro_f1 ?? 0) - (a.macro_f1 ?? 0));
+    const prediction = data.prediction;
+    const runSummary = data.run.resultSummary || {};
+    const probabilities = prediction.prediction?.probabilities || {};
+    const orderedEntries = getPpgChartEntries(prediction);
+    const topProbability = Number.isFinite(runSummary.confidence)
+      ? runSummary.confidence
+      : Math.max(
+          0,
+          ...Object.values(probabilities)
+            .map((value) => Number(value))
+            .filter(Number.isFinite)
+        );
+    const usedSubwindows = Number.isFinite(prediction.quality?.n_subwindows_used)
+      ? prediction.quality.n_subwindows_used
+      : null;
+    const attemptedSubwindows = Number.isFinite(prediction.quality?.n_subwindows_attempted)
+      ? prediction.quality.n_subwindows_attempted
+      : null;
 
-    if (ppgBestRegModel && reg[0]) {
-      ppgBestRegModel.textContent = reg[0].model_name;
-      if (ppgBestRegMAE) ppgBestRegMAE.textContent = `MAE ${reg[0].mae?.toFixed(1) ?? '—'} mg/dL`;
+    if (ppgPredictionLabel) {
+      ppgPredictionLabel.textContent = capitalizePpgLabel(prediction.prediction?.label);
     }
-    if (ppgBestClsModel && cls[0]) {
-      ppgBestClsModel.textContent = cls[0].model_name;
-      if (ppgBestClsF1) ppgBestClsF1.textContent = `F1 ${cls[0].f1_hyper?.toFixed(3) ?? '—'}`;
+    if (ppgPredictionSub) {
+      ppgPredictionSub.textContent = `Model ${prediction.model_name || '—'}`;
     }
-    if (ppgBestMcModel && mc[0]) {
-      ppgBestMcModel.textContent = mc[0].model_name;
-      if (ppgBestMcF1) ppgBestMcF1.textContent = `Macro F1 ${mc[0].macro_f1?.toFixed(3) ?? '—'}`;
+    if (ppgConfidenceValue) {
+      ppgConfidenceValue.textContent = formatPpgPercent(topProbability);
+    }
+    if (ppgConfidenceSub) {
+      ppgConfidenceSub.textContent = orderedEntries
+        .map((entry) => `${entry.label} ${formatPpgPercent(entry.value)}`)
+        .join(' • ') || 'Top probability —';
+    }
+    if (ppgQualityValue) {
+      ppgQualityValue.textContent =
+        Number.isFinite(usedSubwindows) && Number.isFinite(attemptedSubwindows)
+          ? `${usedSubwindows}/${attemptedSubwindows}`
+          : '—';
+    }
+    if (ppgQualitySub) {
+      ppgQualitySub.textContent = Number.isFinite(prediction.quality?.mean_sqi)
+        ? `Mean SQI ${prediction.quality.mean_sqi.toFixed(2)}`
+        : 'SQI summary unavailable';
     }
 
     if (ppgResultsDiv) ppgResultsDiv.classList.remove('hidden');
-    renderPpgModelChart(data.models);
+    renderPpgModelChart(prediction);
 
     if (!ppgStatusText?.textContent || ppgStatusText.textContent.includes('No run yet')) {
-      const mode = data.run.is_demo ? 'demo' : 'full';
-      const mins = data.run.elapsed_seconds ? `${(data.run.elapsed_seconds / 60).toFixed(1)} min` : '';
-      setPpgStatus(`Last ${mode} run completed ${mins ? `in ${mins}` : ''}.`, 'ppg-done');
+      const mode = data.run.mode || (data.run.isDemo ? 'demo' : 'latest');
+      const secs = Number.isFinite(data.run.elapsedSeconds)
+        ? `${data.run.elapsedSeconds.toFixed(1)} s`
+        : '';
+      setPpgStatus(`Last ${mode} inference completed${secs ? ` in ${secs}` : ''}.`, 'ppg-done');
     }
   } catch { /* ignore */ }
 }

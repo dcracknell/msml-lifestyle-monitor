@@ -1,0 +1,198 @@
+{
+  "features": [
+    {
+      "index": 0,
+      "name": "demo_age",
+      "dtype": "float64"
+    },
+    {
+      "index": 1,
+      "name": "demo_sex",
+      "dtype": "int64"
+    },
+    {
+      "index": 2,
+      "name": "demo_bmi",
+      "dtype": "float64"
+    },
+    {
+      "index": 3,
+      "name": "demo_preop_dm",
+      "dtype": "int64"
+    },
+    {
+      "index": 4,
+      "name": "demo_preop_hb",
+      "dtype": "float64"
+    },
+    {
+      "index": 5,
+      "name": "demo_preop_cr",
+      "dtype": "float64"
+    },
+    {
+      "index": 6,
+      "name": "current_Tpw50/Tpi_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 7,
+      "name": "current_Tc/Tpi_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 8,
+      "name": "current_Tsw10_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 9,
+      "name": "current_RIp2_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 10,
+      "name": "current_Af/Aa_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 11,
+      "name": "w15m_imf7_dominant_freq",
+      "dtype": "float64"
+    },
+    {
+      "index": 12,
+      "name": "w15m_d2_mean",
+      "dtype": "float64"
+    },
+    {
+      "index": 13,
+      "name": "current_Ae/Aa_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 14,
+      "name": "w15m_imf3_spectral_centroid",
+      "dtype": "float64"
+    },
+    {
+      "index": 15,
+      "name": "w15m_imf1_zcr",
+      "dtype": "float64"
+    },
+    {
+      "index": 16,
+      "name": "current_Td/Tpi_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 17,
+      "name": "w15m_d1_std",
+      "dtype": "float64"
+    },
+    {
+      "index": 18,
+      "name": "w15m_imf5_dominant_freq",
+      "dtype": "float64"
+    },
+    {
+      "index": 19,
+      "name": "current_Tpw25/Tpi_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 20,
+      "name": "current_RIp1_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 21,
+      "name": "current_Adp/Asp_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 22,
+      "name": "w15m_d1_mean",
+      "dtype": "float64"
+    },
+    {
+      "index": 23,
+      "name": "current_Tb/Tpi_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 24,
+      "name": "current_Tpw10_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 25,
+      "name": "w15m_d2_std",
+      "dtype": "float64"
+    },
+    {
+      "index": 26,
+      "name": "current_(Ac-Ab)/Aa_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 27,
+      "name": "w15m_imf6_spectral_slope",
+      "dtype": "float64"
+    },
+    {
+      "index": 28,
+      "name": "current_Te/Tpi_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 29,
+      "name": "current_Tw/Tpi_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 30,
+      "name": "current_AGIinf_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 31,
+      "name": "current_Af/Aa_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 32,
+      "name": "current_Adp_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 33,
+      "name": "current_Tv_iqr",
+      "dtype": "float64"
+    },
+    {
+      "index": 34,
+      "name": "current_Adn_median",
+      "dtype": "float64"
+    },
+    {
+      "index": 35,
+      "name": "current_Tdw10/Tsw10_iqr",
+      "dtype": "float64"
+    }
+  ],
+  "target": {
+    "name": "glucose_zone",
+    "class_labels": [
+      "low",
+      "elevated",
+      "hyper"
+    ],
+    "bin_edges": [
+      0,
+      140,
+      180,
+      "inf"
+    ]
+  }
+}

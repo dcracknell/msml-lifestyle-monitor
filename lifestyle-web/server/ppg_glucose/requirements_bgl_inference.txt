@@ -1,0 +1,15 @@
+# pyPPG 1.0.73 expects NumPy < 2.0 (`np.NaN`) and pre-pandas-2.2 assignment behavior.
+numpy<2.0
+pandas<2.2
+scipy
+scikit-learn
+EMD-signal
+catboost
+xgboost
+lightgbm
+matplotlib
+seaborn
+pyyaml
+pyarrow
+vitaldb==1.6.0
+pyPPG==1.0.73

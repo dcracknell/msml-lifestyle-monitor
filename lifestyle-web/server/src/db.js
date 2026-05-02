@@ -101,6 +101,27 @@ function ensureWeightCategoryColumn() {
 
 ensureWeightCategoryColumn();
 
+function ensureBglProfileColumns() {
+  const columns = db.prepare('PRAGMA table_info(users)').all();
+  const requiredColumns = [
+    ['age', 'INTEGER'],
+    ['sex', 'TEXT'],
+    ['bmi', 'REAL'],
+    ['preop_dm', 'INTEGER'],
+    ['preop_hb', 'REAL'],
+    ['preop_cr', 'REAL'],
+  ];
+
+  requiredColumns.forEach(([name, type]) => {
+    const exists = columns.some((column) => column.name === name);
+    if (!exists) {
+      db.prepare(`ALTER TABLE users ADD COLUMN ${name} ${type}`).run();
+    }
+  });
+}
+
+ensureBglProfileColumns();
+
 function ensureNutritionEntriesTable() {
   db.prepare(
     `CREATE TABLE IF NOT EXISTS nutrition_entries (
@@ -766,6 +787,51 @@ function ensureHeadCoachLinks() {
 ensureHeadCoachAccount();
 ensureHeadCoachLinks();
 
+function ensureSeedBglProfiles() {
+  const update = db.prepare(
+    `UPDATE users
+        SET age = COALESCE(age, @age),
+            sex = COALESCE(sex, @sex),
+            bmi = COALESCE(bmi, @bmi),
+            preop_dm = COALESCE(preop_dm, @preopDm),
+            preop_hb = COALESCE(preop_hb, @preopHb),
+            preop_cr = COALESCE(preop_cr, @preopCr)
+      WHERE email = @email`
+  );
+
+  [
+    {
+      email: 'head.coach@example.com',
+      age: 62,
+      sex: 'M',
+      bmi: 27.5,
+      preopDm: 0,
+      preopHb: 13.2,
+      preopCr: 0.9,
+    },
+    {
+      email: 'coach@example.com',
+      age: 58,
+      sex: 'F',
+      bmi: 24.9,
+      preopDm: 0,
+      preopHb: 12.8,
+      preopCr: 0.8,
+    },
+    {
+      email: 'athlete@example.com',
+      age: 62,
+      sex: 'M',
+      bmi: 27.5,
+      preopDm: 0,
+      preopHb: 13.2,
+      preopCr: 0.9,
+    },
+  ].forEach((profile) => update.run(profile));
+}
+
+ensureSeedBglProfiles();
+
 function ensureSensorStreamTables() {
   db.prepare(
     `CREATE TABLE IF NOT EXISTS sensor_stream_samples (
@@ -790,6 +856,53 @@ function ensureSensorStreamTables() {
 }
 
 ensureSensorStreamTables();
+
+function ensureBglInferenceRunsTable() {
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS bgl_inference_runs (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      requested_by_user_id INTEGER NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+      signal_metric TEXT,
+      signal_started_at TEXT,
+      signal_ended_at TEXT,
+      signal_sample_count INTEGER,
+      signal_duration_ms INTEGER,
+      fs_hz INTEGER,
+      strict_length INTEGER DEFAULT 1,
+      model_name TEXT,
+      model_version TEXT,
+      label TEXT,
+      prob_low REAL,
+      prob_elevated REAL,
+      prob_hyper REAL,
+      mean_sqi REAL,
+      min_sqi REAL,
+      n_subwindows_attempted INTEGER,
+      n_subwindows_used INTEGER,
+      error_message TEXT,
+      warnings_json TEXT,
+      result_json TEXT,
+      started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      completed_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users (id),
+      FOREIGN KEY (requested_by_user_id) REFERENCES users (id)
+    )`
+  ).run();
+  db.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_bgl_inference_runs_user_created
+       ON bgl_inference_runs(user_id, created_at DESC, id DESC)`
+  ).run();
+  db.prepare(
+    `CREATE INDEX IF NOT EXISTS idx_bgl_inference_runs_requested_by_created
+       ON bgl_inference_runs(requested_by_user_id, created_at DESC, id DESC)`
+  ).run();
+}
+
+ensureBglInferenceRunsTable();
 
 function ensureRevokedTokensTable() {
   db.prepare(

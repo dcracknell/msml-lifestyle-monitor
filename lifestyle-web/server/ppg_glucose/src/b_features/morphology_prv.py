@@ -1,4 +1,16 @@
 """
+DEPRECATED — being replaced by pyPPG biomarker extraction.
+
+This module's manual peak detection over-detects on noisy signals
+(see scripts/sanity_check_pyppg.py — 78% agreement on contaminated
+segments). v2 will use pyPPG's validated detector + per-pulse
+biomarkers + SQI gating.
+
+See: scripts/sanity_check_pyppg_biomarkers.py for the replacement
+flow. New module will live at: src/b_features/pyppg_features.py
+"""
+
+"""
 Step B2: Morphology + PRV Feature Extraction
 =============================================
 Extracts pulse shape (morphology) and pulse rate variability (PRV)

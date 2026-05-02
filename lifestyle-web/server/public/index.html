@@ -938,32 +938,33 @@
             <p class="form-feedback" id="vitalsFeedback"></p>
           </article>
 
-          <!-- 5 · PPG Glucose Model -->
+          <!-- 5 · BGL Inference -->
           <article class="card ppg-model-card">
             <div class="ppg-card-header">
-              <p class="section-eyebrow">PPG Glucose Model</p>
+              <p class="section-eyebrow">BGL Inference</p>
               <div class="ppg-actions">
                 <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm">Run Demo</button>
-                <button id="ppgRunFull" type="button" class="btn-primary btn-sm">Run on Latest Data</button>
+                <button id="ppgRunFull" type="button" class="btn-primary btn-sm">Run Latest PPG Window</button>
               </div>
             </div>
-            <p id="ppgStatusText" class="ppg-status-text">No run yet. Press a button to start the pipeline.</p>
+            <p id="ppgStatusText" class="ppg-status-text">No inference run yet.</p>
+            <p class="field-hint">Live mode expects the latest 15-minute `ppg.raw` stream at 500 Hz plus the BGL profile above. Prototype estimate only, not clinically validated.</p>
             <div id="ppgResults" class="hidden">
               <div class="ppg-metrics-row">
                 <div class="ppg-metric-block">
-                  <span class="ppg-metric-label">Best Regression</span>
-                  <span id="ppgBestRegModel" class="ppg-metric-value">—</span>
-                  <span id="ppgBestRegMAE" class="ppg-metric-sub">MAE —</span>
+                  <span class="ppg-metric-label">Estimated BGL Zone</span>
+                  <span id="ppgPredictionLabel" class="ppg-metric-value">—</span>
+                  <span id="ppgPredictionSub" class="ppg-metric-sub">Model —</span>
                 </div>
                 <div class="ppg-metric-block">
-                  <span class="ppg-metric-label">Best Classification</span>
-                  <span id="ppgBestClsModel" class="ppg-metric-value">—</span>
-                  <span id="ppgBestClsF1" class="ppg-metric-sub">F1 —</span>
+                  <span class="ppg-metric-label">Confidence</span>
+                  <span id="ppgConfidenceValue" class="ppg-metric-value">—</span>
+                  <span id="ppgConfidenceSub" class="ppg-metric-sub">Top probability —</span>
                 </div>
                 <div class="ppg-metric-block">
-                  <span class="ppg-metric-label">Best Multiclass</span>
-                  <span id="ppgBestMcModel" class="ppg-metric-value">—</span>
-                  <span id="ppgBestMcF1" class="ppg-metric-sub">Macro F1 —</span>
+                  <span class="ppg-metric-label">Signal Quality</span>
+                  <span id="ppgQualityValue" class="ppg-metric-value">—</span>
+                  <span id="ppgQualitySub" class="ppg-metric-sub">SQI summary —</span>
                 </div>
               </div>
               <div class="chart-canvas-frame chart-canvas-frame-240">
@@ -1438,7 +1439,35 @@
                 </label>
                 <label>Email<input type="email" id="profileEmail" name="email" required /></label>
                 <label>New password<input type="password" id="profilePassword" name="password" minlength="8" placeholder="Leave blank to keep current" /></label>
-                <label>Current password<input type="password" id="profileCurrentPassword" name="currentPassword" required placeholder="Enter current password to save" /></label>
+                <label>Current password<input type="password" id="profileCurrentPassword" name="currentPassword" placeholder="Only needed for name, email, or password changes" /></label>
+              </div>
+              <div class="strava-credentials">
+                <div class="card-subsection">
+                  <p class="subsection-eyebrow">BGL inference profile</p>
+                  <p class="field-hint">Required for live BGL inference: age, sex, BMI, and diabetes history. Prototype estimate only, not clinically validated.</p>
+                </div>
+                <div class="profile-grid">
+                  <label>Age<input type="number" id="profileAge" name="age" min="1" max="120" step="1" inputmode="numeric" placeholder="e.g. 62" /></label>
+                  <label>
+                    Sex
+                    <select id="profileSex" name="sex">
+                      <option value="">Select</option>
+                      <option value="M">Male</option>
+                      <option value="F">Female</option>
+                    </select>
+                  </label>
+                  <label>BMI<input type="number" id="profileBmi" name="bmi" min="10" max="80" step="0.1" inputmode="decimal" placeholder="e.g. 27.5" /></label>
+                  <label>
+                    Pre-op diabetes
+                    <select id="profilePreopDm" name="preopDm">
+                      <option value="">Select</option>
+                      <option value="false">No</option>
+                      <option value="true">Yes</option>
+                    </select>
+                  </label>
+                  <label>Pre-op Hb<input type="number" id="profilePreopHb" name="preopHb" min="0" max="25" step="0.1" inputmode="decimal" placeholder="Optional" /></label>
+                  <label>Pre-op creatinine<input type="number" id="profilePreopCr" name="preopCr" min="0" max="20" step="0.1" inputmode="decimal" placeholder="Optional" /></label>
+                </div>
               </div>
               <div class="strava-credentials">
                 <div class="card-subsection">
@@ -1486,6 +1515,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=14" defer></script>
+  <script src="/app.js?v=15" defer></script>
 </body>
 </html>

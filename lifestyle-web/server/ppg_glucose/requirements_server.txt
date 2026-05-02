@@ -1,26 +1,10 @@
-# Core pipeline dependencies
-numpy
-pandas
-scipy
-scikit-learn
-EMD-signal
-catboost
-xgboost
-lightgbm
-matplotlib
-seaborn
-pyyaml
-pyarrow
+-r requirements_bgl_inference.txt
 
-# SQL integration (SQLAlchemy supports PostgreSQL, MySQL, SQLite)
+# Optional SQL integration for the legacy pipeline outputs database.
 sqlalchemy>=2.0
-
-# PostgreSQL driver (install if using PostgreSQL)
 psycopg2-binary
-
-# MySQL driver (install if using MySQL/MariaDB)
 pymysql
 cryptography
 
-# Testing
+# Local verification helpers.
 pytest>=7.0

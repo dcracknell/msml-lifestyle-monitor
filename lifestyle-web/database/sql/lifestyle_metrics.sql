@@ -10,6 +10,7 @@ DROP TABLE IF EXISTS hydration_logs;
 DROP TABLE IF EXISTS weight_logs;
 DROP TABLE IF EXISTS sleep_stages;
 DROP TABLE IF EXISTS health_markers;
+DROP TABLE IF EXISTS bgl_inference_runs;
 
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
@@ -22,7 +23,13 @@ CREATE TABLE users (
   goal_steps INTEGER,
   goal_calories INTEGER,
   goal_sleep REAL,
-  goal_readiness INTEGER
+  goal_readiness INTEGER,
+  age INTEGER,
+  sex TEXT,
+  bmi REAL,
+  preop_dm INTEGER,
+  preop_hb REAL,
+  preop_cr REAL
 );
 
 CREATE TABLE coach_athlete_links (
@@ -45,11 +52,17 @@ INSERT INTO users (
   goal_steps,
   goal_calories,
   goal_sleep,
-  goal_readiness
+  goal_readiness,
+  age,
+  sex,
+  bmi,
+  preop_dm,
+  preop_hb,
+  preop_cr
 ) VALUES
-  (1, 'Pat Head Coach', 'head.coach@example.com', 'seed-placeholder', 'Head Coach', 'https://images.unsplash.com/photo-1504593811423-6dd665756598?auto=format&fit=crop&w=200&q=80', NULL, 12000, 2500, 7.5, 90),
-  (2, 'Casey Coach', 'coach@example.com', 'seed-placeholder', 'Coach', 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=80', NULL, 11000, 2400, 7.4, 85),
-  (3, 'Jordan Athlete', 'athlete@example.com', 'seed-placeholder', 'Athlete', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80', NULL, 10000, 2200, 7.2, 80);
+  (1, 'Pat Head Coach', 'head.coach@example.com', 'seed-placeholder', 'Head Coach', 'https://images.unsplash.com/photo-1504593811423-6dd665756598?auto=format&fit=crop&w=200&q=80', NULL, 12000, 2500, 7.5, 90, 62, 'M', 27.5, 0, 13.2, 0.9),
+  (2, 'Casey Coach', 'coach@example.com', 'seed-placeholder', 'Coach', 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=80', NULL, 11000, 2400, 7.4, 85, 58, 'F', 24.9, 0, 12.8, 0.8),
+  (3, 'Jordan Athlete', 'athlete@example.com', 'seed-placeholder', 'Athlete', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80', NULL, 10000, 2200, 7.2, 80, 62, 'M', 27.5, 0, 13.2, 0.9);
 
 INSERT INTO coach_athlete_links (coach_id, athlete_id) VALUES
   (1, 2),
