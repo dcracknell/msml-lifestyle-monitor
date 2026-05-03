@@ -709,6 +709,18 @@ describe('CORS configuration', () => {
     expect(response.body).toHaveProperty('status', 'ok');
   });
 
+  it('treats apex and www aliases as same-origin requests even when the proxy forwards a default port', async () => {
+    const customApp = createApp({ appOrigin: 'http://localhost:4000' });
+    const response = await request(customApp)
+      .get('/api/health')
+      .set('Host', 'msmls.org:443')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Origin', 'https://www.msmls.org');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('status', 'ok');
+  });
+
   it('treats forwarded tunnel hostnames as same-origin requests', async () => {
     const customApp = createApp({ appOrigin: 'http://localhost:4000' });
     const response = await request(customApp)
@@ -716,6 +728,18 @@ describe('CORS configuration', () => {
       .set('Host', '127.0.0.1:4000')
       .set('X-Forwarded-Host', 'misty-river.trycloudflare.com, 127.0.0.1:4000')
       .set('X-Forwarded-Proto', 'https')
+      .set('Origin', 'https://misty-river.trycloudflare.com');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('status', 'ok');
+  });
+
+  it('uses the RFC Forwarded header when reconstructing the public host', async () => {
+    const customApp = createApp({ appOrigin: 'http://localhost:4000' });
+    const response = await request(customApp)
+      .get('/api/health')
+      .set('Host', '127.0.0.1:4000')
+      .set('Forwarded', 'for=203.0.113.10;host=misty-river.trycloudflare.com;proto=https')
       .set('Origin', 'https://misty-river.trycloudflare.com');
 
     expect(response.status).toBe(200);

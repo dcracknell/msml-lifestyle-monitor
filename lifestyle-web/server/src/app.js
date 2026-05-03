@@ -48,9 +48,33 @@ function getFirstForwardedHeaderValue(req, headerName) {
     .find(Boolean);
 }
 
+function getForwardedHeaderParam(req, paramName) {
+  const value = String(req.get('forwarded') || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  const firstEntry = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  if (!firstEntry) {
+    return '';
+  }
+
+  const matcher = new RegExp(`(?:^|;)\\s*${paramName}=([^;]+)`, 'i');
+  const match = firstEntry.match(matcher);
+  if (!match || !match[1]) {
+    return '';
+  }
+
+  return match[1].trim().replace(/^"|"$/g, '');
+}
+
 function resolveRequestHostHeader(req) {
   return (
     getFirstForwardedHeaderValue(req, 'x-forwarded-host') ||
+    getForwardedHeaderParam(req, 'host') ||
     String(req.get('host') || '').trim()
   );
 }
@@ -170,6 +194,10 @@ function resolveRequestProtocol(req) {
   if (protoHeader) {
     return protoHeader;
   }
+  const forwardedProto = getForwardedHeaderParam(req, 'proto').toLowerCase();
+  if (forwardedProto) {
+    return forwardedProto;
+  }
   return (req.protocol || '').toLowerCase();
 }
 
@@ -288,13 +316,72 @@ function isLocalNetworkRequest(req) {
   return isLocalNetworkHostname(hostname || '');
 }
 
-function isRequestSelfOrigin(req, origin) {
-  const requestHost = resolveRequestHost(req);
-  const originHost = parseOriginHost(origin);
+function parseComparableHost(value, fallbackProtocol = 'http') {
+  if (!value) {
+    return null;
+  }
+
+  const protocol = String(fallbackProtocol || 'http').replace(/:$/, '').toLowerCase() || 'http';
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `${protocol}://${value}`;
+
+  try {
+    const parsed = new URL(candidate);
+    const normalizedProtocol = parsed.protocol.toLowerCase();
+    if (!/^https?:$/.test(normalizedProtocol)) {
+      return null;
+    }
+
+    const hostname = stripIpv6Brackets(parsed.hostname.toLowerCase());
+    if (!hostname) {
+      return null;
+    }
+
+    const port =
+      parsed.port ||
+      (normalizedProtocol === 'https:' ? '443' : normalizedProtocol === 'http:' ? '80' : '');
+
+    return {
+      hostname,
+      port,
+      protocol: normalizedProtocol,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function normalizePublicHostnameAlias(hostname = '') {
+  return String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
+}
+
+function hostsMatchForCors(requestHost, originHost) {
   if (!requestHost || !originHost) {
     return false;
   }
-  return requestHost === originHost;
+
+  const sameHostname =
+    requestHost.hostname === originHost.hostname ||
+    (isPublicHostnameAliasCandidate(requestHost.hostname) &&
+      isPublicHostnameAliasCandidate(originHost.hostname) &&
+      normalizePublicHostnameAlias(requestHost.hostname) ===
+        normalizePublicHostnameAlias(originHost.hostname));
+
+  if (!sameHostname) {
+    return false;
+  }
+
+  if (requestHost.port === originHost.port) {
+    return true;
+  }
+
+  const defaultWebPorts = new Set(['80', '443']);
+  return defaultWebPorts.has(requestHost.port) && defaultWebPorts.has(originHost.port);
+}
+
+function isRequestSelfOrigin(req, origin) {
+  const requestHost = parseComparableHost(resolveRequestHost(req), resolveRequestProtocol(req) || 'http');
+  const originHost = parseComparableHost(origin, 'http');
+  return hostsMatchForCors(requestHost, originHost);
 }
 
 function createApp(options = {}) {

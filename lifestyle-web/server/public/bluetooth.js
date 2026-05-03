@@ -38,6 +38,26 @@ function resolveCurrentOrigin() {
   return normalizeApiBaseUrl(origin);
 }
 
+// Treat apex and www variants as equivalent so a stored override pointing at
+// e.g. https://msmls.org doesn't force a cross-origin fetch from a page on
+// https://www.msmls.org (the preflight redirect nulls Origin and CORS fails).
+function isSameSiteOrigin(candidate, baseline) {
+  if (!candidate || !baseline) return false;
+  if (candidate === baseline) return true;
+  try {
+    const a = new URL(candidate);
+    const b = new URL(baseline);
+    if (a.protocol !== b.protocol) return false;
+    const portA = a.port || (a.protocol === 'https:' ? '443' : '80');
+    const portB = b.port || (b.protocol === 'https:' ? '443' : '80');
+    if (portA !== portB) return false;
+    const stripWww = (host) => host.toLowerCase().replace(/^www\./, '');
+    return stripWww(a.hostname) === stripWww(b.hostname);
+  } catch (error) {
+    return false;
+  }
+}
+
 function persistApiBaseUrl(value) {
   try {
     if (window.localStorage) {
@@ -62,10 +82,11 @@ function resolveApiBaseUrl() {
     const params = new URLSearchParams(window.location?.search || '');
     if (params.has(API_BASE_QUERY_PARAM)) {
       const queryOverride = normalizeApiBaseUrl(params.get(API_BASE_QUERY_PARAM) || '');
-      persistApiBaseUrl(queryOverride);
+      const queryIsSameSite = isSameSiteOrigin(queryOverride, currentOrigin);
+      persistApiBaseUrl(queryIsSameSite ? '' : queryOverride);
       if (queryOverride) {
         return {
-          url: queryOverride === currentOrigin ? '' : queryOverride,
+          url: queryIsSameSite ? '' : queryOverride,
           source: 'query',
         };
       }
@@ -78,7 +99,7 @@ function resolveApiBaseUrl() {
   const runtimeOverride = normalizeApiBaseUrl(window.__MSML_API_BASE_URL || '');
   if (runtimeOverride) {
     return {
-      url: runtimeOverride === currentOrigin ? '' : runtimeOverride,
+      url: isSameSiteOrigin(runtimeOverride, currentOrigin) ? '' : runtimeOverride,
       source: 'runtime',
     };
   }
@@ -88,7 +109,7 @@ function resolveApiBaseUrl() {
   );
   if (metaOverride) {
     return {
-      url: metaOverride === currentOrigin ? '' : metaOverride,
+      url: isSameSiteOrigin(metaOverride, currentOrigin) ? '' : metaOverride,
       source: 'meta',
     };
   }
@@ -96,10 +117,11 @@ function resolveApiBaseUrl() {
   try {
     const stored = normalizeApiBaseUrl(window.localStorage?.getItem(API_BASE_STORAGE_KEY) || '');
     if (stored) {
-      return {
-        url: stored === currentOrigin ? '' : stored,
-        source: 'storage',
-      };
+      if (isSameSiteOrigin(stored, currentOrigin)) {
+        persistApiBaseUrl('');
+        return { url: '', source: 'storage' };
+      }
+      return { url: stored, source: 'storage' };
     }
   } catch (error) {
     // Ignore storage failures.
