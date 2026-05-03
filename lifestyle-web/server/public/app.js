@@ -56,6 +56,57 @@ function resolveCurrentOrigin() {
   return normalizeApiBaseUrl(origin);
 }
 
+function isLoopbackHostname(hostname = '') {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '0.0.0.0' ||
+    normalized === '[::1]' ||
+    normalized === '::1'
+  );
+}
+
+function isPrivateIpv4Hostname(hostname = '') {
+  const octets = String(hostname || '')
+    .trim()
+    .split('.')
+    .map((segment) => Number.parseInt(segment, 10));
+  if (
+    octets.length !== 4 ||
+    octets.some((segment) => !Number.isInteger(segment) || segment < 0 || segment > 255)
+  ) {
+    return false;
+  }
+
+  if (octets[0] === 10) return true;
+  if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+  if (octets[0] === 192 && octets[1] === 168) return true;
+  if (octets[0] === 169 && octets[1] === 254) return true;
+  return false;
+}
+
+function isLocalHostname(hostname = '') {
+  const normalized = String(hostname || '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (isLoopbackHostname(normalized)) return true;
+  if (normalized.endsWith('.local')) return true;
+  return isPrivateIpv4Hostname(normalized);
+}
+
+function shouldForceSameOriginApi(currentOrigin) {
+  if (!currentOrigin) return false;
+  try {
+    const parsed = new URL(currentOrigin);
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return false;
+    }
+    return !isLocalHostname(parsed.hostname);
+  } catch (error) {
+    return false;
+  }
+}
+
 // Treat apex and www variants of the same hostname as equivalent so a stored
 // override pointing at e.g. https://msmls.org doesn't force a cross-origin
 // fetch from a page loaded on https://www.msmls.org. The preflight on such a
@@ -97,6 +148,22 @@ function resolveApiBaseUrl() {
     return { url: '', source: 'server' };
   }
   const currentOrigin = resolveCurrentOrigin();
+  const forceSameOrigin = shouldForceSameOriginApi(currentOrigin);
+
+  if (forceSameOrigin) {
+    persistApiBaseUrl('');
+    try {
+      const params = new URLSearchParams(window.location?.search || '');
+      if (params.has(API_BASE_QUERY_PARAM) && window.history?.replaceState) {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete(API_BASE_QUERY_PARAM);
+        window.history.replaceState({}, '', nextUrl.toString());
+      }
+    } catch (error) {
+      // Ignore query cleanup failures.
+    }
+    return { url: '', source: 'forced-same-origin' };
+  }
 
   try {
     const params = new URLSearchParams(window.location?.search || '');
