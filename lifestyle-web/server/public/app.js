@@ -22,6 +22,7 @@ function resolveRequestErrorMessage(error, fallback = 'Request failed.') {
 
 const API_BASE_STORAGE_KEY = 'msml.api.base-url';
 const API_BASE_QUERY_PARAM = 'apiBaseUrl';
+const AUTH_CORS_RECOVERY_KEY = 'msml.auth.cors-recovery';
 
 function normalizeApiBaseUrl(value) {
   if (typeof value !== 'string') {
@@ -141,6 +142,96 @@ function persistApiBaseUrl(value) {
   } catch (error) {
     // Ignore storage failures.
   }
+}
+
+function clearAuthCorsRecoveryFlag() {
+  try {
+    window.sessionStorage?.removeItem(AUTH_CORS_RECOVERY_KEY);
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
+
+function hasPendingAuthCorsRecovery() {
+  try {
+    return window.sessionStorage?.getItem(AUTH_CORS_RECOVERY_KEY) === '1';
+  } catch (error) {
+    return false;
+  }
+}
+
+function markPendingAuthCorsRecovery() {
+  try {
+    window.sessionStorage?.setItem(AUTH_CORS_RECOVERY_KEY, '1');
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
+
+function stripApiBaseOverrideFromCurrentUrl() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete(API_BASE_QUERY_PARAM);
+    return nextUrl.toString();
+  } catch (error) {
+    return window.location.href;
+  }
+}
+
+function clearClientApiOverrideState() {
+  persistApiBaseUrl('');
+  apiBaseUrl = '';
+  apiBaseSource = 'same-origin-recovery';
+  apiBaseFallbackUsed = true;
+
+  if (typeof window !== 'undefined' && window.history?.replaceState) {
+    try {
+      window.history.replaceState({}, '', stripApiBaseOverrideFromCurrentUrl());
+    } catch (error) {
+      // Ignore URL rewrite failures.
+    }
+  }
+}
+
+function isCorsStyleRequestFailure(error) {
+  const message = String(error?.message || '').trim().toLowerCase();
+  return (
+    message.includes('cors') ||
+    message === 'failed to fetch' ||
+    message.includes('networkerror') ||
+    message.includes('load failed')
+  );
+}
+
+function maybeRecoverFromAuthCorsError(error, feedbackElement) {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  if (!shouldForceSameOriginApi(resolveCurrentOrigin())) {
+    return false;
+  }
+
+  if (hasPendingAuthCorsRecovery() || !isCorsStyleRequestFailure(error)) {
+    return false;
+  }
+
+  clearClientApiOverrideState();
+  markPendingAuthCorsRecovery();
+
+  if (feedbackElement) {
+    feedbackElement.textContent = 'Refreshing the page to reconnect to the website...';
+  }
+
+  window.setTimeout(() => {
+    window.location.replace(stripApiBaseOverrideFromCurrentUrl());
+  }, 50);
+
+  return true;
 }
 
 function resolveApiBaseUrl() {
@@ -8445,6 +8536,7 @@ async function completeAuthentication(session) {
     throw new Error('Invalid session payload.');
   }
 
+  clearAuthCorsRecoveryFlag();
   state.token = session.token;
   state.user = session.user;
   state.viewing = session.user;
@@ -8525,6 +8617,9 @@ loginForm?.addEventListener('submit', async (event) => {
     loginFeedback.textContent = '';
     await completeAuthentication(payload);
   } catch (error) {
+    if (maybeRecoverFromAuthCorsError(error, loginFeedback)) {
+      return;
+    }
     loginFeedback.textContent = resolveRequestErrorMessage(
       error,
       'Unable to sign in right now.'
@@ -8562,6 +8657,9 @@ signupForm?.addEventListener('submit', async (event) => {
     }
     await completeAuthentication(payload);
   } catch (error) {
+    if (maybeRecoverFromAuthCorsError(error, signupFeedback)) {
+      return;
+    }
     if (signupFeedback) {
       signupFeedback.textContent = resolveRequestErrorMessage(
         error,
