@@ -56,6 +56,17 @@ describe('Health check', () => {
 });
 
 describe('Static asset delivery', () => {
+  it('loads the auth guard before the main app bundle', async () => {
+    const response = await request(app).get('/');
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('/auth-guard.js?v=1');
+    expect(response.text).toContain('/app.js?v=23');
+    expect(response.text.indexOf('/auth-guard.js?v=1')).toBeLessThan(
+      response.text.indexOf('/app.js?v=23')
+    );
+  });
+
   it('serves bundled assets with cache headers that still allow updates to roll out', async () => {
     const response = await request(app).get('/app.js?v=14');
 
@@ -71,6 +82,16 @@ describe('Static asset delivery', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers['content-encoding']).toBe('gzip');
+  });
+
+  it('redirects stray root form posts back to the dashboard', async () => {
+    const response = await request(app).post('/').type('form').send({
+      email: 'coach@example.com',
+      password: 'Password',
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.location).toBe('/');
   });
 });
 

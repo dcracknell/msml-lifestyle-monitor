@@ -386,6 +386,8 @@ function isRequestSelfOrigin(req, origin) {
 
 function createApp(options = {}) {
   const app = express();
+  const publicDir = path.join(__dirname, '..', 'public');
+  const publicIndexPath = path.join(publicDir, 'index.html');
   const bodyLimit = options.bodyLimit || process.env.API_BODY_LIMIT || '20mb';
   const requireHttps = options.requireHttps ?? process.env.REQUIRE_HTTPS === 'true';
   const { allowAllOrigins, allowedOrigins, allowedOriginsSet } = resolveAllowedOrigins(
@@ -482,14 +484,18 @@ function createApp(options = {}) {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  app.post('/', (req, res) => {
+    res.redirect(303, '/');
+  });
+
   app.use(
-    express.static(path.join(__dirname, '..', 'public'), {
+    express.static(publicDir, {
       setHeaders: setStaticAssetHeaders,
     })
   );
 
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+    res.sendFile(publicIndexPath);
   });
 
   // Error handler must come after routes so it catches both body-parser and route errors.

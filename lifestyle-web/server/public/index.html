@@ -11,6 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
     rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css?v=20" />
+  <script src="/auth-guard.js?v=1"></script>
   <script src="/vendor/chart.umd.js" defer></script>
   <style>
     /* Critical: shown before external CSS loads to prevent white flash */
@@ -212,7 +213,7 @@
               Password
               <input type="password" name="password" placeholder="••••••••" required />
             </label>
-            <button type="submit">Enter Dashboard</button>
+            <button type="submit" data-auth-submit disabled>Enter Dashboard</button>
             <p class="form-feedback" id="loginFeedback"></p>
             <button type="button" class="link-btn" id="forgotPasswordButton">Forgot password?</button>
           </form>
@@ -260,7 +261,7 @@
               <input type="hidden" name="avatar" id="avatarValue"
                 value="https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=80" />
             </div>
-            <button type="submit">Create Account</button>
+            <button type="submit" data-auth-submit disabled>Create Account</button>
             <p class="form-feedback" id="signupFeedback"></p>
           </form>
 
@@ -271,7 +272,7 @@
               <input type="email" id="forgotEmail" placeholder="you@example.com" required />
             </label>
             <div class="auth-subpanel-actions">
-              <button type="submit" class="outline-btn">Request reset</button>
+              <button type="submit" class="outline-btn" data-auth-submit disabled>Request reset</button>
               <button type="button" class="link-btn" data-auth-back="login">Back to sign in</button>
             </div>
             <p class="form-feedback" id="forgotFeedback"></p>
@@ -1515,6 +1516,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=22" defer></script>
+  <script src="/app.js?v=23" defer></script>
 </body>
 </html>

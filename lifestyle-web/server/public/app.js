@@ -1496,6 +1496,7 @@ const overviewSyncSleep = document.getElementById('overviewSyncSleep');
 const overviewSyncSleepNote = document.getElementById('overviewSyncSleepNote');
 
 let startupReady = false;
+let ppgPollTimer = null;
 function markStartupReady() {
   if (startupReady) return;
   startupReady = true;
@@ -8593,6 +8594,15 @@ async function handleLogout(event) {
   }
 }
 
+function setAuthFormsReady(isReady) {
+  if (typeof window !== 'undefined') {
+    window.__MSML_AUTH_READY = Boolean(isReady);
+  }
+  document.querySelectorAll('[data-auth-submit]').forEach((button) => {
+    button.disabled = !isReady;
+  });
+}
+
 loginForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const formData = new FormData(event.currentTarget);
@@ -8668,6 +8678,8 @@ signupForm?.addEventListener('submit', async (event) => {
     }
   }
 });
+
+setAuthFormsReady(true);
 
 async function loadMetrics(subjectOverrideId) {
   if (!state.user) return;
@@ -12515,7 +12527,6 @@ const ppgConfidenceSub = document.getElementById('ppgConfidenceSub');
 const ppgQualityValue = document.getElementById('ppgQualityValue');
 const ppgQualitySub = document.getElementById('ppgQualitySub');
 
-let ppgPollTimer = null;
 let ppgLiveInputStatus = null;
 let ppgDemoInputStatus = null;
 let ppgRuntimeStatus = null;
