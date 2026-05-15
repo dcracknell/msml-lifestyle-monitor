@@ -1,5 +1,3 @@
-test
-
 # Multi-sensor Machine Learning Lifestyle Monitor (MSML-Lifestyle-Monitor)
 
 <p align="center">
@@ -19,7 +17,8 @@ A final-year MEng group project focused on developing an integrated, low-cost pr
 
 - [About](#about)
 - [Features](#features)
-- [Tech Stack](#tech-stack)
+- [Stack](#stack)
+- [ML Model Files](#ml-model-files)
 - [Deployment](#deployment)
 - [Deploy to the Cloud](#deploy-to-the-cloud)
 - [Development Setup](#development-setup)
@@ -85,7 +84,10 @@ This is a project by a team of MEng Electronic & Electrical Engineering students
 - **OpenCV** – Image processing and computer vision.
 - **NumPy** – Numerical operations and signal analysis.
 - **VHDL** - Hardware Design Language.
-- **TensorFlow** – Machine learning / deep learning model development and inference.
+- **PyTorch** – NUT meal-photo segmentation and nutrition inference.
+- **CatBoost** – PPG blood-glucose zone classification.
+- **Node.js / Express** – Web API, dashboard backend, and model orchestration.
+- **React Native / Expo** – Mobile companion app.
 - **Matplotlib** – Data visualization and debugging.
 
 ### Hardware
@@ -98,6 +100,21 @@ This is a project by a team of MEng Electronic & Electrical Engineering students
 - **Git** – Version control and collaboration.
 - **PyCharm** - Development IDE for python
 - **VS Code** – Development environment.
+
+---
+
+## ML Model Files
+
+The project currently has two server-side ML areas. Start here when looking for model code, model artifacts, or setup scripts:
+
+| Model area | Main files | Notes |
+|---|---|---|
+| Nutrition / food photo model | [`lifestyle-web/server/NUT_model`](lifestyle-web/server/NUT_model) | Inference code lives in `nut_estimator.py` and `nut_server.py`; model architecture lives in `models/`. The expected local checkpoint path is `lifestyle-web/server/NUT_model/checkpoint/canet_NUT.pth`. That `.pth` file is intentionally not committed. |
+| PPG / blood-glucose zone model | [`lifestyle-web/server/ppg_glucose`](lifestyle-web/server/ppg_glucose) | The active deployment bundle is `models/bgl_catboost_current_ppg_demo_no_preop/` and contains `catboost_model.cbm`, `final_features.txt`, `model_metadata.json`, and `training_schema.json`. |
+| Model setup scripts | [`lifestyle-web/server/scripts`](lifestyle-web/server/scripts) | Use `check-nut-model.sh`, `setup-nut-model.sh`, `setup-ppg-model.sh`, and `check-ppg-model.sh` from `lifestyle-web/server`. |
+| FoodSeg test/data files | [`lifestyle-web/server/data/FoodSeg103`](lifestyle-web/server/data/FoodSeg103) | Label map and example images used by the nutrition workflow. These are data files, not the trained `.pth` checkpoint. |
+
+For the full web/API setup notes, see [`lifestyle-web/README.md`](lifestyle-web/README.md).
 
 ---
 

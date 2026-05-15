@@ -1,10 +1,14 @@
 // Mock Health Sensor for Arduino Uno + HM-10 BLE Module
 //
-// Wiring:
+// Simulates the multi-sensor CSV row produced by the real health sensor sketch:
+// time_ms, AHT20 temperature/humidity, TMP117 temperature, SGP40 VOC raw,
+// LSM6DSOX accel/gyro, and MAX30102 red/IR PPG channels.
+//
+// Wiring matches the real sensor sketch:
 //   HM-10 VCC  -> Arduino 3.3V or 5V (check your module)
 //   HM-10 GND  -> Arduino GND
-//   HM-10 TX   -> Arduino pin 3  (SoftwareSerial RX)
-//   HM-10 RX   -> Arduino pin 4  (SoftwareSerial TX)
+//   HM-10 TX   -> Arduino pin 7  (SoftwareSerial RX)
+//   HM-10 RX   -> Arduino pin 8  (SoftwareSerial TX)
 //
 // Default HM-10 UUIDs:
 //   Service        FFE0
@@ -13,111 +17,100 @@
 // In the mobile app  : select the "Arduino + HM-10" device profile.
 // On the web bridge  : select parser "JSON text (Arduino / HM-10)".
 //
-// USB Serial Monitor (9600 baud) shows startup diagnostics:
-//   [HM10] AT ... OK / FAIL / TIMEOUT  – module reachability
-//   [HM10] BAUD <n> OK                 – detected baud rate
-//   [SEND] ...                         – every outgoing JSON line
-//   [WARN] ...                         – soft warnings (buffer, range)
-//   [ERR]  ...                         – hard faults
+// Each reading is sent as one newline-terminated JSON metric packet:
+//   {"metric":"sensor.aht20_temperature_c","value":22.41}
 //
-// Transmission schedule
-// ---------------------
-//  Every 2 s  : vitals.heart_rate  (primary – keeps live chart active)
-//  Every 10 s : one secondary metric in rotation
-//               vitals.spo2 | vitals.hrv | phone.steps |
-//               vitals.glucose | body.weight_kg
-//
-// Server-side mirrors (streams.js)
-// ---------------------------------
-//  vitals.heart_rate -> health_markers.resting_hr
-//  vitals.spo2       -> health_markers.spo2
-//  vitals.hrv        -> health_markers.hrv_score
-//  vitals.glucose    -> health_markers.glucose_mg_dl
-//  body.weight_kg    -> weight_logs
-//  phone.steps       -> daily_metrics.steps
+// The app line-buffer reassembles BLE notification chunks and uploads every
+// metric to /api/streams. Sending one metric per line keeps each packet short
+// enough for HM-10 UART/BLE buffering while still streaming a full sensor row.
 
 #include <SoftwareSerial.h>
 #include <avr/wdt.h>
 
-SoftwareSerial BT(3, 4);   // RX = pin 3, TX = pin 4
-#define DBG Serial         // USB serial for diagnostics
+static const uint8_t BT_RX_PIN = 7;
+static const uint8_t BT_TX_PIN = 8;
+
+SoftwareSerial BT(BT_RX_PIN, BT_TX_PIN);
+#define DBG Serial
+
+// -----------------------------------------------------------------------
+// User-facing labels
+// Keep these in sync with mock bluetooth/README.md and the app/web presets.
+// -----------------------------------------------------------------------
+
+static const char SKETCH_LABEL[]             = "Mock Multi-Sensor Health Stream";
+static const char APP_DEVICE_PROFILE_LABEL[] = "Arduino + HM-10";
+static const char WEB_DEVICE_PRESET_LABEL[]  = "Arduino + HM-10 (0xFFE0)";
+static const char DATA_PARSER_LABEL[]        = "JSON text (Arduino / HM-10)";
+static const char STREAM_NAMESPACE_LABEL[]   = "sensor.*";
+
+// -----------------------------------------------------------------------
+// Metric labels uploaded to /api/streams
+// -----------------------------------------------------------------------
+
+static const char METRIC_TIME_MS[]                = "sensor.time_ms";
+static const char METRIC_AHT20_TEMPERATURE_C[]    = "sensor.aht20_temperature_c";
+static const char METRIC_AHT20_HUMIDITY_PERCENT[] = "sensor.aht20_humidity_percent";
+static const char METRIC_TMP117_TEMPERATURE_C[]   = "sensor.tmp117_temperature_c";
+static const char METRIC_SGP40_VOC_RAW[]          = "sensor.voc_raw";
+static const char METRIC_LSM6DSOX_ACCEL_X[]       = "sensor.accel_x";
+static const char METRIC_LSM6DSOX_ACCEL_Y[]       = "sensor.accel_y";
+static const char METRIC_LSM6DSOX_ACCEL_Z[]       = "sensor.accel_z";
+static const char METRIC_LSM6DSOX_GYRO_X[]        = "sensor.gyro_x";
+static const char METRIC_LSM6DSOX_GYRO_Y[]        = "sensor.gyro_y";
+static const char METRIC_LSM6DSOX_GYRO_Z[]        = "sensor.gyro_z";
+static const char METRIC_MAX30102_RED[]           = "sensor.max_red";
+static const char METRIC_MAX30102_IR[]            = "sensor.max_ir";
 
 // -----------------------------------------------------------------------
 // Hardware
 // -----------------------------------------------------------------------
 
-static const uint8_t LED_PIN  = LED_BUILTIN;   // pin 13 on Uno
-static const uint8_t LED_SEND = LED_BUILTIN;   // blink on each successful send
-
-// -----------------------------------------------------------------------
-// Physiological range table
-// Values outside [min, max] are clamped before transmission.
-// -----------------------------------------------------------------------
-
-struct MetricRange {
-  const char *metric;
-  float       minVal;
-  float       maxVal;
-};
-
-static const MetricRange RANGES[] = {
-  { "vitals.heart_rate", 40.0f, 220.0f },
-  { "vitals.spo2",       70.0f, 100.0f },
-  { "vitals.hrv",         5.0f, 200.0f },
-  { "vitals.glucose",     2.0f,  30.0f },
-  { "body.weight_kg",    20.0f, 300.0f },
-  { "phone.steps",        0.0f, 100000.0f },
-};
-
-static const uint8_t RANGE_COUNT =
-  static_cast<uint8_t>(sizeof(RANGES) / sizeof(RANGES[0]));
-
-// -----------------------------------------------------------------------
-// Secondary metric table
-// -----------------------------------------------------------------------
-
-struct SensorDef {
-  const char *metric;
-  float       baseValue;
-  float       variance;
-  uint8_t     decimals;
-};
-
-static const SensorDef SECONDARY[] = {
-  { "vitals.spo2",    97.5f,  1.5f,  1 },
-  { "vitals.hrv",     45.0f, 10.0f,  0 },
-  { "phone.steps",     0.0f,  0.0f,  0 },   // special-cased below
-  { "vitals.glucose",  5.2f,  0.4f,  1 },
-  { "body.weight_kg", 70.5f,  0.1f,  1 },
-};
-
-static const uint8_t SECONDARY_COUNT =
-  static_cast<uint8_t>(sizeof(SECONDARY) / sizeof(SECONDARY[0]));
+static const uint8_t LED_PIN = LED_BUILTIN;
 
 // -----------------------------------------------------------------------
 // Timing constants
 // -----------------------------------------------------------------------
 
-static const uint32_t HR_INTERVAL_MS    = 2000UL;
-static const uint8_t  SECONDARY_EVERY_N = 5;       // every 5th HR send = 10 s
+static const uint32_t SENSOR_FRAME_INTERVAL_MS = 1000UL;
+static const uint16_t INTER_METRIC_DELAY_MS    = 12;
+static const uint8_t  LED_ACK_MS               = 8;
 
-// Maximum wait for a full HM-10 AT response
-static const uint32_t AT_TIMEOUT_MS     = 1500UL;
+// Maximum wait for a full HM-10 AT response.
+static const uint32_t AT_TIMEOUT_MS = 1500UL;
 
-// Max JSON line length we'll ever need (includes '\n').
-// Longest line: {"metric":"vitals.heart_rate","value":220}\n = 45 chars
-static const uint8_t  MAX_LINE_BYTES    = 56;
+// Enough for the longest metric name plus a signed fixed-point value.
+static const uint8_t MAX_LINE_BYTES = 96;
 
 // -----------------------------------------------------------------------
 // State
 // -----------------------------------------------------------------------
 
-static uint32_t lastHrMs       = 0;
-static uint8_t  hrSendCount    = 0;
-static uint8_t  secondaryIndex = 0;
-static uint32_t cumulSteps     = 8000UL;
-static uint16_t rngState       = 0;
-static bool     hmOk           = false;   // true once AT handshake passes
+static uint32_t lastFrameMs = 0;
+static uint32_t frameCount  = 0;
+static uint16_t rngState    = 0;
+static bool     hmOk        = false;
+
+static const float EARTH_GRAVITY_MS2 = 9.80665f;
+
+struct TelemetryFrame {
+  uint32_t timeMs;
+  float    ahtTemperatureC;
+  float    ahtHumidityPercent;
+  float    tmp117TemperatureC;
+  uint32_t vocRaw;
+  float    accelX;
+  float    accelY;
+  float    accelZ;
+  float    gyroX;
+  float    gyroY;
+  float    gyroZ;
+  uint32_t maxRed;
+  uint32_t maxIr;
+};
+
+static TelemetryFrame buildTelemetryFrame(uint32_t now);
+static void sendTelemetryFrame(const TelemetryFrame &frame);
 
 // -----------------------------------------------------------------------
 // LCG pseudo-random (16-bit, no stdlib)
@@ -134,6 +127,55 @@ static float randVal(float base, float variance) {
   return base + (n * 2.0f - 1.0f) * variance;
 }
 
+static float triangleWave(uint32_t now, uint32_t periodMs, float amplitude) {
+  if (periodMs == 0) return 0.0f;
+
+  const float phase = static_cast<float>(now % periodMs) /
+                      static_cast<float>(periodMs);
+  const float shape = phase < 0.5f
+    ? (phase * 4.0f - 1.0f)
+    : (3.0f - phase * 4.0f);
+
+  return shape * amplitude;
+}
+
+static uint32_t boundedUint32(float value, uint32_t minValue, uint32_t maxValue) {
+  if (value < static_cast<float>(minValue)) return minValue;
+  if (value > static_cast<float>(maxValue)) return maxValue;
+  return static_cast<uint32_t>(value + 0.5f);
+}
+
+static float boundedFloat(float value, float minValue, float maxValue) {
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
+}
+
+static float ramp01(uint32_t now, uint32_t durationMs) {
+  if (durationMs == 0 || now >= durationMs) return 1.0f;
+  return static_cast<float>(now) / static_cast<float>(durationMs);
+}
+
+static float ppgPulse(uint32_t now, uint16_t periodMs) {
+  if (periodMs == 0) return 0.0f;
+
+  const float phase = static_cast<float>(now % periodMs) /
+                      static_cast<float>(periodMs);
+
+  if (phase < 0.12f) {
+    return phase / 0.12f;
+  }
+  if (phase < 0.28f) {
+    return 1.0f - ((phase - 0.12f) / 0.16f) * 0.25f;
+  }
+  if (phase < 0.38f) {
+    return 0.55f + ((phase - 0.28f) / 0.10f) * 0.15f;
+  }
+
+  const float decay = 1.0f - ((phase - 0.38f) / 0.62f);
+  return boundedFloat(decay * 0.70f, 0.0f, 1.0f);
+}
+
 // -----------------------------------------------------------------------
 // LED helpers
 // -----------------------------------------------------------------------
@@ -147,104 +189,235 @@ static void ledBlink(uint8_t count, uint16_t onMs, uint16_t offMs) {
   }
 }
 
-// Pulse LED briefly to acknowledge a successful send.
 static void ledAckSend() {
   digitalWrite(LED_PIN, HIGH);
-  delay(30);
+  delay(LED_ACK_MS);
   digitalWrite(LED_PIN, LOW);
 }
 
 // -----------------------------------------------------------------------
-// Range clamping
-// Returns the value clamped to its registered physiological range.
-// Logs a warning over USB Serial if clamping was needed.
+// Fixed-point JSON formatting
+// AVR printf does not print floats by default, so values are rounded manually.
 // -----------------------------------------------------------------------
 
-static float clampRange(const char *metric, float value) {
-  for (uint8_t i = 0; i < RANGE_COUNT; i++) {
-    if (strcmp(metric, RANGES[i].metric) == 0) {
-      if (value < RANGES[i].minVal) {
-        DBG.print(F("[WARN] "));
-        DBG.print(metric);
-        DBG.print(F(" clamped "));
-        DBG.print(value);
-        DBG.print(F(" -> "));
-        DBG.println(RANGES[i].minVal);
-        return RANGES[i].minVal;
-      }
-      if (value > RANGES[i].maxVal) {
-        DBG.print(F("[WARN] "));
-        DBG.print(metric);
-        DBG.print(F(" clamped "));
-        DBG.print(value);
-        DBG.print(F(" -> "));
-        DBG.println(RANGES[i].maxVal);
-        return RANGES[i].maxVal;
-      }
-      return value;
-    }
+static uint32_t decimalScale(uint8_t decimals) {
+  uint32_t scale = 1;
+  for (uint8_t i = 0; i < decimals; i++) {
+    scale *= 10UL;
   }
-  return value;  // no range registered – pass through
+  return scale;
 }
 
-// -----------------------------------------------------------------------
-// Safe BT send
-// Checks the SoftwareSerial overflow flag and ensures the line fits
-// within the HM-10's UART buffer before writing.
-// Returns false if the send was skipped due to a buffer problem.
-// -----------------------------------------------------------------------
+static bool formatFixed(char *out, size_t outSize, float value, uint8_t decimals) {
+  if (!out || outSize == 0) return false;
+  if (decimals > 3) decimals = 3;
 
-static bool btSendLine(const char *metric, float value, uint8_t decimals) {
-  // Build the JSON line into a local buffer first so we can measure it.
-  char buf[MAX_LINE_BYTES + 1];
+  const uint32_t scale = decimalScale(decimals);
+  const float absValue = value < 0.0f ? -value : value;
+  const uint32_t scaled = static_cast<uint32_t>(
+    absValue * static_cast<float>(scale) + 0.5f
+  );
+  const bool negative = value < 0.0f && scaled > 0;
+  const uint32_t whole = scaled / scale;
+  const uint32_t frac = scaled % scale;
+
   int len;
-
   if (decimals == 0) {
-    len = snprintf(buf, sizeof(buf),
-                   "{\"metric\":\"%s\",\"value\":%ld}\n",
-                   metric, static_cast<long>(value));
+    len = snprintf(out, outSize, "%s%lu",
+                   negative ? "-" : "",
+                   static_cast<unsigned long>(whole));
   } else if (decimals == 1) {
-    // Manual 1-decimal formatting to avoid printf float on AVR.
-    long whole = static_cast<long>(value);
-    int  frac  = static_cast<int>((value - static_cast<float>(whole)) * 10.0f + 0.5f);
-    if (frac >= 10) { whole++; frac = 0; }
-    len = snprintf(buf, sizeof(buf),
-                   "{\"metric\":\"%s\",\"value\":%ld.%d}\n",
-                   metric, whole, frac);
+    len = snprintf(out, outSize, "%s%lu.%01lu",
+                   negative ? "-" : "",
+                   static_cast<unsigned long>(whole),
+                   static_cast<unsigned long>(frac));
+  } else if (decimals == 2) {
+    len = snprintf(out, outSize, "%s%lu.%02lu",
+                   negative ? "-" : "",
+                   static_cast<unsigned long>(whole),
+                   static_cast<unsigned long>(frac));
   } else {
-    // Fallback: round to 2 dp
-    long whole = static_cast<long>(value);
-    int  frac  = static_cast<int>((value - static_cast<float>(whole)) * 100.0f + 0.5f);
-    if (frac >= 100) { whole++; frac = 0; }
-    len = snprintf(buf, sizeof(buf),
-                   "{\"metric\":\"%s\",\"value\":%ld.%02d}\n",
-                   metric, whole, frac);
+    len = snprintf(out, outSize, "%s%lu.%03lu",
+                   negative ? "-" : "",
+                   static_cast<unsigned long>(whole),
+                   static_cast<unsigned long>(frac));
   }
 
-  // Guard: snprintf returns the number of chars it *would* write; if it
-  // exceeds our buffer the line was silently truncated – skip it.
+  return len > 0 && len < static_cast<int>(outSize);
+}
+
+static bool btSendValueText(const char *metric, const char *valueText) {
+  char buf[MAX_LINE_BYTES + 1];
+  const int len = snprintf(buf, sizeof(buf),
+                           "{\"metric\":\"%s\",\"value\":%s}\n",
+                           metric,
+                           valueText);
+
   if (len <= 0 || len >= static_cast<int>(sizeof(buf))) {
     DBG.print(F("[ERR] JSON line too long for metric: "));
     DBG.println(metric);
     return false;
   }
 
-  // Check for SoftwareSerial receive overflow (indicates baud mismatch or
-  // excessive noise from the HM-10 side).
   if (BT.overflow()) {
     DBG.println(F("[WARN] BT RX overflow detected (baud mismatch?)"));
   }
 
-  // Write to HM-10.  SoftwareSerial::write() is blocking; a small inter-
-  // packet delay lets the HM-10 finish transmitting before the next send.
   BT.print(buf);
 
-  // Echo to USB Serial for easy verification without a BLE terminal.
   DBG.print(F("[SEND] "));
-  DBG.print(buf);   // buf already has '\n'
+  DBG.print(buf);
 
   ledAckSend();
   return true;
+}
+
+static bool btSendFloat(const char *metric, float value, uint8_t decimals) {
+  char valueText[20];
+  if (!formatFixed(valueText, sizeof(valueText), value, decimals)) {
+    DBG.print(F("[ERR] Could not format value for metric: "));
+    DBG.println(metric);
+    return false;
+  }
+  return btSendValueText(metric, valueText);
+}
+
+static bool btSendUint32(const char *metric, uint32_t value) {
+  char valueText[12];
+  const int len = snprintf(valueText, sizeof(valueText), "%lu",
+                           static_cast<unsigned long>(value));
+  if (len <= 0 || len >= static_cast<int>(sizeof(valueText))) {
+    DBG.print(F("[ERR] Could not format integer for metric: "));
+    DBG.println(metric);
+    return false;
+  }
+  return btSendValueText(metric, valueText);
+}
+
+static void paceMetricSend() {
+  delay(INTER_METRIC_DELAY_MS);
+  wdt_reset();
+}
+
+// -----------------------------------------------------------------------
+// Synthetic sensor model
+// -----------------------------------------------------------------------
+
+static TelemetryFrame buildTelemetryFrame(uint32_t now) {
+  TelemetryFrame frame;
+  const bool moving = (now % 16000UL) >= 8000UL && (now % 16000UL) < 12500UL;
+  const float motion = moving ? 1.0f : 0.0f;
+  const uint16_t pulsePeriodMs = static_cast<uint16_t>(
+    boundedUint32(820.0f + triangleWave(now, 45000UL, 55.0f), 730UL, 910UL)
+  );
+  const float pulseShape = ppgPulse(now, pulsePeriodMs);
+  const float warmup = ramp01(now, 120000UL);
+  const float ambientTemperature = randVal(22.2f, 0.05f) +
+                                   triangleWave(now, 300000UL, 1.0f);
+  const float humidityDrift = triangleWave(now + 7000UL, 240000UL, 4.5f);
+  const uint32_t vocCycle = now % 90000UL;
+  const float vocEvent = vocCycle < 12000UL
+    ? triangleWave(vocCycle, 12000UL, 4200.0f) + 4200.0f
+    : 0.0f;
+
+  frame.timeMs = now;
+  frame.ahtTemperatureC = boundedFloat(ambientTemperature, 18.0f, 30.0f);
+  frame.ahtHumidityPercent = boundedFloat(
+    randVal(48.0f, 0.45f) +
+      humidityDrift -
+      (frame.ahtTemperatureC - 22.2f) * 0.8f,
+    25.0f,
+    85.0f
+  );
+  frame.tmp117TemperatureC = boundedFloat(
+    30.5f + warmup * 4.0f +
+      triangleWave(now + 12000UL, 180000UL, 0.25f) +
+      randVal(0.0f, 0.03f),
+    30.0f,
+    36.8f
+  );
+  frame.vocRaw = boundedUint32(
+    randVal(23500.0f, 180.0f) +
+      triangleWave(now, 240000UL, 1600.0f) +
+      (frame.ahtHumidityPercent - 50.0f) * 95.0f +
+      vocEvent,
+    5000UL,
+    65000UL
+  );
+
+  frame.accelX = randVal(0.0f, 0.025f) +
+                 triangleWave(now, 560UL, 1.10f * motion);
+  frame.accelY = randVal(0.0f, 0.025f) +
+                 triangleWave(now + 180UL, 780UL, 0.80f * motion);
+  frame.accelZ = randVal(EARTH_GRAVITY_MS2, 0.035f) +
+                 triangleWave(now + 320UL, 640UL, 1.45f * motion);
+
+  frame.gyroX = randVal(0.0f, 0.006f) +
+                triangleWave(now, 620UL, 0.75f * motion);
+  frame.gyroY = randVal(0.0f, 0.006f) +
+                triangleWave(now + 120UL, 840UL, 0.55f * motion);
+  frame.gyroZ = randVal(0.0f, 0.006f) +
+                triangleWave(now + 260UL, 710UL, 0.90f * motion);
+
+  frame.maxRed = boundedUint32(
+    randVal(52000.0f, 70.0f) +
+      (pulseShape * 1050.0f) +
+      triangleWave(now + 260UL, 710UL, 380.0f * motion),
+    30000UL,
+    90000UL
+  );
+  frame.maxIr = boundedUint32(
+    randVal(68000.0f, 90.0f) +
+      (pulseShape * 1750.0f) +
+      triangleWave(now + 180UL, 620UL, 620.0f * motion),
+    40000UL,
+    120000UL
+  );
+
+  return frame;
+}
+
+static void sendTelemetryFrame(const TelemetryFrame &frame) {
+  DBG.print(F("[FRAME] "));
+  DBG.println(static_cast<unsigned long>(frameCount));
+
+  btSendUint32(METRIC_TIME_MS, frame.timeMs);
+  paceMetricSend();
+
+  btSendFloat(METRIC_AHT20_TEMPERATURE_C, frame.ahtTemperatureC, 2);
+  paceMetricSend();
+
+  btSendFloat(METRIC_AHT20_HUMIDITY_PERCENT, frame.ahtHumidityPercent, 2);
+  paceMetricSend();
+
+  btSendFloat(METRIC_TMP117_TEMPERATURE_C, frame.tmp117TemperatureC, 2);
+  paceMetricSend();
+
+  btSendUint32(METRIC_SGP40_VOC_RAW, frame.vocRaw);
+  paceMetricSend();
+
+  btSendFloat(METRIC_LSM6DSOX_ACCEL_X, frame.accelX, 3);
+  paceMetricSend();
+
+  btSendFloat(METRIC_LSM6DSOX_ACCEL_Y, frame.accelY, 3);
+  paceMetricSend();
+
+  btSendFloat(METRIC_LSM6DSOX_ACCEL_Z, frame.accelZ, 3);
+  paceMetricSend();
+
+  btSendFloat(METRIC_LSM6DSOX_GYRO_X, frame.gyroX, 3);
+  paceMetricSend();
+
+  btSendFloat(METRIC_LSM6DSOX_GYRO_Y, frame.gyroY, 3);
+  paceMetricSend();
+
+  btSendFloat(METRIC_LSM6DSOX_GYRO_Z, frame.gyroZ, 3);
+  paceMetricSend();
+
+  btSendUint32(METRIC_MAX30102_RED, frame.maxRed);
+  paceMetricSend();
+
+  btSendUint32(METRIC_MAX30102_IR, frame.maxIr);
 }
 
 // -----------------------------------------------------------------------
@@ -257,13 +430,12 @@ static bool tryAtHandshake(uint32_t baud) {
   BT.begin(baud);
   delay(200);
 
-  // Flush any power-on noise
   while (BT.available()) BT.read();
 
   BT.print(F("AT"));
 
   uint32_t start = millis();
-  String   resp  = "";
+  String resp = "";
   while (millis() - start < AT_TIMEOUT_MS) {
     while (BT.available()) {
       char c = static_cast<char>(BT.read());
@@ -275,9 +447,8 @@ static bool tryAtHandshake(uint32_t baud) {
 }
 
 static bool hmHandshake() {
-  // Common HM-10 baud rates to probe.
   static const uint32_t BAUDS[] = { 9600UL, 115200UL, 57600UL, 38400UL };
-  static const uint8_t  BAUD_COUNT = sizeof(BAUDS) / sizeof(BAUDS[0]);
+  static const uint8_t BAUD_COUNT = sizeof(BAUDS) / sizeof(BAUDS[0]);
 
   DBG.println(F("[HM10] Running AT handshake..."));
 
@@ -290,12 +461,11 @@ static bool hmHandshake() {
       DBG.println(F("OK"));
       DBG.print(F("[HM10] BAUD "));
       DBG.print(BAUDS[i]);
-      DBG.println(F(" OK – module confirmed"));
+      DBG.println(F(" OK - module confirmed"));
 
       if (BAUDS[i] != 9600UL) {
-        // Normalise to 9600 so the rest of the sketch works.
         DBG.println(F("[HM10] Re-setting baud to 9600..."));
-        BT.print(F("AT+BAUD0"));   // HM-10 command: set 9600
+        BT.print(F("AT+BAUD0"));
         delay(200);
         BT.begin(9600);
         delay(200);
@@ -304,11 +474,14 @@ static bool hmHandshake() {
     }
 
     DBG.println(F("no response"));
-    ledBlink(1, 80, 80);   // short visual tick per attempt
+    ledBlink(1, 80, 80);
   }
 
   DBG.println(F("[ERR] HM-10 not responding on any baud rate."));
-  DBG.println(F("[ERR] Check wiring: TX->pin3, RX->pin4, power, GND."));
+  DBG.println(F("[ERR] Check wiring: TX->pin7, RX->pin8, power, GND."));
+  DBG.println(F("[HM10] Falling back to 9600 baud for streaming."));
+  BT.begin(9600);
+  delay(200);
   return false;
 }
 
@@ -320,13 +493,22 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  DBG.begin(9600);
+  DBG.begin(115200);
   delay(100);
 
   DBG.println(F(""));
-  DBG.println(F("=== Mock Health Sensor boot ==="));
+  DBG.print(F("=== "));
+  DBG.print(SKETCH_LABEL);
+  DBG.println(F(" boot ==="));
+  DBG.print(F("[LABEL] App profile: "));
+  DBG.println(APP_DEVICE_PROFILE_LABEL);
+  DBG.print(F("[LABEL] Web preset: "));
+  DBG.println(WEB_DEVICE_PRESET_LABEL);
+  DBG.print(F("[LABEL] Parser: "));
+  DBG.println(DATA_PARSER_LABEL);
+  DBG.print(F("[LABEL] Stream namespace: "));
+  DBG.println(STREAM_NAMESPACE_LABEL);
 
-  // Seed RNG from floating analogue inputs
   rngState = static_cast<uint16_t>(
     (static_cast<uint16_t>(analogRead(A0)) << 8) ^
      static_cast<uint16_t>(analogRead(A1))
@@ -334,30 +516,28 @@ void setup() {
   DBG.print(F("[RNG] seed = "));
   DBG.println(rngState);
 
-  // Fast-blink LED while probing HM-10
   ledBlink(4, 80, 80);
-
   hmOk = hmHandshake();
 
   if (hmOk) {
-    // Three slow blinks = ready
     ledBlink(3, 200, 150);
     DBG.println(F("[HM10] Ready. Advertising as 'HMSoft' or 'BT05'."));
-    DBG.println(F("[HM10] Connect via app profile 'Arduino + HM-10'"));
+    DBG.print(F("[HM10] Connect via app profile '"));
+    DBG.print(APP_DEVICE_PROFILE_LABEL);
+    DBG.println(F("'"));
     DBG.println(F("       (Service FFE0 / Characteristic FFE1)"));
   } else {
-    // Solid LED = hardware error
     digitalWrite(LED_PIN, HIGH);
     DBG.println(F("[ERR] Continuing without confirmed HM-10 link."));
-    DBG.println(F("[ERR] Data will still be sent – check BLE terminal"));
+    DBG.println(F("[ERR] Data will still be sent - check BLE terminal"));
     DBG.println(F("[ERR] to see if packets arrive despite AT failure."));
   }
 
-  DBG.println(F("[INFO] HR every 2s  /  secondary metrics every 10s"));
-  DBG.println(F("[INFO] Open Serial Monitor at 9600 baud to watch sends."));
+  DBG.println(F("[INFO] Full synthetic sensor frame every 1s."));
+  DBG.println(F("[INFO] JSON metric lines are newline terminated."));
+  DBG.println(F("[INFO] Open Serial Monitor at 115200 baud to watch sends."));
   DBG.println(F("==========================="));
 
-  // Enable watchdog: reset Arduino if loop() stalls > 4 s
   wdt_enable(WDTO_4S);
 }
 
@@ -366,49 +546,18 @@ void setup() {
 // -----------------------------------------------------------------------
 
 void loop() {
-  wdt_reset();   // pet the watchdog every iteration
+  wdt_reset();
 
   const uint32_t now = millis();
 
-  if (now - lastHrMs >= HR_INTERVAL_MS) {
-    lastHrMs = now;
+  if (now - lastFrameMs >= SENSOR_FRAME_INTERVAL_MS) {
+    lastFrameMs = now;
+    frameCount++;
 
-    // --- Heart rate (primary, every 2 s) ---
-    float hr = clampRange("vitals.heart_rate",
-                          randVal(75.0f, 13.0f));
-    btSendLine("vitals.heart_rate", hr, 0);
-
-    // --- Secondary metric (every SECONDARY_EVERY_N HR sends = 10 s) ---
-    hrSendCount++;
-    if (hrSendCount >= SECONDARY_EVERY_N) {
-      hrSendCount = 0;
-
-      // Small gap so HM-10 doesn't receive two back-to-back packets
-      // before the first is fully transmitted over BLE.
-      delay(60);
-      wdt_reset();
-
-      const SensorDef &s = SECONDARY[secondaryIndex];
-      float secVal;
-
-      if (secondaryIndex == 2) {
-        // phone.steps: increment 8-20 steps per 10 s window
-        uint16_t inc = static_cast<uint16_t>(randVal(14.0f, 6.0f) + 0.5f);
-        cumulSteps  += inc;
-        secVal = clampRange("phone.steps",
-                            static_cast<float>(cumulSteps));
-      } else {
-        secVal = clampRange(s.metric,
-                            randVal(s.baseValue, s.variance));
-      }
-
-      btSendLine(s.metric, secVal, s.decimals);
-      secondaryIndex =
-        static_cast<uint8_t>((secondaryIndex + 1) % SECONDARY_COUNT);
-    }
+    const TelemetryFrame frame = buildTelemetryFrame(now);
+    sendTelemetryFrame(frame);
   }
 
-  // Discard any incoming bytes from the app (commands not used here).
   while (BT.available()) {
     BT.read();
   }

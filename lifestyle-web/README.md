@@ -65,10 +65,15 @@ lifestyle-web/
 │   │   └── lifestyle_metrics.sql   # Schema + baseline data ingested on boot
 │   └── storage/                    # SQLite DB file is created here at runtime
 └── server
+    ├── NUT_model                   # Nutrition photo inference code and model architecture
+    ├── data/FoodSeg103             # Nutrition labels and demo/test image data
+    ├── ppg_glucose                 # BGL/PPG pipeline, inference CLI, and model bundle
     ├── public                      # Vanilla JS + Chart.js powered UI
     │   ├── app.js
+    │   ├── bluetooth.html
     │   ├── index.html
     │   └── styles.css
+    ├── scripts                     # Model checks, model setup, DB reset, port helpers
     └── src
         ├── routes
         │   ├── activity.js
@@ -76,9 +81,12 @@ lifestyle-web/
         │   ├── athletes.js
         │   ├── auth.js
         │   ├── metrics.js
+        │   ├── nutrition.js
+        │   ├── ppg.js
         │   ├── share.js
         │   └── signup.js
         ├── services
+        │   ├── nutrition-photo-analyzer.js
         │   ├── session-store.js
         │   └── strava.js
         ├── utils
@@ -88,6 +96,19 @@ lifestyle-web/
         ├── db.js
         └── server.js
 ```
+
+## ML Model File Map
+Use this table as the fastest way to find the model files from the repo root.
+
+| Need | Path | What is there |
+| --- | --- | --- |
+| NUT meal-photo inference code | [`lifestyle-web/server/NUT_model`](server/NUT_model) | `nut_estimator.py`, persistent-worker `nut_server.py`, dependencies, and model architecture under `models/`. |
+| NUT checkpoint location | `lifestyle-web/server/NUT_model/checkpoint/canet_NUT.pth` | Expected local `.pth` file. The `checkpoint/` folder is ignored by git, so it may not exist until you add the checkpoint. |
+| NUT labels/data | [`lifestyle-web/server/data/FoodSeg103`](server/data/FoodSeg103) | FoodSeg103 `category_id.txt`, image/annotation folders, and small custom images used by the nutrition workflow. |
+| BGL/PPG model bundle | [`lifestyle-web/server/ppg_glucose/models/bgl_catboost_current_ppg_demo_no_preop`](server/ppg_glucose/models/bgl_catboost_current_ppg_demo_no_preop) | The deployed CatBoost bundle: `catboost_model.cbm`, `final_features.txt`, `model_metadata.json`, and `training_schema.json`. |
+| BGL/PPG inference CLI | [`lifestyle-web/server/ppg_glucose/src/inference/predict.py`](server/ppg_glucose/src/inference/predict.py) | Loads the CatBoost bundle, validates the PPG window, extracts features, and writes prediction JSON. |
+| BGL/PPG handoff notes | [`lifestyle-web/server/ppg_glucose/DEPLOYMENT_BGL_INFERENCE.md`](server/ppg_glucose/DEPLOYMENT_BGL_INFERENCE.md) | Input contract, command examples, expected output JSON, metrics, and limitations. |
+| Model setup/check scripts | [`lifestyle-web/server/scripts`](server/scripts) | `setup-nut-model.sh`, `check-nut-model.sh`, `setup-ppg-model.sh`, and `check-ppg-model.sh`. |
 
 ## Local Development
 ```bash
@@ -119,16 +140,23 @@ The client stores that value in `localStorage` under `msml.api.base-url` and reu
 | `PASSWORD_ENCRYPTION_KEY` | Secret used to derive the AES-256-GCM key that encrypts stored password digests | `msml-lifestyle-monitor-passwords` |
 | `DB_STORAGE_DIR` | Optional override for writable SQLite directory | `./database/storage` |
 | `DB_SQL_DIR` | Optional override for SQL seed directory | `./database/sql` |
-| `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference. Local dev auto-detects `.venv/bin/python`, then `python3`, then `python`. | auto |
+| `NUT_MODEL_PYTHON_BIN` | Python executable used for meal photo inference. Local dev auto-detects `NUT_model/.venv/bin/python`, Windows `.venv/Scripts/python.exe`, then system Python. | auto |
 | `NUT_MODEL_SCRIPT` | Path to the NUT inference script | `./server/NUT_model/nut_estimator.py` |
 | `NUT_MODEL_WEIGHTS` | Path to the NUT `.pth` checkpoint | `./server/NUT_model/checkpoint/canet_NUT.pth` |
-| `NUT_MODEL_LABELS` | Optional path to a custom FoodSeg103 label map JSON (built-in labels are used if omitted) | — |
-| `NUT_MODEL_TIMEOUT_MS` | Max server wait for meal photo inference | `15000` |
+| `NUT_MODEL_LABELS` | Optional path to the FoodSeg103 label map | `./server/data/FoodSeg103/category_id.txt` |
+| `NUT_MODEL_TIMEOUT_MS` | Max server wait for meal photo inference and setup checks | `45000` |
+| `NUT_MODEL_IMAGE_SIZE` | Image size passed to the NUT estimator by the Node API | `320` |
+| `NUT_MODEL_SETUP_CACHE_TTL_MS` | How long `/api/nutrition/photo/health` caches model setup checks | `3600000` |
 | `NUT_MODEL_MAX_PHOTO_BASE64_LENGTH` | Max accepted base64 photo payload length for `/api/nutrition` | `12582912` |
-| `NUT_MODEL_MIN_CONFIDENCE` | Minimum confidence required for most auto photo labels | `0.60` |
-| `NUT_MODEL_STRICT_MIN_CONFIDENCE` | Higher confidence floor for commonly confused baked/bread classes (toast, croissant, etc.) | `0.70` |
-| `NUT_MODEL_MULTI_MIN_CONFIDENCE` | Minimum confidence for secondary `detectedFoods` candidates returned by the model | `0.08` |
-| `NUT_MODEL_MULTI_MAX_ITEMS` | Max number of `detectedFoods` candidates returned by the model | `6` |
+| `NUT_EXPRESS_MODE` | When `true`, starts/reuses `NUT_model/nut_server.py` so the nutrition model stays warm between requests | `false` |
+| `NUT_EXPRESS_URL` | Local URL used by the Node API to reach the NUT express worker | `http://127.0.0.1:8001` |
+| `NUT_EXPRESS_PORT` | Port used when Node starts the local NUT express worker | `8001` |
+| `NUT_USDA_LOOKUP_TIMEOUT` | Per-item USDA lookup timeout in seconds inside express mode | `6` |
+| `PPG_MODEL_PYTHON_BIN` | Python executable used for BGL/PPG inference. Local dev auto-detects `ppg_glucose/.venv/bin/python`, Windows `.venv/Scripts/python.exe`, then `python3`. | auto |
+| `PPG_BGL_SIGNAL_METRIC` | Stream metric used for live BGL inference windows | `ppg.raw` |
+| `PPG_BGL_FS_HZ` | Expected live PPG sample rate | `500` |
+| `PPG_BGL_WINDOW_SECONDS` | Expected live PPG window length | `900` |
+| `PPG_BGL_WINDOW_TOLERANCE_MS` | Allowed timestamp-span tolerance for live PPG windows | `30000` |
 | `HEAD_COACH_SEED_PASSWORD` | Optional override for the head coach password baked into the SQL seed | `Password` |
 | `COACH_SEED_PASSWORD` | Optional override for the coach password baked into the SQL seed | `Password` |
 | `ATHLETE_SEED_PASSWORD` | Optional override for the athlete password baked into the SQL seed | `Password` |
@@ -308,10 +336,14 @@ npm run reset-db
 This deletes `database/storage/lifestyle_monitor.db*`, replays the SQL seed, and reapplies runtime migrations defined in `src/db.js`.
 
 ### Enabling NUT meal-photo logging
-The nutrition route can now accept a photo-only payload and create a food-register entry from the server-side NUT model. To enable that path:
+The nutrition route can accept a photo-only payload and create a food-register entry from the server-side NUT model. Before enabling it, place the local checkpoint at `NUT_model/checkpoint/canet_NUT.pth` from `lifestyle-web/server`. The `checkpoint/` folder is ignored by git because the `.pth` file is too large for the repository.
+
+Install the runtime and verify the setup:
 ```bash
 cd lifestyle-web/server
-python3 -m pip install -r NUT_model/requirements.txt
+bash scripts/setup-nut-model.sh
+
+# If dependencies are already installed and you only want the readiness check:
 npm run check:nut-model
 ```
 To run inference on a single test image (and verify the model is reading your files correctly), use:
@@ -322,7 +354,7 @@ NUT_model/.venv/bin/python NUT_model/nut_estimator.py \
   --model NUT_model/checkpoint/canet_NUT.pth
 ```
 
-Keep `NUT_model/checkpoint/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, built-in FoodSeg103 labels are used. The `.pth` checkpoint is intentionally local-only and excluded from git because it exceeds GitHub's file-size limit. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
+Keep `NUT_model/checkpoint/canet_NUT.pth` and `NUT_model/nut_estimator.py` together, or point the `NUT_MODEL_*` environment variables at custom locations. `NUT_MODEL_LABELS` is optional; when it is not set, `data/FoodSeg103/category_id.txt` is used. Once installed, importing a food photo from the mobile Nutrition screen posts directly to `/api/nutrition`, and the server stores the detected item in `nutrition_entries`.
 
 If a single photo contains multiple foods, `/api/nutrition` also accepts an `items` array so one request can log multiple entries from the same image. Example payload:
 ```json
@@ -344,6 +376,18 @@ curl http://localhost:4000/api/nutrition/photo/health \
   -H "Authorization: Bearer <token>"
 ```
 The response includes the resolved checkpoint path, filename, size, and SHA-256 so you can confirm the server is using your exact `canet_NUT.pth` file. Add `?refresh=true` to force the server to rerun the Python self-check instead of using the recent cached result.
+
+### Enabling BGL/PPG inference
+The BGL prototype uses the CatBoost bundle in `ppg_glucose/models/bgl_catboost_current_ppg_demo_no_preop/` and runs inference through `ppg_glucose/src/inference/predict.py`. The required bundle files are `catboost_model.cbm`, `final_features.txt`, `model_metadata.json`, and `training_schema.json`.
+
+Install the Python runtime and verify dependencies:
+```bash
+cd lifestyle-web/server
+npm run setup:ppg-model
+npm run check:ppg-model
+```
+
+Live inference reads the latest `ppg.raw` stream window by default: 500 Hz for 900 seconds, or 450,000 samples. Those defaults can be changed with the `PPG_BGL_*` environment variables above. After signing in, `GET /api/ppg/status` reports the resolved model bundle path, Python runtime status, demo input status, live input status, and BGL profile readiness.
 
 ### Metrics payload filters
 `GET /api/metrics` accepts an `include` query parameter so clients can pull only the sections they need: `summary`, `timeline`, `macros`, `heartRate`, `hydration`, `sleepStages`, and/or `readiness`.

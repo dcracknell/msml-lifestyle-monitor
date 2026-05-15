@@ -656,7 +656,7 @@ describe('arduino_hm10 profile', () => {
     expect(ids).toContain('arduino_hm10');
   });
 
-  it('pre-fills FFE0 / FFE1 UUIDs and vitals.heart_rate metric', async () => {
+  it('pre-fills FFE0 / FFE1 UUIDs and the mock sensor metric', async () => {
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
     await renderWithProvider((ctx) => { snapshot = ctx; });
 
@@ -664,7 +664,7 @@ describe('arduino_hm10 profile', () => {
 
     expect(snapshot!.config.serviceUUID).toBe('FFE0');
     expect(snapshot!.config.characteristicUUID).toBe('FFE1');
-    expect(snapshot!.config.metric).toBe('vitals.heart_rate');
+    expect(snapshot!.config.metric).toBe('sensor.aht20_temperature_c');
     expect(snapshot!.config.profile).toBe('arduino_hm10');
   });
 });

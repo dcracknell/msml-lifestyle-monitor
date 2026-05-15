@@ -428,7 +428,7 @@ function loadPersistedPending() {
 const PROFILES = {
   custom:                 { serviceUUID: '',       characteristicUUID: '',       metric: '',                 parser: 'jsontext' },
   ble_hrm:               { serviceUUID: '180D',   characteristicUUID: '2A37',   metric: 'exercise.hr',      parser: 'ble_hrm'  },
-  arduino_hm10:          { serviceUUID: 'FFE0',   characteristicUUID: 'FFE1',   metric: 'vitals.heart_rate',parser: 'jsontext' },
+  arduino_hm10:          { serviceUUID: 'FFE0',   characteristicUUID: 'FFE1',   metric: 'sensor.aht20_temperature_c',parser: 'jsontext' },
   apple_watch_companion: { serviceUUID: 'FFF0',   characteristicUUID: 'FFF1',   metric: 'exercise.hr',      parser: 'jsontext' },
   ppg_raw_500hz:         { serviceUUID: '',       characteristicUUID: '',       metric: 'ppg.raw',          parser: 'float32'  },
 };

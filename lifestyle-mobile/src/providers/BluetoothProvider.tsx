@@ -56,11 +56,11 @@ export const BLUETOOTH_PROFILE_OPTIONS: BluetoothProfileOption[] = [
     id: 'arduino_hm10',
     label: 'Arduino + HM-10',
     shortLabel: 'Arduino',
-    description: 'Arduino Uno with HM-10 BLE module sending JSON metric packets (see mock bluetooth/README.md).',
+    description: 'Arduino Uno with HM-10 BLE module sending multi-sensor JSON metric packets.',
     defaults: {
       serviceUUID: 'FFE0',
       characteristicUUID: 'FFE1',
-      metric: 'vitals.heart_rate',
+      metric: 'sensor.aht20_temperature_c',
     },
   },
 ];
@@ -865,7 +865,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       // (terminated by '\n') to avoid partial-JSON parse errors.
       lineBufferRef.current += text;
 
-      // Overflow guard: a valid JSON line from the Arduino is at most ~56 bytes.
+      // Overflow guard: a valid JSON line from the Arduino mock is under 100 bytes.
       // If the buffer grows beyond 512 chars without a newline, the HM-10 is
       // sending garbled data (noise, baud mismatch). Discard and log.
       if (lineBufferRef.current.length > 512) {
