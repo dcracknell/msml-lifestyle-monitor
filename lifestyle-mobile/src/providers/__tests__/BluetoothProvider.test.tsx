@@ -7,6 +7,8 @@ import { render, act, cleanup } from '@testing-library/react';
 
 const mockConnectedDevices   = jest.fn();
 const mockConnectToDevice    = jest.fn();
+const mockDevices            = jest.fn().mockResolvedValue([]);
+const mockIsDeviceConnected  = jest.fn().mockResolvedValue(false);
 const mockOnDeviceDisconnected = jest.fn();
 const mockStartDeviceScan    = jest.fn();
 const mockStopDeviceScan     = jest.fn();
@@ -59,6 +61,8 @@ jest.mock('react-native-ble-plx', () => {
     BleManager: jest.fn().mockImplementation(() => ({
       connectedDevices:       mockConnectedDevices,
       connectToDevice:        mockConnectToDevice,
+      devices:                mockDevices,
+      isDeviceConnected:      mockIsDeviceConnected,
       onStateChange,
       onDeviceDisconnected:   mockOnDeviceDisconnected,
       startDeviceScan:        mockStartDeviceScan,
@@ -90,6 +94,8 @@ const encode = (s: string) => require('base-64').encode(s);
 afterEach(() => {
   cleanup();
   jest.clearAllMocks();
+  mockDevices.mockResolvedValue([]);
+  mockIsDeviceConnected.mockResolvedValue(false);
 });
 
 async function renderWithProvider(probe: (ctx: ReturnType<typeof useBluetooth>) => void) {
@@ -244,7 +250,7 @@ describe('BluetoothProvider confirmSystemDevice', () => {
 
     // connectedDevices and monitorCharacteristicForService must receive full UUIDs
     expect(mockConnectedDevices).toHaveBeenCalledWith([full('FFF0')]);
-    expect(mockConnectToDevice).toHaveBeenCalledWith('paired-id', { autoConnect: false });
+    expect(mockConnectToDevice).toHaveBeenCalledWith('paired-id');
     expect(snapshot!.connectedDevice?.id).toBe('paired-id');
     expect(snapshot!.status).toBe('connected');
     expect(monitorCharacteristicForService).toHaveBeenCalledWith(
@@ -265,6 +271,47 @@ describe('BluetoothProvider confirmSystemDevice', () => {
     expect(snapshot!.error).toContain('No paired device detected');
     expect(snapshot!.status).toBe('error');
     expect(mockConnectToDevice).not.toHaveBeenCalled();
+  });
+
+  it('recovers if the initial BLE connect is cancelled but the device is already connected', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    const discoveredDevice = {
+      id: 'paired-id',
+      name: 'Trainer',
+      rssi: -45,
+      monitorCharacteristicForService,
+    };
+    mockConnectedDevices.mockResolvedValue([{ id: 'paired-id', name: 'Trainer', rssi: -45 }]);
+    mockConnectToDevice.mockRejectedValue({ message: 'Operation was cancelled', errorCode: 2 });
+    mockIsDeviceConnected.mockResolvedValue(true);
+    mockDevices.mockResolvedValue([
+      {
+        discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue(discoveredDevice),
+      },
+    ]);
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(snapshot!.status).toBe('connected');
+    expect(snapshot!.connectedDevice?.id).toBe('paired-id');
+    expect(mockDevices).toHaveBeenCalledWith(['paired-id']);
+  });
+
+  it('shows a friendly message when a cancelled connect could not be recovered', async () => {
+    mockConnectedDevices.mockResolvedValue([{ id: 'paired-id', name: 'Trainer', rssi: -45 }]);
+    mockConnectToDevice.mockRejectedValue({ message: 'Operation was cancelled', errorCode: 2 });
+    mockIsDeviceConnected.mockResolvedValue(false);
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(snapshot!.status).toBe('error');
+    expect(snapshot!.error).toContain('Bluetooth connection was interrupted before setup completed');
   });
 
   it('parses standard BLE heart-rate measurements when using HR profile', async () => {
@@ -621,7 +668,7 @@ describe('BluetoothProvider connectToDevice', () => {
 
     await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
 
-    expect(mockConnectToDevice).toHaveBeenCalledWith('hmsoft-1', { autoConnect: false });
+    expect(mockConnectToDevice).toHaveBeenCalledWith('hmsoft-1');
     expect(snapshot!.connectedDevice?.id).toBe('hmsoft-1');
     expect(snapshot!.status).toBe('connected');
 
@@ -668,18 +715,19 @@ describe('BluetoothProvider connectToDevice', () => {
     );
   });
 
-  it('ignores benign monitor cancellation after a connection is established', async () => {
+  it('ignores monitor cancellations after a device is connected', async () => {
     const { ctx, monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
 
-    act(() => {
+    await act(async () => {
       monitorCallback(
         { errorCode: mockBleErrorCode.OperationCancelled, message: 'Operation was cancelled' },
         null
       );
+      await Promise.resolve();
     });
 
-    expect(ctx.error).toBeNull();
     expect(ctx.status).toBe('connected');
+    expect(ctx.error).toBeNull();
   });
 });
 
