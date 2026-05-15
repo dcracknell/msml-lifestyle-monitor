@@ -1,12 +1,13 @@
 import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BleManager, Device, Subscription, State } from 'react-native-ble-plx';
+import { BleErrorCode, BleManager, Device, Subscription, State } from 'react-native-ble-plx';
 import { encode as encodeBase64, decode as decodeBase64 } from 'base-64';
 import { useSyncQueue } from './SyncProvider';
 
 const CONFIG_KEY = 'msml.bluetooth.config';
 const MAX_RECENT_SAMPLES = 120;
+const ANDROID_CONNECTION_TIMEOUT_MS = 15_000;
 
 export type BluetoothProfileId = 'custom' | 'ble_hrm' | 'apple_watch_companion' | 'arduino_hm10';
 
@@ -216,6 +217,39 @@ function encodePayload(value: string) {
     String.fromCharCode(Number.parseInt(hex, 16))
   );
   return encodeBase64(sanitized);
+}
+
+function isBleOperationCancelledError(error: unknown) {
+  if (typeof error === 'string') {
+    return /operation\s+was\s+cancelled|operation\s+cancell?ed/i.test(error);
+  }
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const maybeBleError = error as { errorCode?: number; message?: string; reason?: string };
+  if (maybeBleError.errorCode === BleErrorCode.OperationCancelled) {
+    return true;
+  }
+  const message = String(maybeBleError.message ?? '');
+  const reason = String(maybeBleError.reason ?? '');
+  return /operation\s+was\s+cancelled|operation\s+cancell?ed/i.test(`${message} ${reason}`);
+}
+
+function normalizeConnectionError(error: unknown) {
+  if (isBleOperationCancelledError(error)) {
+    return 'Bluetooth connection was interrupted before setup completed. Retry with the device awake and nearby.';
+  }
+  return error instanceof Error ? error.message : 'Unable to connect to device.';
+}
+
+function buildConnectionOptions() {
+  if (Platform.OS !== 'android') {
+    return undefined;
+  }
+  return {
+    autoConnect: false,
+    timeout: ANDROID_CONNECTION_TIMEOUT_MS,
+  };
 }
 
 type ParsedBatch = {
@@ -665,6 +699,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const [lastUploadStatus, setLastUploadStatus] = useState<UploadStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const suppressWorkoutMirrorRef = useRef(false);
+  const connectionAttemptIdRef = useRef(0);
 
   useEffect(() => {
     let canceled = false;
@@ -960,6 +995,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   }, [isPoweredOn, isScanning, stopScan, unsupportedMessage]);
 
   const disconnectFromDevice = useCallback(async () => {
+    connectionAttemptIdRef.current += 1;
     monitorRef.current?.remove();
     monitorRef.current = null;
     disconnectRef.current?.remove();
@@ -990,6 +1026,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       setStatus('connecting');
       setError(null);
       stopScan();
+      const attemptId = connectionAttemptIdRef.current + 1;
+      connectionAttemptIdRef.current = attemptId;
+      const isStaleAttempt = () => connectionAttemptIdRef.current !== attemptId;
       monitorRef.current?.remove();
       disconnectRef.current?.remove();
       lineBufferRef.current = '';
@@ -999,8 +1038,45 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         if (!normalizedService || !normalizedCharacteristic) {
           throw new Error('Enter the service and characteristic UUIDs before connecting.');
         }
-        const connected = await manager.connectToDevice(deviceId, { autoConnect: true });
+        let connected: Device | null = null;
+        const alreadyConnected = await manager.isDeviceConnected(deviceId).catch(() => false);
+        if (alreadyConnected) {
+          const knownDevices = await manager.devices([deviceId]);
+          connected = knownDevices[0] ?? null;
+        }
+        if (!connected) {
+          try {
+            const connectionOptions = buildConnectionOptions();
+            connected = connectionOptions
+              ? await manager.connectToDevice(deviceId, connectionOptions)
+              : await manager.connectToDevice(deviceId);
+          } catch (connectError) {
+            if (!isBleOperationCancelledError(connectError)) {
+              throw connectError;
+            }
+            const recovered = await manager.isDeviceConnected(deviceId).catch(() => false);
+            if (!recovered) {
+              throw connectError;
+            }
+            const knownDevices = await manager.devices([deviceId]);
+            connected = knownDevices[0] ?? null;
+            if (!connected) {
+              throw connectError;
+            }
+          }
+        }
+        if (!connected) {
+          throw new Error('Unable to access the Bluetooth device after connecting.');
+        }
         const readyDevice = await connected.discoverAllServicesAndCharacteristics();
+        if (isStaleAttempt()) {
+          try {
+            await manager.cancelDeviceConnection(readyDevice.id);
+          } catch {
+            // ignore cleanup errors from stale connection attempts
+          }
+          return;
+        }
         connectedDeviceIdRef.current = readyDevice.id;
         setConnectedDevice({
           id: readyDevice.id,
@@ -1008,6 +1084,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           rssi: readyDevice.rssi ?? fallback?.rssi,
         });
         disconnectRef.current = manager.onDeviceDisconnected(readyDevice.id, () => {
+          connectionAttemptIdRef.current += 1;
           connectedDeviceIdRef.current = null;
           setConnectedDevice(null);
           setStatus('idle');
@@ -1016,7 +1093,13 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           expandUuid(normalizedService),
           expandUuid(normalizedCharacteristic),
           (monitorError, characteristic) => {
+            if (isStaleAttempt()) {
+              return;
+            }
             if (monitorError) {
+              if (isBleOperationCancelledError(monitorError)) {
+                return;
+              }
               setError(monitorError.message);
               setStatus('error');
               return;
@@ -1028,10 +1111,13 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         );
         setStatus('connected');
       } catch (connectionError) {
+        if (isStaleAttempt()) {
+          return;
+        }
         connectedDeviceIdRef.current = null;
         setConnectedDevice(null);
         setStatus('error');
-        setError(connectionError instanceof Error ? connectionError.message : 'Unable to connect to device.');
+        setError(normalizeConnectionError(connectionError));
       }
     },
     [config.characteristicUUID, config.serviceUUID, handleCharacteristicValue, stopScan, unsupportedMessage]
