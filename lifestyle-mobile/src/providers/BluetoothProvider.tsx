@@ -174,6 +174,109 @@ export function expandUuid(value: string): string {
   return n;
 }
 
+type CharacteristicLookupDevice = {
+  characteristicsForService: (serviceUUID: string) => Promise<Array<{ uuid: string }>>;
+};
+
+type ConnectionUuidCandidate = {
+  serviceUUID: string;
+  characteristicUUID: string;
+};
+
+const KNOWN_SERVICE_CHARACTERISTICS: Record<string, string> = {
+  '180D': '2A37',
+  'FFE0': 'FFE1',
+  'FFF0': 'FFF1',
+};
+
+const HM10_UUID_VARIANTS: ConnectionUuidCandidate[] = [
+  { serviceUUID: 'FFE0', characteristicUUID: 'FFE1' },
+  { serviceUUID: 'FFF0', characteristicUUID: 'FFF1' },
+];
+
+function looksLikeHm10Device(name?: string | null) {
+  return /hmsoft|bt05|hm-?10|cc41|jdy-?08|mlt-bt05/i.test(String(name ?? ''));
+}
+
+async function lookupCharacteristicUuids(
+  device: CharacteristicLookupDevice,
+  serviceUUID: string
+): Promise<string[] | null> {
+  try {
+    const chars = await device.characteristicsForService(expandUuid(serviceUUID));
+    return chars.map((char) => expandUuid(char.uuid));
+  } catch {
+    return null;
+  }
+}
+
+function buildConnectionRecoveryCandidates({
+  profile,
+  serviceUUID,
+  characteristicUUID,
+  deviceName,
+}: {
+  profile: BluetoothProfileId;
+  serviceUUID: string;
+  characteristicUUID: string;
+  deviceName?: string | null;
+}) {
+  const candidates: ConnectionUuidCandidate[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (candidate: ConnectionUuidCandidate) => {
+    const key = `${candidate.serviceUUID}:${candidate.characteristicUUID}`;
+    if (seen.has(key)) return;
+    if (candidate.serviceUUID === serviceUUID && candidate.characteristicUUID === characteristicUUID) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const expectedCharacteristic = KNOWN_SERVICE_CHARACTERISTICS[serviceUUID];
+  if (expectedCharacteristic && expectedCharacteristic !== characteristicUUID) {
+    addCandidate({ serviceUUID, characteristicUUID: expectedCharacteristic });
+  }
+
+  const shouldProbeHm10Variants =
+    profile === 'arduino_hm10' ||
+    looksLikeHm10Device(deviceName) ||
+    serviceUUID === 'FFE0' ||
+    serviceUUID === 'FFF0';
+
+  if (shouldProbeHm10Variants) {
+    HM10_UUID_VARIANTS.forEach(addCandidate);
+  }
+
+  return candidates;
+}
+
+function inferRecoveredProfile({
+  currentProfile,
+  serviceUUID,
+  characteristicUUID,
+  deviceName,
+}: {
+  currentProfile: BluetoothProfileId;
+  serviceUUID: string;
+  characteristicUUID: string;
+  deviceName?: string | null;
+}): BluetoothProfileId {
+  if (serviceUUID === '180D' && characteristicUUID === '2A37') {
+    return 'ble_hrm';
+  }
+  if (serviceUUID === 'FFE0' && characteristicUUID === 'FFE1') {
+    return 'arduino_hm10';
+  }
+  if (serviceUUID === 'FFF0' && characteristicUUID === 'FFF1') {
+    if (currentProfile === 'apple_watch_companion') {
+      return 'apple_watch_companion';
+    }
+    if (currentProfile === 'ble_hrm' || currentProfile === 'arduino_hm10' || looksLikeHm10Device(deviceName)) {
+      return 'arduino_hm10';
+    }
+  }
+  return currentProfile;
+}
+
 function normalizeMetricName(metric: unknown, fallback: string) {
   const value = String(metric ?? '').trim().toLowerCase();
   return value || fallback;
@@ -688,6 +791,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const { runOrQueue } = useSyncQueue();
 
   const [config, setConfig] = useState<BluetoothConfig>(DEFAULT_CONFIG);
+  const configRef = useRef<BluetoothConfig>(DEFAULT_CONFIG);
   const [isConfigReady, setIsConfigReady] = useState(false);
   const [status, setStatus] = useState<'idle' | 'scanning' | 'connecting' | 'connected' | 'error'>('idle');
   const [isScanning, setIsScanning] = useState(false);
@@ -735,6 +839,10 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     if (!isConfigReady) return;
     AsyncStorage.setItem(CONFIG_KEY, JSON.stringify(config)).catch(() => {});
   }, [config, isConfigReady]);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   useEffect(() => {
     if (!managerRef.current) {
@@ -805,6 +913,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const handleCharacteristicValue = useCallback(
     async (value: string | null) => {
       if (!value) return;
+      const activeConfig = configRef.current;
       const { text, binary } = decodePayload(value);
 
       // Inner helper: process a fully-assembled payload string.
@@ -812,9 +921,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         const parsedBatches = parsePayloadBatches({
           rawText,
           binary: rawBinary,
-          fallbackMetric: config.metric,
-          profile: config.profile,
-          characteristicUUID: config.characteristicUUID,
+          fallbackMetric: activeConfig.metric,
+          profile: activeConfig.profile,
+          characteristicUUID: activeConfig.characteristicUUID,
         });
         if (!parsedBatches.length) return;
 
@@ -848,7 +957,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           return next.length > MAX_RECENT_SAMPLES ? next.slice(next.length - MAX_RECENT_SAMPLES) : next;
         });
 
-        if (!config.autoUpload) return;
+        if (!activeConfig.autoUpload) return;
         try {
           const uploadResults = await Promise.all(
             parsedBatches.map((batch) => {
@@ -889,7 +998,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
       // BLE Heart Rate Monitor uses a binary protocol where each notification
       // is self-contained – parse immediately without line buffering.
-      if (config.profile === 'ble_hrm') {
+      if (activeConfig.profile === 'ble_hrm') {
         await processBatches(text, binary);
         return;
       }
@@ -938,10 +1047,6 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       }
     },
     [
-      config.metric,
-      config.autoUpload,
-      config.profile,
-      config.characteristicUUID,
       runOrQueue,
       shouldSkipWorkoutMirror,
     ]
@@ -1039,6 +1144,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       try {
         const normalizedService = normalizeUuid(config.serviceUUID);
         const normalizedCharacteristic = normalizeUuid(config.characteristicUUID);
+        const requestedProfile = config.profile;
         if (!normalizedService || !normalizedCharacteristic) {
           throw new Error('Enter the service and characteristic UUIDs before connecting.');
         }
@@ -1081,6 +1187,75 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           }
           return;
         }
+        const deviceName = readyDevice.name || fallback?.name || null;
+        let resolvedService = normalizedService;
+        let resolvedCharacteristic = normalizedCharacteristic;
+        let availableCharUuids = await lookupCharacteristicUuids(
+          readyDevice as unknown as CharacteristicLookupDevice,
+          resolvedService
+        );
+
+        if (!availableCharUuids || !availableCharUuids.includes(expandUuid(resolvedCharacteristic))) {
+          const recoveryCandidates = buildConnectionRecoveryCandidates({
+            profile: requestedProfile,
+            serviceUUID: normalizedService,
+            characteristicUUID: normalizedCharacteristic,
+            deviceName,
+          });
+
+          for (const candidate of recoveryCandidates) {
+            const candidateChars = await lookupCharacteristicUuids(
+              readyDevice as unknown as CharacteristicLookupDevice,
+              candidate.serviceUUID
+            );
+            if (!candidateChars || !candidateChars.includes(expandUuid(candidate.characteristicUUID))) {
+              continue;
+            }
+            resolvedService = candidate.serviceUUID;
+            resolvedCharacteristic = candidate.characteristicUUID;
+            availableCharUuids = candidateChars;
+
+            const recoveredProfile = inferRecoveredProfile({
+              currentProfile: requestedProfile,
+              serviceUUID: resolvedService,
+              characteristicUUID: resolvedCharacteristic,
+              deviceName,
+            });
+            const nextConfig: BluetoothConfig = {
+              ...configRef.current,
+              profile: recoveredProfile,
+              serviceUUID: resolvedService,
+              characteristicUUID: resolvedCharacteristic,
+              metric:
+                configRef.current.profile === recoveredProfile
+                  ? configRef.current.metric
+                  : PROFILE_BY_ID[recoveredProfile].defaults.metric,
+            };
+            configRef.current = nextConfig;
+            setConfig((prev) => ({
+              ...prev,
+              ...nextConfig,
+            }));
+            break;
+          }
+        }
+
+        if (!availableCharUuids) {
+          await manager.cancelDeviceConnection(readyDevice.id).catch(() => {});
+          throw new Error(
+            `Service ${normalizedService} was not found on this device. ` +
+            `Select the correct device profile (HM-10: FFE0/FFE1, Heart Rate: 180D/2A37).`
+          );
+        }
+
+        if (!availableCharUuids.includes(expandUuid(resolvedCharacteristic))) {
+          await manager.cancelDeviceConnection(readyDevice.id).catch(() => {});
+          throw new Error(
+            `Characteristic ${normalizedCharacteristic} was not found in service ${normalizedService}.` +
+            (availableCharUuids.length ? ` Available: ${availableCharUuids.join(', ')}.` : '') +
+            ` Select the correct device profile or edit the characteristic UUID.`
+          );
+        }
         connectedDeviceIdRef.current = readyDevice.id;
         setConnectedDevice({
           id: readyDevice.id,
@@ -1094,8 +1269,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           setStatus('idle');
         });
         monitorRef.current = readyDevice.monitorCharacteristicForService(
-          expandUuid(normalizedService),
-          expandUuid(normalizedCharacteristic),
+          expandUuid(resolvedService),
+          expandUuid(resolvedCharacteristic),
           (monitorError, characteristic) => {
             if (isStaleAttempt()) {
               return;
@@ -1104,8 +1279,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
               if (isBleOperationCancelledError(monitorError)) {
                 return;
               }
-              setError(monitorError.message);
+              connectedDeviceIdRef.current = null;
+              setConnectedDevice(null);
+              setError(normalizeConnectionError(monitorError));
               setStatus('error');
+              manager.cancelDeviceConnection(readyDevice.id).catch(() => {});
               return;
             }
             if (characteristic?.value) {
@@ -1118,6 +1296,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         if (isStaleAttempt()) {
           return;
         }
+        await manager.cancelDeviceConnection(deviceId).catch(() => {});
         connectedDeviceIdRef.current = null;
         setConnectedDevice(null);
         setStatus('error');
@@ -1133,7 +1312,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setError('Bluetooth is not ready.');
         return;
       }
-      await performConnection(deviceId);
+      await performConnection(deviceId, devicesRef.current.get(deviceId) ?? null);
     },
     [isPoweredOn, performConnection]
   );

@@ -17,6 +17,7 @@ const mockWriteWithResponse             = jest.fn().mockResolvedValue(undefined)
 const mockWriteWithoutResponse          = jest.fn().mockResolvedValue(undefined);
 const mockBleErrorCode = {
   OperationCancelled: 2,
+  CharacteristicNotFound: 402,
 };
 
 jest.mock('react-native', () => ({
@@ -131,9 +132,20 @@ async function connectDevice(options?: {
   profile?: string;
   deviceId?: string;
   deviceName?: string;
+  /** Override the UUIDs that characteristicsForService returns (defaults to FFF1 for FFF0 service). */
+  availableCharUuids?: string[];
 }) {
-  const { profile = 'custom', deviceId = 'dev-1', deviceName = 'TestDevice' } = options ?? {};
+  const { profile = 'custom', deviceId = 'dev-1', deviceName = 'TestDevice', availableCharUuids } = options ?? {};
   const monitorCharacteristicForService = jest.fn();
+  // Default: expose whichever characteristic the chosen profile expects so validation passes.
+  const defaultCharUuids =
+    profile === 'arduino_hm10'          ? [full('FFE1')] :
+    profile === 'ble_hrm'               ? [full('2A37')] :
+    profile === 'apple_watch_companion' ? [full('FFF1')] :
+                                          [full('FFF1')];
+  const characteristicsForService = jest.fn().mockResolvedValue(
+    (availableCharUuids ?? defaultCharUuids).map((uuid) => ({ uuid }))
+  );
 
   mockConnectedDevices.mockResolvedValue([{ id: deviceId, name: deviceName, rssi: -50 }]);
   mockConnectToDevice.mockResolvedValue({
@@ -142,6 +154,7 @@ async function connectDevice(options?: {
       name: deviceName,
       rssi: -50,
       monitorCharacteristicForService,
+      characteristicsForService,
     }),
   });
 
@@ -248,6 +261,7 @@ describe('BluetoothProvider confirmSystemDevice', () => {
         name: 'Trainer',
         rssi: -45,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFF1') }]),
       }),
     });
 
@@ -288,6 +302,7 @@ describe('BluetoothProvider confirmSystemDevice', () => {
       name: 'Trainer',
       rssi: -45,
       monitorCharacteristicForService,
+      characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFF1') }]),
     };
     mockConnectedDevices.mockResolvedValue([{ id: 'paired-id', name: 'Trainer', rssi: -45 }]);
     mockConnectToDevice.mockRejectedValue({ message: 'Operation was cancelled', errorCode: 2 });
@@ -546,6 +561,7 @@ describe('Arduino HM-10 line buffer', () => {
         name: 'TestDevice',
         rssi: -50,
         monitorCharacteristicForService: monitorCharacteristicForService2,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -665,6 +681,7 @@ describe('BluetoothProvider connectToDevice', () => {
         name: 'HMSoft',
         rssi: -55,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -688,6 +705,118 @@ describe('BluetoothProvider connectToDevice', () => {
     );
   });
 
+  it('auto-corrects a mixed FFE0 / 2A37 config to the HM-10 FFE1 characteristic', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'hmsoft-1',
+        name: 'HMSoft',
+        rssi: -55,
+        monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => {
+      snapshot!.applyProfile('ble_hrm');
+      snapshot!.updateConfig({ serviceUUID: 'FFE0' });
+    });
+
+    await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
+
+    expect(snapshot!.status).toBe('connected');
+    expect(snapshot!.config.profile).toBe('arduino_hm10');
+    expect(snapshot!.config.serviceUUID).toBe('FFE0');
+    expect(snapshot!.config.characteristicUUID).toBe('FFE1');
+    expect(monitorCharacteristicForService).toHaveBeenCalledWith(
+      full('FFE0'),
+      full('FFE1'),
+      expect.any(Function)
+    );
+
+    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"sensor.aht20_temperature_c","value":22.41}\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: '/api/streams',
+        payload: expect.objectContaining({
+          metric: 'sensor.aht20_temperature_c',
+          samples: [expect.objectContaining({ value: 22.41 })],
+        }),
+      })
+    );
+  });
+
+  it('recovers from the BLE heart-rate preset when an HMSoft device actually exposes HM-10 UUIDs', async () => {
+    let scanCallback: any;
+    mockStartDeviceScan.mockImplementation((_: any, __: any, cb: any) => {
+      scanCallback = cb;
+    });
+
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'hmsoft-1',
+        name: 'HMSoft',
+        rssi: -55,
+        monitorCharacteristicForService,
+        characteristicsForService: jest.fn((serviceUuid: string) => {
+          if (serviceUuid === full('180D')) {
+            return Promise.reject(new Error('Service not found'));
+          }
+          if (serviceUuid === full('FFE0')) {
+            return Promise.resolve([{ uuid: full('FFE1') }]);
+          }
+          return Promise.reject(new Error(`Unexpected service ${serviceUuid}`));
+        }),
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { snapshot!.applyProfile('ble_hrm'); });
+    await act(async () => { await snapshot!.startScan(); });
+    act(() => {
+      scanCallback(null, { id: 'hmsoft-1', name: 'HMSoft', rssi: -55 });
+    });
+
+    await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
+
+    expect(snapshot!.status).toBe('connected');
+    expect(snapshot!.config.profile).toBe('arduino_hm10');
+    expect(snapshot!.config.serviceUUID).toBe('FFE0');
+    expect(snapshot!.config.characteristicUUID).toBe('FFE1');
+    expect(monitorCharacteristicForService).toHaveBeenCalledWith(
+      full('FFE0'),
+      full('FFE1'),
+      expect.any(Function)
+    );
+
+    const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
+    await act(async () => {
+      monitorCallback(null, { value: encode('{"metric":"sensor.aht20_temperature_c","value":22.41}\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: '/api/streams',
+        payload: expect.objectContaining({
+          metric: 'sensor.aht20_temperature_c',
+          samples: [expect.objectContaining({ value: 22.41 })],
+        }),
+      })
+    );
+  });
+
   it('data flows from device to runOrQueue after connecting via scanner', async () => {
     const monitorCharacteristicForService = jest.fn();
     mockConnectToDevice.mockResolvedValue({
@@ -696,6 +825,7 @@ describe('BluetoothProvider connectToDevice', () => {
         name: 'HMSoft',
         rssi: -55,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -772,6 +902,7 @@ describe('arduino_hm10 profile', () => {
         name: 'HMSoft',
         rssi: -60,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -797,6 +928,7 @@ describe('arduino_hm10 profile', () => {
         name: 'HMSoft',
         rssi: -60,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -832,6 +964,7 @@ describe('arduino_hm10 profile', () => {
         name: 'HMSoft',
         rssi: -60,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -895,6 +1028,7 @@ describe('arduino_hm10 profile', () => {
         name: 'HMSoft',
         rssi: -60,
         monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -948,6 +1082,7 @@ describe('BluetoothProvider disconnectFromDevice', () => {
     mockConnectToDevice.mockResolvedValue({
       discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
         id: 'dev-1', name: 'TestDevice', rssi: -50, monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFE1') }]),
       }),
     });
 
@@ -1136,5 +1271,100 @@ describe('BluetoothProvider updateConfig', () => {
     expect(snapshot!.config.autoUpload).toBe(false);
     expect(snapshot!.config.serviceUUID).toBe('FFE0');
     expect(snapshot!.config.metric).toBe('sensor.aht20_temperature_c');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// characteristic pre-validation
+// ---------------------------------------------------------------------------
+
+describe('BluetoothProvider characteristic pre-validation', () => {
+  it('surfaces a friendly error when the target service is missing from the device', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectedDevices.mockResolvedValue([{ id: 'hrm-1', name: 'HRM', rssi: -60 }]);
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'hrm-1',
+        name: 'HRM',
+        rssi: -60,
+        monitorCharacteristicForService,
+        // characteristicsForService throws — service not present on device
+        characteristicsForService: jest.fn().mockRejectedValue(new Error('Service not found')),
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(snapshot!.status).toBe('error');
+    expect(snapshot!.error).toContain('was not found on this device');
+    expect(snapshot!.error).toContain('HM-10');
+    expect(monitorCharacteristicForService).not.toHaveBeenCalled();
+    expect(mockCancelDeviceConnection).toHaveBeenCalledWith('hrm-1');
+  });
+
+  it('surfaces a friendly error listing available characteristics when the target char is absent', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectedDevices.mockResolvedValue([{ id: 'hrm-1', name: 'HRM', rssi: -60 }]);
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'hrm-1',
+        name: 'HRM',
+        rssi: -60,
+        monitorCharacteristicForService,
+        // service exists but only has 2A38 (body sensor location), not 2A37 (heart rate measurement)
+        // default config uses FFF0/FFF1 — return service chars for FFF0 but with wrong char
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('2A38') }]),
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(snapshot!.status).toBe('error');
+    expect(snapshot!.error).toContain('FFF1');
+    expect(snapshot!.error).toContain('Available');
+    expect(monitorCharacteristicForService).not.toHaveBeenCalled();
+    expect(mockCancelDeviceConnection).toHaveBeenCalledWith('hrm-1');
+  });
+
+  it('connects successfully when the target characteristic is present', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectedDevices.mockResolvedValue([{ id: 'dev-1', name: 'Dev', rssi: -50 }]);
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'dev-1',
+        name: 'Dev',
+        rssi: -50,
+        monitorCharacteristicForService,
+        characteristicsForService: jest.fn().mockResolvedValue([{ uuid: full('FFF1') }]),
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(snapshot!.status).toBe('connected');
+    expect(snapshot!.error).toBeNull();
+    expect(monitorCharacteristicForService).toHaveBeenCalled();
+  });
+
+  it('cancels the BLE connection on any connection error in the catch block', async () => {
+    mockConnectedDevices.mockResolvedValue([{ id: 'dev-1', name: 'Dev', rssi: -50 }]);
+    mockConnectToDevice.mockRejectedValue(new Error('Connection refused'));
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(snapshot!.status).toBe('error');
+    expect(mockCancelDeviceConnection).toHaveBeenCalledWith('dev-1');
   });
 });
