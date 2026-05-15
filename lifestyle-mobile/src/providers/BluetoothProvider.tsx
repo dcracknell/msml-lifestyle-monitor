@@ -992,6 +992,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       stopScan();
       monitorRef.current?.remove();
       disconnectRef.current?.remove();
+      lineBufferRef.current = '';
       try {
         const normalizedService = normalizeUuid(config.serviceUUID);
         const normalizedCharacteristic = normalizeUuid(config.characteristicUUID);
@@ -1105,8 +1106,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       try {
         await manager.writeCharacteristicWithResponseForDevice(
           connectedDeviceIdRef.current,
-          normalizedService,
-          normalizedCharacteristic,
+          expandUuid(normalizedService),
+          expandUuid(normalizedCharacteristic),
           encoded
         );
         return;
@@ -1114,8 +1115,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         try {
           await manager.writeCharacteristicWithoutResponseForDevice(
             connectedDeviceIdRef.current,
-            normalizedService,
-            normalizedCharacteristic,
+            expandUuid(normalizedService),
+            expandUuid(normalizedCharacteristic),
             encoded
           );
           return;

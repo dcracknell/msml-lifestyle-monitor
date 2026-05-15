@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { AppButton, AppText, Card, SectionHeader, TrendChart } from '../../components';
-import { useBluetooth, BluetoothDeviceSummary } from '../../providers/BluetoothProvider';
+import { AppButton, AppInput, AppText, Card, SectionHeader, TrendChart } from '../../components';
+import { BluetoothDeviceSummary, useBluetooth } from '../../providers/BluetoothProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatNumber } from '../../utils/format';
 
 const LIVE_SAMPLE_WINDOW_MS = 10_000;
+const LIVE_METRIC_SNAPSHOT_LIMIT = 6;
 
 function formatSampleFreshness(ts: number | null | undefined, now: number) {
   if (!ts) {
@@ -88,10 +89,10 @@ function AppToggle({
 
 function signalInfo(rssi: number | null | undefined): { label: string; bars: string; color: string } {
   const r = rssi ?? -100;
-  if (r > -60) return { label: 'Strong', bars: '████', color: colors.accent };
-  if (r > -75) return { label: 'Good', bars: '███░', color: '#4ade80' };
-  if (r > -85) return { label: 'Weak', bars: '██░░', color: colors.warning };
-  return { label: 'Poor', bars: '█░░░', color: colors.danger };
+  if (r > -60) return { label: 'Strong', bars: '||||', color: colors.accent };
+  if (r > -75) return { label: 'Good', bars: '|||.', color: '#4ade80' };
+  if (r > -85) return { label: 'Weak', bars: '||..', color: colors.warning };
+  return { label: 'Poor', bars: '|...', color: colors.danger };
 }
 
 function DeviceRow({
@@ -151,6 +152,7 @@ export function BluetoothDevicesSection() {
     startScan,
     stopScan,
     connectToDevice,
+    confirmSystemDevice,
     disconnectFromDevice,
   } = useBluetooth();
   const [now, setNow] = useState(() => Date.now());
@@ -174,22 +176,54 @@ export function BluetoothDevicesSection() {
     [profiles, config.profile]
   );
 
+  const focusMetric = useMemo(() => {
+    const configuredMetric = config.metric.trim();
+    const latestConfiguredMetric = [...recentSamples]
+      .reverse()
+      .find((sample) => sample.metric === configuredMetric && sample.value !== null);
+    if (latestConfiguredMetric) {
+      return configuredMetric;
+    }
+    return lastSample?.metric || configuredMetric;
+  }, [config.metric, lastSample?.metric, recentSamples]);
+
+  const latestMetricSamples = useMemo(() => {
+    const latestByMetric = new Map<string, (typeof recentSamples)[number]>();
+    [...recentSamples].reverse().forEach((sample) => {
+      if (!sample.metric || latestByMetric.has(sample.metric)) {
+        return;
+      }
+      latestByMetric.set(sample.metric, sample);
+    });
+    return Array.from(latestByMetric.values())
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, LIVE_METRIC_SNAPSHOT_LIMIT);
+  }, [recentSamples]);
+
+  const focusedSample = useMemo(
+    () => latestMetricSamples.find((sample) => sample.metric === focusMetric) || lastSample,
+    [focusMetric, lastSample, latestMetricSamples]
+  );
+
   const liveTrend = useMemo(
     () =>
       recentSamples
-        .filter((sample) => sample.value !== null && Number.isFinite(sample.value))
+        .filter(
+          (sample) =>
+            sample.metric === focusMetric && sample.value !== null && Number.isFinite(sample.value)
+        )
         .slice(-32)
         .map((sample) => ({
           label: formatDate(new Date(sample.ts).toISOString(), 'HH:mm:ss'),
           value: sample.value as number,
         })),
-    [recentSamples]
+    [focusMetric, recentSamples]
   );
 
   const scanStatusLabel = status === 'connected' ? 'Connected' : isScanning ? 'Scanning' : 'Ready';
   const lastSampleAgeMs = lastSample ? Math.max(0, now - lastSample.ts) : null;
-  const isReceivingLiveData =
-    lastSampleAgeMs !== null && lastSampleAgeMs <= LIVE_SAMPLE_WINDOW_MS;
+  const isReceivingLiveData = lastSampleAgeMs !== null && lastSampleAgeMs <= LIVE_SAMPLE_WINDOW_MS;
+  const isConnectionBusy = status === 'connecting';
   const streamStatusLabel = isReceivingLiveData
     ? 'Data live'
     : lastSample
@@ -206,6 +240,8 @@ export function BluetoothDevicesSection() {
       : 'The device is connected, but no new packets have arrived recently.'
     : 'Connect a device to start receiving live samples.';
   const liveFreshnessLabel = formatSampleFreshness(lastSample?.ts, now);
+  const showPairedDeviceHint =
+    config.profile === 'arduino_hm10' || config.profile === 'apple_watch_companion';
 
   return (
     <>
@@ -222,10 +258,7 @@ export function BluetoothDevicesSection() {
         <View style={styles.statusStack}>
           <View style={styles.statusPills}>
             <StatusPill label={isPoweredOn ? 'Bluetooth on' : 'Bluetooth off'} active={isPoweredOn} />
-            <StatusPill
-              label={scanStatusLabel}
-              active={status === 'connected' || isScanning}
-            />
+            <StatusPill label={scanStatusLabel} active={status === 'connected' || isScanning} />
             <StatusPill label={streamStatusLabel} active={isReceivingLiveData} />
           </View>
           {activeProfile ? (
@@ -255,9 +288,27 @@ export function BluetoothDevicesSection() {
             <AppButton
               title={isScanning ? 'Stop scanning' : 'Scan for devices'}
               onPress={isScanning ? stopScan : startScan}
-              loading={status === 'connecting'}
+              loading={isConnectionBusy}
               style={styles.fullWidthButton}
             />
+            <AppButton
+              title="Confirm paired device"
+              variant="ghost"
+              onPress={() => {
+                if (isScanning) {
+                  stopScan();
+                }
+                confirmSystemDevice();
+              }}
+              disabled={isConnectionBusy}
+              style={styles.secondaryActionButton}
+            />
+            {showPairedDeviceHint ? (
+              <AppText variant="muted" style={styles.helper}>
+                Use this when the HM-10 is already paired in system Bluetooth settings and does not
+                appear in the scan list.
+              </AppText>
+            ) : null}
             {isScanning ? (
               <AppText variant="muted" style={styles.scanningLabel}>
                 Searching for nearby sensors...
@@ -276,7 +327,7 @@ export function BluetoothDevicesSection() {
                         stopScan();
                         connectToDevice(device.id);
                       }}
-                      connecting={status === 'connecting'}
+                      connecting={isConnectionBusy}
                     />
                   ))}
               </ScrollView>
@@ -335,8 +386,42 @@ export function BluetoothDevicesSection() {
                 {config.metric}.
               </AppText>
             </View>
+            <AppText variant="muted" style={styles.profileTip}>
+              {config.profile === 'arduino_hm10'
+                ? 'HM-10 modules usually use FFE0 / FFE1. Some clones use FFF0 / FFF1 instead.'
+                : 'Edit the UUIDs below if your peripheral advertises different values.'}
+            </AppText>
           </>
         ) : null}
+        <AppInput
+          label="Service UUID"
+          value={config.serviceUUID}
+          onChangeText={(value) => updateConfig({ serviceUUID: value })}
+          placeholder="FFE0"
+          autoCapitalize="characters"
+          autoCorrect={false}
+        />
+        <AppInput
+          label="Characteristic UUID"
+          value={config.characteristicUUID}
+          onChangeText={(value) => updateConfig({ characteristicUUID: value })}
+          placeholder="FFE1"
+          autoCapitalize="characters"
+          autoCorrect={false}
+        />
+        <AppInput
+          label="Metric name"
+          value={config.metric}
+          onChangeText={(value) => updateConfig({ metric: value })}
+          placeholder="sensor.aht20_temperature_c"
+          autoCapitalize="none"
+          autoCorrect={false}
+          helperText={
+            config.profile === 'arduino_hm10'
+              ? 'The Arduino mock sends named sensor.* metrics. This field controls the live chart focus and acts as a fallback if a packet omits its metric.'
+              : 'Used as the upload metric when the payload is a bare number or omits a metric name.'
+          }
+        />
         <View style={styles.switchRow}>
           <AppText variant="body">Auto upload samples</AppText>
           <AppToggle
@@ -350,8 +435,8 @@ export function BluetoothDevicesSection() {
         <SectionHeader
           title="Live data"
           subtitle={
-            lastSample
-              ? formatDate(new Date(lastSample.ts).toISOString(), 'MMM D, HH:mm:ss')
+            focusedSample
+              ? `${focusMetric} - ${formatDate(new Date(focusedSample.ts).toISOString(), 'MMM D, HH:mm:ss')}`
               : 'Waiting for payloads'
           }
         />
@@ -377,13 +462,8 @@ export function BluetoothDevicesSection() {
           </View>
         </View>
         <View style={styles.metricsRow}>
-          <Metric
-            label="Metric"
-            value={lastSample?.metric || config.metric}
-            compact
-            valueNumberOfLines={2}
-          />
-          <Metric label="Value" value={formatNumber(lastSample?.value)} />
+          <Metric label="Metric" value={focusMetric} compact valueNumberOfLines={2} />
+          <Metric label="Value" value={formatNumber(focusedSample?.value)} />
         </View>
         <View style={styles.rawPayload}>
           <AppText variant="label">Raw payload</AppText>
@@ -391,10 +471,27 @@ export function BluetoothDevicesSection() {
             {lastSample?.raw || 'Waiting for device data'}
           </AppText>
         </View>
+        {latestMetricSamples.length > 0 ? (
+          <View style={styles.metricSnapshot}>
+            <AppText variant="label">Latest metrics</AppText>
+            <View style={styles.metricSnapshotList}>
+              {latestMetricSamples.map((sample) => (
+                <View key={`${sample.metric}-${sample.ts}`} style={styles.metricSnapshotRow}>
+                  <AppText variant="body" weight="semibold" style={styles.metricSnapshotMetric}>
+                    {sample.metric}
+                  </AppText>
+                  <AppText variant="muted" style={styles.metricSnapshotValue}>
+                    {formatNumber(sample.value)}
+                  </AppText>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
         {liveTrend.length === 0 ? (
           <View style={styles.emptyChart}>
-            <AppText style={styles.emptyChartIcon}>◌</AppText>
-            <AppText variant="muted">Waiting for device data</AppText>
+            <AppText style={styles.emptyChartIcon}>o</AppText>
+            <AppText variant="muted">Waiting for samples for {focusMetric}</AppText>
           </View>
         ) : (
           <TrendChart data={liveTrend} yLabel="Live value" />
@@ -542,6 +639,10 @@ const styles = StyleSheet.create({
   fullWidthButton: {
     width: '100%',
   },
+  secondaryActionButton: {
+    width: '100%',
+    marginTop: spacing.xs,
+  },
   scanningLabel: {
     marginTop: spacing.xs,
     fontSize: 13,
@@ -565,6 +666,7 @@ const styles = StyleSheet.create({
   },
   helper: {
     marginTop: spacing.xs,
+    lineHeight: 19,
   },
   error: {
     marginTop: spacing.sm,
@@ -585,6 +687,11 @@ const styles = StyleSheet.create({
   },
   profileDescription: {
     marginBottom: spacing.sm,
+  },
+  profileTip: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+    lineHeight: 20,
   },
   configSummary: {
     padding: spacing.sm,
@@ -660,6 +767,31 @@ const styles = StyleSheet.create({
   rawPayloadText: {
     fontSize: 13,
     lineHeight: 18,
+  },
+  metricSnapshot: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: spacing.xs,
+  },
+  metricSnapshotList: {
+    gap: spacing.xs,
+  },
+  metricSnapshotRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  metricSnapshotMetric: {
+    flex: 1,
+    minWidth: 0,
+  },
+  metricSnapshotValue: {
+    fontSize: 13,
   },
   emptyChart: {
     alignItems: 'center',
