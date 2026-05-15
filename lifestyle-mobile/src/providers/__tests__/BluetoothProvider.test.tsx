@@ -10,6 +10,9 @@ const mockConnectToDevice    = jest.fn();
 const mockOnDeviceDisconnected = jest.fn();
 const mockStartDeviceScan    = jest.fn();
 const mockStopDeviceScan     = jest.fn();
+const mockBleErrorCode = {
+  OperationCancelled: 2,
+};
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios', Version: 17 },
@@ -47,6 +50,7 @@ jest.mock('react-native-ble-plx', () => {
     return { remove: jest.fn() };
   });
   return {
+    BleErrorCode: mockBleErrorCode,
     State: {
       PoweredOn:   'PoweredOn',
       Unsupported: 'Unsupported',
@@ -240,7 +244,7 @@ describe('BluetoothProvider confirmSystemDevice', () => {
 
     // connectedDevices and monitorCharacteristicForService must receive full UUIDs
     expect(mockConnectedDevices).toHaveBeenCalledWith([full('FFF0')]);
-    expect(mockConnectToDevice).toHaveBeenCalledWith('paired-id', { autoConnect: true });
+    expect(mockConnectToDevice).toHaveBeenCalledWith('paired-id', { autoConnect: false });
     expect(snapshot!.connectedDevice?.id).toBe('paired-id');
     expect(snapshot!.status).toBe('connected');
     expect(monitorCharacteristicForService).toHaveBeenCalledWith(
@@ -569,6 +573,28 @@ describe('BluetoothProvider startScan', () => {
     expect(snapshot!.status).toBe('error');
     expect(mockStopDeviceScan).toHaveBeenCalled();
   });
+
+  it('ignores benign scan cancellation after scanning stops', async () => {
+    let scanCallback: any;
+    mockStartDeviceScan.mockImplementation((_: any, __: any, cb: any) => {
+      scanCallback = cb;
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { await snapshot!.startScan(); });
+    act(() => { snapshot!.stopScan(); });
+    act(() => {
+      scanCallback(
+        { errorCode: mockBleErrorCode.OperationCancelled, message: 'Operation was cancelled' },
+        null
+      );
+    });
+
+    expect(snapshot!.error).toBeNull();
+    expect(snapshot!.status).toBe('idle');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -595,7 +621,7 @@ describe('BluetoothProvider connectToDevice', () => {
 
     await act(async () => { await snapshot!.connectToDevice('hmsoft-1'); });
 
-    expect(mockConnectToDevice).toHaveBeenCalledWith('hmsoft-1', { autoConnect: true });
+    expect(mockConnectToDevice).toHaveBeenCalledWith('hmsoft-1', { autoConnect: false });
     expect(snapshot!.connectedDevice?.id).toBe('hmsoft-1');
     expect(snapshot!.status).toBe('connected');
 
@@ -640,6 +666,20 @@ describe('BluetoothProvider connectToDevice', () => {
         }),
       })
     );
+  });
+
+  it('ignores benign monitor cancellation after a connection is established', async () => {
+    const { ctx, monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+
+    act(() => {
+      monitorCallback(
+        { errorCode: mockBleErrorCode.OperationCancelled, message: 'Operation was cancelled' },
+        null
+      );
+    });
+
+    expect(ctx.error).toBeNull();
+    expect(ctx.status).toBe('connected');
   });
 });
 

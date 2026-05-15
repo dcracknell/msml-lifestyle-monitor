@@ -50,6 +50,10 @@ Pin 8  ------>  RX
 4. Open the **Serial Monitor** at 115200 baud to watch startup diagnostics and
    outgoing `[SEND]` lines.
 
+The sketch now re-applies a known-good HM-10 profile on boot so reused modules
+are forced back to BLE UART transmission mode, peripheral role, auto
+advertising, and the expected `FFE0` / `FFE1` UUID pair.
+
 ---
 
 ## Metrics Transmitted
@@ -101,7 +105,7 @@ with new mirror mappings.
    - Fallback metric is `sensor.aht20_temperature_c`
 4. Pair the HM-10 in your phone's system Bluetooth settings. It usually
    appears as `HMSoft` or `BT05`.
-5. Return to the app and tap **Confirm connection**.
+5. Return to the app and tap **Confirm paired device** or connect from the scan list.
 6. The live data card updates as the metric packets arrive.
 
 > If your HM-10 uses different UUIDs, some modules ship with `FFF0` / `FFF1`

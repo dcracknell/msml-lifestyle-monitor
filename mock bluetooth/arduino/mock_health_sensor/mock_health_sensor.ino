@@ -26,6 +26,7 @@
 
 #include <SoftwareSerial.h>
 #include <avr/wdt.h>
+#include <string.h>
 
 static const uint8_t BT_RX_PIN = 7;
 static const uint8_t BT_TX_PIN = 8;
@@ -78,9 +79,11 @@ static const uint8_t  LED_ACK_MS               = 8;
 
 // Maximum wait for a full HM-10 AT response.
 static const uint32_t AT_TIMEOUT_MS = 1500UL;
+static const uint32_t AT_CONFIG_TIMEOUT_MS = 900UL;
 
 // Enough for the longest metric name plus a signed fixed-point value.
 static const uint8_t MAX_LINE_BYTES = 96;
+static const uint8_t MAX_AT_REPLY_BYTES = 96;
 
 // -----------------------------------------------------------------------
 // State
@@ -111,6 +114,72 @@ struct TelemetryFrame {
 
 static TelemetryFrame buildTelemetryFrame(uint32_t now);
 static void sendTelemetryFrame(const TelemetryFrame &frame);
+static bool hmApplyPeripheralProfile(void);
+
+// -----------------------------------------------------------------------
+// HM-10 AT command helpers
+// -----------------------------------------------------------------------
+
+static void hmDrainRx() {
+  while (BT.available()) {
+    BT.read();
+  }
+}
+
+static bool hmReadReply(char *out, size_t outSize, uint32_t timeoutMs) {
+  if (!out || outSize == 0) return false;
+
+  out[0] = '\0';
+  size_t len = 0;
+  bool sawByte = false;
+  uint32_t start = millis();
+  uint32_t lastByteAt = start;
+
+  while (millis() - start < timeoutMs) {
+    while (BT.available()) {
+      const char c = static_cast<char>(BT.read());
+      sawByte = true;
+      lastByteAt = millis();
+      if (len + 1 < outSize) {
+        out[len++] = c;
+        out[len] = '\0';
+      }
+    }
+
+    if (sawByte && millis() - lastByteAt >= 40UL) {
+      break;
+    }
+  }
+
+  out[len] = '\0';
+  return sawByte;
+}
+
+static bool hmSendCommandExpect(const char *command,
+                                const char *expectedSubstring,
+                                uint32_t timeoutMs) {
+  char reply[MAX_AT_REPLY_BYTES + 1];
+  hmDrainRx();
+  BT.print(command);
+
+  const bool gotReply = hmReadReply(reply, sizeof(reply), timeoutMs);
+  if (!gotReply) {
+    DBG.print(F("[HM10] No reply for "));
+    DBG.println(command);
+    return false;
+  }
+
+  DBG.print(F("[HM10] "));
+  DBG.print(command);
+  DBG.print(F(" -> "));
+  DBG.println(reply);
+
+  if (!expectedSubstring || expectedSubstring[0] == '\0') {
+    return true;
+  }
+
+  return strstr(reply, expectedSubstring) != NULL;
+}
 
 // -----------------------------------------------------------------------
 // LCG pseudo-random (16-bit, no stdlib)
@@ -429,21 +498,7 @@ static void sendTelemetryFrame(const TelemetryFrame &frame) {
 static bool tryAtHandshake(uint32_t baud) {
   BT.begin(baud);
   delay(200);
-
-  while (BT.available()) BT.read();
-
-  BT.print(F("AT"));
-
-  uint32_t start = millis();
-  String resp = "";
-  while (millis() - start < AT_TIMEOUT_MS) {
-    while (BT.available()) {
-      char c = static_cast<char>(BT.read());
-      resp += c;
-    }
-    if (resp.indexOf("OK") >= 0) return true;
-  }
-  return false;
+  return hmSendCommandExpect("AT", "OK", AT_TIMEOUT_MS);
 }
 
 static bool hmHandshake() {
@@ -465,7 +520,7 @@ static bool hmHandshake() {
 
       if (BAUDS[i] != 9600UL) {
         DBG.println(F("[HM10] Re-setting baud to 9600..."));
-        BT.print(F("AT+BAUD0"));
+        hmSendCommandExpect("AT+BAUD0", "OK", AT_CONFIG_TIMEOUT_MS);
         delay(200);
         BT.begin(9600);
         delay(200);
@@ -483,6 +538,39 @@ static bool hmHandshake() {
   BT.begin(9600);
   delay(200);
   return false;
+}
+
+static bool hmApplyPeripheralProfile() {
+  DBG.println(F("[HM10] Applying BLE UART peripheral profile..."));
+
+  bool ok = true;
+  ok &= hmSendCommandExpect("AT+MODE0", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+ROLE0", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+IMME0", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+NOTI1", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+PWRM1", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+PCTL1", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+FFE20", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+UUID0xFFE0", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+CHAR0xFFE1", "OK", AT_CONFIG_TIMEOUT_MS);
+  ok &= hmSendCommandExpect("AT+RESET", "OK", AT_CONFIG_TIMEOUT_MS);
+
+  delay(300);
+  BT.begin(9600);
+  delay(200);
+
+  if (!hmSendCommandExpect("AT", "OK", AT_TIMEOUT_MS)) {
+    DBG.println(F("[HM10] Module did not answer after reset."));
+    return false;
+  }
+
+  if (!ok) {
+    DBG.println(F("[HM10] One or more setup commands failed; using partial config."));
+    return false;
+  }
+
+  DBG.println(F("[HM10] BLE UART profile confirmed."));
+  return true;
 }
 
 // -----------------------------------------------------------------------
@@ -518,6 +606,9 @@ void setup() {
 
   ledBlink(4, 80, 80);
   hmOk = hmHandshake();
+  if (hmOk) {
+    hmOk = hmApplyPeripheralProfile();
+  }
 
   if (hmOk) {
     ledBlink(3, 200, 150);
@@ -528,9 +619,9 @@ void setup() {
     DBG.println(F("       (Service FFE0 / Characteristic FFE1)"));
   } else {
     digitalWrite(LED_PIN, HIGH);
-    DBG.println(F("[ERR] Continuing without confirmed HM-10 link."));
-    DBG.println(F("[ERR] Data will still be sent - check BLE terminal"));
-    DBG.println(F("[ERR] to see if packets arrive despite AT failure."));
+    DBG.println(F("[ERR] HM-10 setup was not fully confirmed."));
+    DBG.println(F("[ERR] Check role/mode/UUID/baud if the app cannot see data."));
+    DBG.println(F("[ERR] The sketch will still stream over UART for diagnostics."));
   }
 
   DBG.println(F("[INFO] Full synthetic sensor frame every 1s."));

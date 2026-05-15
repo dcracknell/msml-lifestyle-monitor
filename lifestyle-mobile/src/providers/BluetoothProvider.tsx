@@ -1,7 +1,7 @@
 import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BleManager, Device, Subscription, State } from 'react-native-ble-plx';
+import { BleErrorCode, BleManager, Device, Subscription, State } from 'react-native-ble-plx';
 import { encode as encodeBase64, decode as decodeBase64 } from 'base-64';
 import { useSyncQueue } from './SyncProvider';
 
@@ -181,6 +181,18 @@ function normalizeMetricName(metric: unknown, fallback: string) {
 function normalizeProfile(profile: unknown): BluetoothProfileId {
   const value = String(profile ?? '').trim() as BluetoothProfileId;
   return value && PROFILE_BY_ID[value] ? value : 'custom';
+}
+
+function isBenignBleCancellation(error: unknown) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const errorCode = 'errorCode' in error ? Number((error as { errorCode?: unknown }).errorCode) : null;
+  if (errorCode === BleErrorCode.OperationCancelled) {
+    return true;
+  }
+  const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : '';
+  return /operation was cancelled/i.test(message) || /operation cancelled/i.test(message);
 }
 
 function decodePayload(value: string | null) {
@@ -916,6 +928,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     if (!managerRef.current) return;
     managerRef.current.stopDeviceScan();
     setIsScanning(false);
+    setStatus((prev) => (prev === 'scanning' ? 'idle' : prev));
   }, []);
 
   const startScan = useCallback(async () => {
@@ -944,6 +957,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     // subscribing to the characteristic after the device is chosen.
     managerRef.current.startDeviceScan(null, null, (scanError, device) => {
       if (scanError) {
+        if (isBenignBleCancellation(scanError)) {
+          return;
+        }
         setError(scanError.message);
         stopScan();
         setStatus('error');
@@ -999,7 +1015,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         if (!normalizedService || !normalizedCharacteristic) {
           throw new Error('Enter the service and characteristic UUIDs before connecting.');
         }
-        const connected = await manager.connectToDevice(deviceId, { autoConnect: true });
+        const connected = await manager.connectToDevice(deviceId, { autoConnect: false });
         const readyDevice = await connected.discoverAllServicesAndCharacteristics();
         connectedDeviceIdRef.current = readyDevice.id;
         setConnectedDevice({
@@ -1017,6 +1033,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           expandUuid(normalizedCharacteristic),
           (monitorError, characteristic) => {
             if (monitorError) {
+              if (isBenignBleCancellation(monitorError)) {
+                return;
+              }
               setError(monitorError.message);
               setStatus('error');
               return;
