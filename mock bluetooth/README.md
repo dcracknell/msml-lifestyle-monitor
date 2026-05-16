@@ -50,9 +50,27 @@ Pin 8  ------>  RX
 4. Open the **Serial Monitor** at 115200 baud to watch startup diagnostics and
    outgoing `[SEND]` lines.
 
-The sketch now re-applies a known-good HM-10 profile on boot so reused modules
-are forced back to BLE UART transmission mode, peripheral role, auto
-advertising, and the expected `FFE0` / `FFE1` UUID pair.
+No Library Manager installs are required for this mock sketch. It only uses
+`EEPROM.h`, `SoftwareSerial`, `avr/wdt.h`, `stdlib.h`, and `string.h`, which
+are part of the standard Arduino AVR toolchain. You do still need the usual
+**Arduino AVR Boards** core installed in the IDE for Uno/Nano targets.
+
+By default the sketch now leaves the HM-10's existing BLE UART profile alone.
+That is deliberate: many HM-10 / BT05 clones stop forwarding UART data if they
+are force-reconfigured on every boot.
+
+The sketch uses `HM10_DEFAULT_UART_BAUD = 9600` as its fallback and stores any
+app-selected HM-10 baud in EEPROM. Normal boots now start directly at the saved
+baud without rewriting the module. If a baud-change request still needs to be
+finalized, the sketch performs a one-time blind normalize on the next boot, and
+you can still enable the read-only `AT` handshake path if you want extra
+diagnostics. Check the Serial Monitor for the preferred or detected baud, then
+watch for the lightweight `sensor.hm10_link_probe` metric in the app before
+worrying about the full sensor frame.
+
+If you need to repair a module's BLE role or UUIDs, enable
+`HM10_APPLY_BOOT_PROFILE` near the top of the sketch and re-upload. Start with
+`FFE0` / `FFE1`; some clones still use `FFF0` / `FFF1`.
 
 ---
 
@@ -106,7 +124,11 @@ with new mirror mappings.
 4. Pair the HM-10 in your phone's system Bluetooth settings. It usually
    appears as `HMSoft` or `BT05`.
 5. Return to the app and tap **Confirm paired device** or connect from the scan list.
-6. The live data card updates as the metric packets arrive.
+6. If the link is noisy, use **HM-10 UART baud** in the setup card to switch
+   between `9600`, `19200`, and `38400`.
+   - The app disconnects automatically after sending the baud change.
+   - Wait about 2 seconds, then reconnect.
+7. The live data card updates as the metric packets arrive.
 
 > If your HM-10 uses different UUIDs, some modules ship with `FFF0` / `FFF1`
 > instead of `FFE0` / `FFE1`. Change the UUID fields in the app manually.
@@ -166,4 +188,5 @@ window.
 | HM-10 LED stays solid | A device may already be connected; disconnect it first |
 | App shows "No device connected" | Pair the HM-10 in system Bluetooth settings before tapping Confirm |
 | UUID mismatch error | Try `FFF0` / `FFF1` instead of `FFE0` / `FFE1` |
+| BLE connects but no values arrive | Check Serial Monitor for the detected UART baud and look for `sensor.hm10_link_probe` first |
 | Values look flat | Normal at rest; the mock adds periodic motion and PPG variation |

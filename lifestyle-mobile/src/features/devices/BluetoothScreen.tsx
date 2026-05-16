@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppButton, AppInput, AppText, Card, SectionHeader, TrendChart } from '../../components';
-import { BluetoothDeviceSummary, useBluetooth } from '../../providers/BluetoothProvider';
+import {
+  BluetoothDeviceSummary,
+  HM10_BAUD_RATE_OPTIONS,
+  useBluetooth,
+} from '../../providers/BluetoothProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatNumber } from '../../utils/format';
 
@@ -154,8 +158,14 @@ export function BluetoothDevicesSection() {
     connectToDevice,
     confirmSystemDevice,
     disconnectFromDevice,
+    applyHm10BaudRate,
   } = useBluetooth();
   const [now, setNow] = useState(() => Date.now());
+  const [isApplyingHm10Baud, setIsApplyingHm10Baud] = useState(false);
+  const [hm10ControlNotice, setHm10ControlNotice] = useState<{
+    kind: 'info' | 'error';
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     setNow(Date.now());
@@ -242,6 +252,30 @@ export function BluetoothDevicesSection() {
   const liveFreshnessLabel = formatSampleFreshness(lastSample?.ts, now);
   const showPairedDeviceHint =
     config.profile === 'arduino_hm10' || config.profile === 'apple_watch_companion';
+  const handleApplyHm10Baud = async () => {
+    setIsApplyingHm10Baud(true);
+    setHm10ControlNotice(null);
+    try {
+      const appliedBaud = await applyHm10BaudRate(config.hm10BaudRate);
+      await disconnectFromDevice();
+      setHm10ControlNotice({
+        kind: 'info',
+        text:
+          `Saved ${appliedBaud} baud. The app disconnected so the Arduino can switch ` +
+          'the HM-10 UART side. Wait 2 seconds, then reconnect.',
+      });
+    } catch (applyError) {
+      setHm10ControlNotice({
+        kind: 'error',
+        text:
+          applyError instanceof Error
+            ? applyError.message
+            : 'Unable to apply the HM-10 baud change.',
+      });
+    } finally {
+      setIsApplyingHm10Baud(false);
+    }
+  };
 
   return (
     <>
@@ -422,6 +456,49 @@ export function BluetoothDevicesSection() {
               : 'Used as the upload metric when the payload is a bare number or omits a metric name.'
           }
         />
+        {config.profile === 'arduino_hm10' ? (
+          <View style={styles.hm10ControlCard}>
+            <AppText variant="label">HM-10 UART baud</AppText>
+            <View style={styles.hm10BaudRow}>
+              {HM10_BAUD_RATE_OPTIONS.map((baud) => (
+                <AppButton
+                  key={baud}
+                  title={String(baud)}
+                  variant={config.hm10BaudRate === baud ? 'secondary' : 'ghost'}
+                  onPress={() => {
+                    setHm10ControlNotice(null);
+                    updateConfig({ hm10BaudRate: baud });
+                  }}
+                  style={styles.hm10BaudButton}
+                />
+              ))}
+            </View>
+            <AppText variant="muted" style={styles.hm10ControlHint}>
+              Safe Uno SoftwareSerial rates are 9600, 19200, and 38400. The app sends the
+              selected baud to the Arduino, then disconnects so the sketch can switch the HM-10
+              UART side cleanly.
+            </AppText>
+            <AppButton
+              title={connectedDevice ? 'Apply baud and disconnect' : 'Connect to apply baud'}
+              variant="ghost"
+              onPress={handleApplyHm10Baud}
+              loading={isApplyingHm10Baud}
+              disabled={!connectedDevice}
+              style={styles.fullWidthButton}
+            />
+            {hm10ControlNotice ? (
+              <AppText
+                variant="muted"
+                style={[
+                  styles.hm10ControlNotice,
+                  hm10ControlNotice.kind === 'error' ? styles.hm10ControlNoticeError : null,
+                ]}
+              >
+                {hm10ControlNotice.text}
+              </AppText>
+            ) : null}
+          </View>
+        ) : null}
         <View style={styles.switchRow}>
           <AppText variant="body">Auto upload samples</AppText>
           <AppToggle
@@ -692,6 +769,33 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     marginBottom: spacing.sm,
     lineHeight: 20,
+  },
+  hm10ControlCard: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+    gap: spacing.sm,
+  },
+  hm10BaudRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  hm10BaudButton: {
+    flexGrow: 1,
+    minWidth: 92,
+  },
+  hm10ControlHint: {
+    lineHeight: 20,
+  },
+  hm10ControlNotice: {
+    lineHeight: 19,
+  },
+  hm10ControlNoticeError: {
+    color: colors.danger,
   },
   configSummary: {
     padding: spacing.sm,

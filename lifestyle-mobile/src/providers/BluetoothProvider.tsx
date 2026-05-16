@@ -8,6 +8,9 @@ import { useSyncQueue } from './SyncProvider';
 const CONFIG_KEY = 'msml.bluetooth.config';
 const MAX_RECENT_SAMPLES = 120;
 const ANDROID_CONNECTION_TIMEOUT_MS = 15_000;
+export const HM10_BAUD_RATE_OPTIONS = [9600, 19_200, 38_400] as const;
+export type Hm10BaudRate = (typeof HM10_BAUD_RATE_OPTIONS)[number];
+const DEFAULT_HM10_BAUD_RATE: Hm10BaudRate = 9600;
 
 export type BluetoothProfileId = 'custom' | 'ble_hrm' | 'apple_watch_companion' | 'arduino_hm10';
 
@@ -79,6 +82,7 @@ const DEFAULT_CONFIG: BluetoothConfig = {
   serviceUUID: 'FFF0',
   characteristicUUID: 'FFF1',
   metric: 'sensor.glucose',
+  hm10BaudRate: DEFAULT_HM10_BAUD_RATE,
   autoUpload: true,
 };
 
@@ -87,6 +91,7 @@ export interface BluetoothConfig {
   serviceUUID: string;
   characteristicUUID: string;
   metric: string;
+  hm10BaudRate: Hm10BaudRate;
   autoUpload: boolean;
 }
 
@@ -130,6 +135,7 @@ interface BluetoothContextValue {
   confirmSystemDevice: () => Promise<void>;
   disconnectFromDevice: () => Promise<void>;
   sendCommand: (payload: string) => Promise<void>;
+  applyHm10BaudRate: (baudOverride?: number) => Promise<Hm10BaudRate>;
   manualPublish: (
     value: number,
     metricOverride?: string,
@@ -249,6 +255,36 @@ function buildConnectionRecoveryCandidates({
   return candidates;
 }
 
+function buildPairedDeviceServiceCandidates({
+  profile,
+  serviceUUID,
+}: {
+  profile: BluetoothProfileId;
+  serviceUUID: string;
+}) {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (candidate: string) => {
+    const normalized = normalizeUuid(candidate);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  addCandidate(serviceUUID);
+
+  const shouldProbeHm10Variants =
+    profile === 'arduino_hm10' ||
+    serviceUUID === 'FFE0' ||
+    serviceUUID === 'FFF0';
+
+  if (shouldProbeHm10Variants) {
+    HM10_UUID_VARIANTS.forEach((candidate) => addCandidate(candidate.serviceUUID));
+  }
+
+  return candidates;
+}
+
 function inferRecoveredProfile({
   currentProfile,
   serviceUUID,
@@ -285,6 +321,17 @@ function normalizeMetricName(metric: unknown, fallback: string) {
 function normalizeProfile(profile: unknown): BluetoothProfileId {
   const value = String(profile ?? '').trim() as BluetoothProfileId;
   return value && PROFILE_BY_ID[value] ? value : 'custom';
+}
+
+function normalizeHm10BaudRate(value: unknown): Hm10BaudRate {
+  const parsed = Number(value);
+  return HM10_BAUD_RATE_OPTIONS.includes(parsed as Hm10BaudRate)
+    ? (parsed as Hm10BaudRate)
+    : DEFAULT_HM10_BAUD_RATE;
+}
+
+function buildHm10BaudCommand(baud: Hm10BaudRate) {
+  return `HM10:BAUD=${baud}\n`;
 }
 
 function decodePayload(value: string | null) {
@@ -819,6 +866,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
               profile: normalizeProfile(parsed?.profile),
               serviceUUID: normalizeUuid(parsed?.serviceUUID ?? prev.serviceUUID),
               characteristicUUID: normalizeUuid(parsed?.characteristicUUID ?? prev.characteristicUUID),
+              hm10BaudRate: normalizeHm10BaudRate(parsed?.hm10BaudRate),
             }));
           }
         }
@@ -881,25 +929,38 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const applyProfile = useCallback((profileId: BluetoothProfileId) => {
     const normalizedProfile = normalizeProfile(profileId);
     const preset = PROFILE_BY_ID[normalizedProfile];
-    setConfig((prev) => ({
-      ...prev,
-      profile: normalizedProfile,
-      serviceUUID: normalizeUuid(preset.defaults.serviceUUID),
-      characteristicUUID: normalizeUuid(preset.defaults.characteristicUUID),
-      metric: preset.defaults.metric,
-    }));
+    setConfig((prev) => {
+      const nextConfig: BluetoothConfig = {
+        ...prev,
+        profile: normalizedProfile,
+        serviceUUID: normalizeUuid(preset.defaults.serviceUUID),
+        characteristicUUID: normalizeUuid(preset.defaults.characteristicUUID),
+        metric: preset.defaults.metric,
+        hm10BaudRate:
+          normalizedProfile === 'arduino_hm10'
+            ? normalizeHm10BaudRate(prev.hm10BaudRate)
+            : prev.hm10BaudRate,
+      };
+      configRef.current = nextConfig;
+      return nextConfig;
+    });
   }, []);
 
   const updateConfig = useCallback((patch: Partial<BluetoothConfig>) => {
     const nextProfile = patch.profile ? normalizeProfile(patch.profile) : undefined;
-    setConfig((prev) => ({
-      ...prev,
-      ...patch,
-      profile: nextProfile ?? prev.profile,
-      serviceUUID: normalizeUuid(patch.serviceUUID ?? prev.serviceUUID),
-      characteristicUUID: normalizeUuid(patch.characteristicUUID ?? prev.characteristicUUID),
-      metric: String(patch.metric ?? prev.metric).trim() || prev.metric,
-    }));
+    setConfig((prev) => {
+      const nextConfig: BluetoothConfig = {
+        ...prev,
+        ...patch,
+        profile: nextProfile ?? prev.profile,
+        serviceUUID: normalizeUuid(patch.serviceUUID ?? prev.serviceUUID),
+        characteristicUUID: normalizeUuid(patch.characteristicUUID ?? prev.characteristicUUID),
+        metric: String(patch.metric ?? prev.metric).trim() || prev.metric,
+        hm10BaudRate: normalizeHm10BaudRate(patch.hm10BaudRate ?? prev.hm10BaudRate),
+      };
+      configRef.current = nextConfig;
+      return nextConfig;
+    });
   }, []);
 
   const setWorkoutMirrorSuppressed = useCallback((suppressed: boolean) => {
@@ -1334,8 +1395,19 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      // connectedDevices() requires the full 128-bit UUID on both iOS and Android.
-      const paired = await manager.connectedDevices([expandUuid(normalizedService)]);
+      const serviceCandidates = buildPairedDeviceServiceCandidates({
+        profile: config.profile,
+        serviceUUID: normalizedService,
+      });
+      let paired: Device[] = [];
+      for (const candidate of serviceCandidates) {
+        // connectedDevices() requires the full 128-bit UUID on both iOS and Android.
+        const matches = await manager.connectedDevices([expandUuid(candidate)]);
+        if (matches.length) {
+          paired = matches;
+          break;
+        }
+      }
       if (!paired.length) {
         if (config.profile === 'apple_watch_companion') {
           throw new Error(
@@ -1401,6 +1473,27 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     [config.serviceUUID, config.characteristicUUID, unsupportedMessage]
   );
 
+  const applyHm10BaudRate = useCallback(
+    async (baudOverride?: number) => {
+      const activeConfig = configRef.current;
+      if (activeConfig.profile !== 'arduino_hm10') {
+        throw new Error('HM-10 baud control is only available for the Arduino + HM-10 profile.');
+      }
+      const nextBaud = normalizeHm10BaudRate(baudOverride ?? activeConfig.hm10BaudRate);
+      await sendCommand(buildHm10BaudCommand(nextBaud));
+      setConfig((prev) => {
+        const nextConfig: BluetoothConfig = {
+          ...prev,
+          hm10BaudRate: nextBaud,
+        };
+        configRef.current = nextConfig;
+        return nextConfig;
+      });
+      return nextBaud;
+    },
+    [sendCommand]
+  );
+
   const manualPublish = useCallback(
     async (
       value: number,
@@ -1464,6 +1557,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       confirmSystemDevice,
       disconnectFromDevice,
       sendCommand,
+      applyHm10BaudRate,
       manualPublish,
       setWorkoutMirrorSuppressed,
     }),
@@ -1487,6 +1581,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       confirmSystemDevice,
       disconnectFromDevice,
       sendCommand,
+      applyHm10BaudRate,
       manualPublish,
       setWorkoutMirrorSuppressed,
     ]

@@ -295,6 +295,47 @@ describe('BluetoothProvider confirmSystemDevice', () => {
     expect(mockConnectToDevice).not.toHaveBeenCalled();
   });
 
+  it('falls back to the HM-10 FFF0 service when paired-device lookup on FFE0 returns nothing', async () => {
+    const monitorCharacteristicForService = jest.fn();
+    mockConnectedDevices
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'paired-hm10', name: 'BT05', rssi: -52 }]);
+    mockConnectToDevice.mockResolvedValue({
+      discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
+        id: 'paired-hm10',
+        name: 'BT05',
+        rssi: -52,
+        monitorCharacteristicForService,
+        characteristicsForService: jest.fn((serviceUuid: string) => {
+          if (serviceUuid === full('FFE0')) {
+            return Promise.reject(new Error('Service not found'));
+          }
+          if (serviceUuid === full('FFF0')) {
+            return Promise.resolve([{ uuid: full('FFF1') }]);
+          }
+          return Promise.resolve([]);
+        }),
+      }),
+    });
+
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
+    await act(async () => { await snapshot!.confirmSystemDevice(); });
+
+    expect(mockConnectedDevices).toHaveBeenNthCalledWith(1, [full('FFE0')]);
+    expect(mockConnectedDevices).toHaveBeenNthCalledWith(2, [full('FFF0')]);
+    expect(snapshot!.status).toBe('connected');
+    expect(snapshot!.config.serviceUUID).toBe('FFF0');
+    expect(snapshot!.config.characteristicUUID).toBe('FFF1');
+    expect(monitorCharacteristicForService).toHaveBeenCalledWith(
+      full('FFF0'),
+      full('FFF1'),
+      expect.any(Function)
+    );
+  });
+
   it('recovers if the initial BLE connect is cancelled but the device is already connected', async () => {
     const monitorCharacteristicForService = jest.fn();
     const discoveredDevice = {
@@ -956,7 +997,7 @@ describe('arduino_hm10 profile', () => {
     );
   });
 
-  it('uploads all 13 metrics from a complete Arduino telemetry frame', async () => {
+  it('uploads the full Arduino telemetry frame including the HM-10 link probe metric', async () => {
     const monitorCharacteristicForService = jest.fn();
     mockConnectToDevice.mockResolvedValue({
       discoverAllServicesAndCharacteristics: jest.fn().mockResolvedValue({
@@ -976,8 +1017,9 @@ describe('arduino_hm10 profile', () => {
 
     const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
 
-    // Exact packet sequence produced by the Arduino sketch (one metric per line, 12 ms apart)
+    // Exact packet sequence produced by the Arduino sketch (one metric per line).
     const frame = [
+      '{"metric":"sensor.hm10_link_probe","value":3}\n',
       '{"metric":"sensor.time_ms","value":3000}\n',
       '{"metric":"sensor.aht20_temperature_c","value":22.41}\n',
       '{"metric":"sensor.aht20_humidity_percent","value":48.12}\n',
@@ -1000,10 +1042,11 @@ describe('arduino_hm10 profile', () => {
       });
     }
 
-    expect(mockRunOrQueue).toHaveBeenCalledTimes(13);
+    expect(mockRunOrQueue).toHaveBeenCalledTimes(14);
 
     const uploadedMetrics = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload?.metric);
     expect(uploadedMetrics).toEqual(expect.arrayContaining([
+      'sensor.hm10_link_probe',
       'sensor.time_ms',
       'sensor.aht20_temperature_c',
       'sensor.aht20_humidity_percent',
@@ -1176,6 +1219,41 @@ describe('BluetoothProvider sendCommand', () => {
     await expect(
       act(async () => { await ctx.sendCommand('ping'); })
     ).rejects.toThrow(/unable to send command/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyHm10BaudRate
+// ---------------------------------------------------------------------------
+
+describe('BluetoothProvider applyHm10BaudRate', () => {
+  it('sends the HM-10 baud command with a trailing newline and stores the selected baud', async () => {
+    const { ctx } = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => { ctx.updateConfig({ hm10BaudRate: 19200 as any }); });
+
+    let appliedBaud: number | null = null;
+    await act(async () => {
+      appliedBaud = await ctx.applyHm10BaudRate();
+    });
+
+    expect(appliedBaud).toBe(19200);
+    expect(ctx.config.hm10BaudRate).toBe(19200);
+    expect(mockWriteWithResponse).toHaveBeenCalledWith(
+      expect.any(String),
+      full('FFE0'),
+      full('FFE1'),
+      encode('HM10:BAUD=19200\n')
+    );
+  });
+
+  it('rejects baud control outside the Arduino HM-10 profile', async () => {
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await expect(
+      act(async () => { await snapshot!.applyHm10BaudRate(19200); })
+    ).rejects.toThrow(/arduino \+ hm-10 profile/i);
   });
 });
 

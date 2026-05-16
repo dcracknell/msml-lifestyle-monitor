@@ -24,12 +24,31 @@
 // metric to /api/streams. Sending one metric per line keeps each packet short
 // enough for HM-10 UART/BLE buffering while still streaming a full sensor row.
 
+// No third-party Arduino libraries required for this mock sketch.
+// These headers come from the standard Arduino AVR core / toolchain.
+#include <EEPROM.h>
 #include <SoftwareSerial.h>
 #include <avr/wdt.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const uint8_t BT_RX_PIN = 7;
 static const uint8_t BT_TX_PIN = 8;
+// Default streaming baud. The app can store a preferred replacement in EEPROM.
+static const uint32_t HM10_DEFAULT_UART_BAUD = 9600UL;
+static const uint32_t HM10_MAX_SAFE_SOFTWARESERIAL_BAUD = 38400UL;
+static const bool HM10_BLIND_NORMALIZE_TO_PREFERRED_BAUD_ON_BOOT = true;
+static const bool HM10_PROBE_BAUD_ON_BOOT = false;
+static const uint16_t HM10_BAUD_APPLY_DELAY_MS = 1800U;
+static const uint8_t HM10_BAUD_PREF_EEPROM_SIGNATURE = 0xB5;
+static const uint8_t HM10_BAUD_PREF_EEPROM_SIGNATURE_V1 = 0xB4;
+// FIX 1: was true, which caused sendTelemetryFrame() to return after only the
+// link-probe metric — no sensor data was ever transmitted.
+static const bool HM10_DEBUG_LINK_ONLY = false;
+// Default off: many HM-10 / BT05 clones stop forwarding UART data after
+// aggressive boot-time reconfiguration. Enable only when you need to repair
+// a module's BLE role/UUID settings and have confirmed the AT command set.
+static const bool HM10_APPLY_BOOT_PROFILE = false;
 
 SoftwareSerial BT(BT_RX_PIN, BT_TX_PIN);
 #define DBG Serial
@@ -50,6 +69,7 @@ static const char STREAM_NAMESPACE_LABEL[]   = "sensor.*";
 // -----------------------------------------------------------------------
 
 static const char METRIC_TIME_MS[]                = "sensor.time_ms";
+static const char METRIC_HM10_LINK_PROBE[]        = "sensor.hm10_link_probe";
 static const char METRIC_AHT20_TEMPERATURE_C[]    = "sensor.aht20_temperature_c";
 static const char METRIC_AHT20_HUMIDITY_PERCENT[] = "sensor.aht20_humidity_percent";
 static const char METRIC_TMP117_TEMPERATURE_C[]   = "sensor.tmp117_temperature_c";
@@ -74,7 +94,7 @@ static const uint8_t LED_PIN = LED_BUILTIN;
 // -----------------------------------------------------------------------
 
 static const uint32_t SENSOR_FRAME_INTERVAL_MS = 1000UL;
-static const uint16_t INTER_METRIC_DELAY_MS    = 12;
+static const uint16_t INTER_METRIC_DELAY_MS    = 60;
 static const uint8_t  LED_ACK_MS               = 8;
 
 // Maximum wait for a full HM-10 AT response.
@@ -84,6 +104,7 @@ static const uint32_t AT_CONFIG_TIMEOUT_MS = 900UL;
 // Enough for the longest metric name plus a signed fixed-point value.
 static const uint8_t MAX_LINE_BYTES = 96;
 static const uint8_t MAX_AT_REPLY_BYTES = 96;
+static const uint8_t MAX_COMMAND_BYTES = 48;
 
 // -----------------------------------------------------------------------
 // State
@@ -93,8 +114,27 @@ static uint32_t lastFrameMs = 0;
 static uint32_t frameCount  = 0;
 static uint16_t rngState    = 0;
 static bool     hmOk        = false;
+static uint32_t hmActiveBaud = HM10_DEFAULT_UART_BAUD;
+static uint32_t hmPreferredBaud = HM10_DEFAULT_UART_BAUD;
+static uint32_t hmPendingBaud = HM10_DEFAULT_UART_BAUD;
+static uint32_t hmBaudApplyAtMs = 0;
+static bool     hmHasPendingBaudApply = false;
+static bool     hmNeedsBootNormalize = false;
+static char     hmCommandBuffer[MAX_COMMAND_BYTES + 1];
+static uint8_t  hmCommandLength = 0;
 
 static const float EARTH_GRAVITY_MS2 = 9.80665f;
+
+struct Hm10BaudPreference {
+  uint8_t signature;
+  uint32_t baud;
+  uint8_t pendingNormalize;
+};
+
+struct Hm10BaudPreferenceV1 {
+  uint8_t signature;
+  uint32_t baud;
+};
 
 struct TelemetryFrame {
   uint32_t timeMs;
@@ -115,6 +155,12 @@ struct TelemetryFrame {
 static TelemetryFrame buildTelemetryFrame(uint32_t now);
 static void sendTelemetryFrame(const TelemetryFrame &frame);
 static bool hmApplyPeripheralProfile(void);
+static bool hmEnsurePreferredStreamingBaud(void);
+static void hmBlindNormalizeToPreferredBaud(void);
+static void hmLoadPreferredBaud(void);
+static void hmStorePreferredBaud(uint32_t baud, bool pendingNormalize);
+static void hmPollIncomingCommands(void);
+static void hmMaybeApplyPendingBaud(void);
 
 // -----------------------------------------------------------------------
 // HM-10 AT command helpers
@@ -181,6 +227,221 @@ static bool hmSendCommandExpect(const char *command,
   return strstr(reply, expectedSubstring) != NULL;
 }
 
+static bool hmIsSupportedBaud(uint32_t baud) {
+  switch (baud) {
+    case 9600UL:
+    case 19200UL:
+    case 38400UL:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static const char *hmBaudCommandFor(uint32_t baud) {
+  switch (baud) {
+    case 9600UL:
+      return "AT+BAUD0";
+    case 19200UL:
+      return "AT+BAUD1";
+    case 38400UL:
+      return "AT+BAUD2";
+    default:
+      return NULL;
+  }
+}
+
+static void hmLoadPreferredBaud() {
+  Hm10BaudPreference preference = { 0, HM10_DEFAULT_UART_BAUD, 0 };
+  EEPROM.get(0, preference);
+
+  if (preference.signature == HM10_BAUD_PREF_EEPROM_SIGNATURE &&
+      hmIsSupportedBaud(preference.baud)) {
+    hmPreferredBaud = preference.baud;
+    hmNeedsBootNormalize = preference.pendingNormalize == 1;
+    return;
+  }
+
+  Hm10BaudPreferenceV1 legacyPreference = { 0, HM10_DEFAULT_UART_BAUD };
+  EEPROM.get(0, legacyPreference);
+  if (legacyPreference.signature == HM10_BAUD_PREF_EEPROM_SIGNATURE_V1 &&
+      hmIsSupportedBaud(legacyPreference.baud)) {
+    hmPreferredBaud = legacyPreference.baud;
+    hmNeedsBootNormalize = false;
+    hmStorePreferredBaud(hmPreferredBaud, false);
+    return;
+  }
+
+  hmPreferredBaud = HM10_DEFAULT_UART_BAUD;
+  hmNeedsBootNormalize = false;
+}
+
+static void hmStorePreferredBaud(uint32_t baud, bool pendingNormalize) {
+  if (!hmIsSupportedBaud(baud)) {
+    return;
+  }
+  const Hm10BaudPreference preference = {
+    HM10_BAUD_PREF_EEPROM_SIGNATURE,
+    baud,
+    pendingNormalize ? 1 : 0
+  };
+  EEPROM.put(0, preference);
+}
+
+static bool hmApplyBaudChange(uint32_t targetBaud) {
+  const char *baudCommand = hmBaudCommandFor(targetBaud);
+  if (!baudCommand) {
+    DBG.print(F("[HM10] Unsupported requested UART baud "));
+    DBG.println(targetBaud);
+    return false;
+  }
+
+  if (targetBaud > HM10_MAX_SAFE_SOFTWARESERIAL_BAUD) {
+    DBG.print(F("[HM10] Requested UART baud is too fast for Uno SoftwareSerial: "));
+    DBG.println(targetBaud);
+    return false;
+  }
+
+  if (hmActiveBaud == targetBaud) {
+    BT.begin(hmActiveBaud);
+    BT.listen();
+    delay(200);
+    return true;
+  }
+
+  DBG.print(F("[HM10] Switching module UART to "));
+  DBG.print(targetBaud);
+  DBG.println(F(" baud..."));
+
+  if (!hmSendCommandExpect(baudCommand, "OK", AT_CONFIG_TIMEOUT_MS)) {
+    DBG.println(F("[HM10] Failed to change module UART baud."));
+    return false;
+  }
+
+  hmActiveBaud = targetBaud;
+  BT.begin(hmActiveBaud);
+  BT.listen();
+  delay(250);
+
+  if (!hmSendCommandExpect("AT", "OK", AT_TIMEOUT_MS)) {
+    DBG.println(F("[HM10] Module did not answer after the UART change."));
+    return false;
+  }
+
+  DBG.print(F("[HM10] Module UART active at "));
+  DBG.print(hmActiveBaud);
+  DBG.println(F(" baud."));
+  return true;
+}
+
+static void hmScheduleBaudApply(uint32_t targetBaud) {
+  hmPendingBaud = targetBaud;
+  hmBaudApplyAtMs = millis() + HM10_BAUD_APPLY_DELAY_MS;
+  hmHasPendingBaudApply = true;
+}
+
+static void hmHandleCommandLine(const char *line) {
+  if (!line || line[0] == '\0') {
+    return;
+  }
+
+  if (strncmp(line, "HM10:BAUD=", 10) != 0) {
+    DBG.print(F("[HM10] Ignoring app command: "));
+    DBG.println(line);
+    return;
+  }
+
+  char *end = NULL;
+  const unsigned long parsedBaud = strtoul(line + 10, &end, 10);
+  if (end == line + 10 || (end && *end != '\0')) {
+    DBG.print(F("[HM10] Could not parse requested UART baud: "));
+    DBG.println(line);
+    return;
+  }
+
+  const uint32_t requestedBaud = static_cast<uint32_t>(parsedBaud);
+  if (!hmIsSupportedBaud(requestedBaud)) {
+    DBG.print(F("[HM10] App requested unsupported UART baud "));
+    DBG.println(requestedBaud);
+    DBG.println(F("[HM10] Supported values: 9600, 19200, 38400."));
+    return;
+  }
+
+  hmPreferredBaud = requestedBaud;
+  hmNeedsBootNormalize = true;
+  hmStorePreferredBaud(hmPreferredBaud, true);
+
+  DBG.print(F("[HM10] App saved preferred UART baud "));
+  DBG.print(hmPreferredBaud);
+  DBG.println(F("."));
+
+  if (hmActiveBaud == hmPreferredBaud) {
+    DBG.println(F("[HM10] Requested baud is already active."));
+    return;
+  }
+
+  hmScheduleBaudApply(hmPreferredBaud);
+  DBG.print(F("[HM10] Will attempt the UART switch in "));
+  DBG.print(HM10_BAUD_APPLY_DELAY_MS);
+  DBG.println(F(" ms after the BLE app disconnects."));
+}
+
+static void hmPollIncomingCommands() {
+  while (BT.available()) {
+    const char c = static_cast<char>(BT.read());
+    if (c == '\r' || c == '\n') {
+      if (hmCommandLength == 0) {
+        continue;
+      }
+      hmCommandBuffer[hmCommandLength] = '\0';
+      hmHandleCommandLine(hmCommandBuffer);
+      hmCommandLength = 0;
+      hmCommandBuffer[0] = '\0';
+      continue;
+    }
+
+    if (hmCommandLength + 1 >= sizeof(hmCommandBuffer)) {
+      hmCommandLength = 0;
+      hmCommandBuffer[0] = '\0';
+      DBG.println(F("[HM10] App command too long; clearing buffer."));
+      continue;
+    }
+
+    hmCommandBuffer[hmCommandLength++] = c;
+  }
+}
+
+static void hmMaybeApplyPendingBaud() {
+  if (!hmHasPendingBaudApply) {
+    return;
+  }
+
+  if (static_cast<int32_t>(millis() - hmBaudApplyAtMs) < 0) {
+    return;
+  }
+
+  hmHasPendingBaudApply = false;
+  if (hmPendingBaud == hmActiveBaud) {
+    DBG.println(F("[HM10] Pending UART baud already active."));
+    return;
+  }
+
+  DBG.print(F("[HM10] Running delayed UART switch to "));
+  DBG.print(hmPendingBaud);
+  DBG.println(F(" baud."));
+
+  if (!hmApplyBaudChange(hmPendingBaud)) {
+    DBG.println(F("[HM10] Delayed switch did not complete. Disconnect BLE and power-cycle if needed."));
+    return;
+  }
+
+  hmNeedsBootNormalize = false;
+  hmStorePreferredBaud(hmPreferredBaud, false);
+  DBG.print(F("[HM10] Delayed UART switch complete at "));
+  DBG.print(hmActiveBaud);
+  DBG.println(F(" baud."));
+}
+
 // -----------------------------------------------------------------------
 // LCG pseudo-random (16-bit, no stdlib)
 // -----------------------------------------------------------------------
@@ -225,6 +486,14 @@ static float ramp01(uint32_t now, uint32_t durationMs) {
   return static_cast<float>(now) / static_cast<float>(durationMs);
 }
 
+// FIX 2: the original second branch ended at 0.75 (phase 0.28) while the third
+// branch started at 0.55 — a hard discontinuity in the PPG waveform.
+// The second branch now descends to 0.55 so the dicrotic notch begins cleanly.
+//
+//   phase 0.00–0.12 : systolic upstroke   (0 → 1.0)
+//   phase 0.12–0.28 : systolic downstroke (1.0 → 0.55)   ← fixed
+//   phase 0.28–0.38 : dicrotic notch rise (0.55 → 0.70)
+//   phase 0.38–1.00 : diastolic decay     (0.70 → 0)
 static float ppgPulse(uint32_t now, uint16_t periodMs) {
   if (periodMs == 0) return 0.0f;
 
@@ -232,15 +501,19 @@ static float ppgPulse(uint32_t now, uint16_t periodMs) {
                       static_cast<float>(periodMs);
 
   if (phase < 0.12f) {
+    // Systolic upstroke: 0 → 1.0
     return phase / 0.12f;
   }
   if (phase < 0.28f) {
-    return 1.0f - ((phase - 0.12f) / 0.16f) * 0.25f;
+    // Systolic downstroke: 1.0 → 0.55 (was: 1.0 → 0.75, causing a jump)
+    return 1.0f - ((phase - 0.12f) / 0.16f) * 0.45f;
   }
   if (phase < 0.38f) {
+    // Dicrotic notch rise: 0.55 → 0.70
     return 0.55f + ((phase - 0.28f) / 0.10f) * 0.15f;
   }
 
+  // Diastolic decay: 0.70 → 0
   const float decay = 1.0f - ((phase - 0.38f) / 0.62f);
   return boundedFloat(decay * 0.70f, 0.0f, 1.0f);
 }
@@ -332,6 +605,7 @@ static bool btSendValueText(const char *metric, const char *valueText) {
     DBG.println(F("[WARN] BT RX overflow detected (baud mismatch?)"));
   }
 
+  BT.listen();
   BT.print(buf);
 
   DBG.print(F("[SEND] "));
@@ -450,6 +724,13 @@ static void sendTelemetryFrame(const TelemetryFrame &frame) {
   DBG.print(F("[FRAME] "));
   DBG.println(static_cast<unsigned long>(frameCount));
 
+  btSendUint32(METRIC_HM10_LINK_PROBE, frameCount);
+  paceMetricSend();
+
+  if (HM10_DEBUG_LINK_ONLY) {
+    return;
+  }
+
   btSendUint32(METRIC_TIME_MS, frame.timeMs);
   paceMetricSend();
 
@@ -497,12 +778,19 @@ static void sendTelemetryFrame(const TelemetryFrame &frame) {
 
 static bool tryAtHandshake(uint32_t baud) {
   BT.begin(baud);
+  BT.listen();
   delay(200);
   return hmSendCommandExpect("AT", "OK", AT_TIMEOUT_MS);
 }
 
 static bool hmHandshake() {
-  static const uint32_t BAUDS[] = { 9600UL, 115200UL, 57600UL, 38400UL };
+  static const uint32_t BAUDS[] = {
+    9600UL,
+    19200UL,
+    38400UL,
+    57600UL,
+    115200UL
+  };
   static const uint8_t BAUD_COUNT = sizeof(BAUDS) / sizeof(BAUDS[0]);
 
   DBG.println(F("[HM10] Running AT handshake..."));
@@ -514,17 +802,10 @@ static bool hmHandshake() {
 
     if (tryAtHandshake(BAUDS[i])) {
       DBG.println(F("OK"));
-      DBG.print(F("[HM10] BAUD "));
-      DBG.print(BAUDS[i]);
-      DBG.println(F(" OK - module confirmed"));
-
-      if (BAUDS[i] != 9600UL) {
-        DBG.println(F("[HM10] Re-setting baud to 9600..."));
-        hmSendCommandExpect("AT+BAUD0", "OK", AT_CONFIG_TIMEOUT_MS);
-        delay(200);
-        BT.begin(9600);
-        delay(200);
-      }
+      hmActiveBaud = BAUDS[i];
+      DBG.print(F("[HM10] Detected UART baud "));
+      DBG.print(hmActiveBaud);
+      DBG.println(F("."));
       return true;
     }
 
@@ -534,10 +815,86 @@ static bool hmHandshake() {
 
   DBG.println(F("[ERR] HM-10 not responding on any baud rate."));
   DBG.println(F("[ERR] Check wiring: TX->pin7, RX->pin8, power, GND."));
-  DBG.println(F("[HM10] Falling back to 9600 baud for streaming."));
-  BT.begin(9600);
+  hmActiveBaud = hmPreferredBaud;
+  DBG.print(F("[HM10] Falling back to preferred UART baud "));
+  DBG.print(hmActiveBaud);
+  DBG.println(F("."));
+  BT.begin(hmActiveBaud);
+  BT.listen();
   delay(200);
   return false;
+}
+
+static bool hmEnsurePreferredStreamingBaud() {
+  if (hmPreferredBaud > HM10_MAX_SAFE_SOFTWARESERIAL_BAUD) {
+    DBG.print(F("[HM10] Preferred UART baud is not safe for Uno SoftwareSerial: "));
+    DBG.println(hmPreferredBaud);
+    return false;
+  }
+
+  if (hmActiveBaud == hmPreferredBaud) {
+    BT.begin(hmActiveBaud);
+    BT.listen();
+    delay(200);
+    return true;
+  }
+
+  DBG.print(F("[HM10] Reconfiguring module UART from "));
+  DBG.print(hmActiveBaud);
+  DBG.print(F(" to "));
+  DBG.print(hmPreferredBaud);
+  DBG.println(F(" baud for streaming..."));
+
+  if (!hmApplyBaudChange(hmPreferredBaud)) {
+    DBG.println(F("[HM10] Failed to switch module UART to the preferred streaming baud."));
+    return false;
+  }
+
+  DBG.print(F("[HM10] Module UART normalized to "));
+  DBG.print(hmActiveBaud);
+  DBG.println(F(" baud for streaming."));
+  return true;
+}
+
+static void hmBlindNormalizeToPreferredBaud() {
+  static const uint32_t BAUDS[] = {
+    9600UL,
+    19200UL,
+    38400UL,
+    57600UL,
+    115200UL
+  };
+  static const uint8_t BAUD_COUNT = sizeof(BAUDS) / sizeof(BAUDS[0]);
+  const char *targetBaudCommand = hmBaudCommandFor(hmPreferredBaud);
+  if (!targetBaudCommand) {
+    hmPreferredBaud = HM10_DEFAULT_UART_BAUD;
+    targetBaudCommand = hmBaudCommandFor(hmPreferredBaud);
+  }
+
+  DBG.print(F("[HM10] Blind-normalizing module UART to "));
+  DBG.print(hmPreferredBaud);
+  DBG.println(F("..."));
+
+  for (uint8_t i = 0; i < BAUD_COUNT; i++) {
+    BT.begin(BAUDS[i]);
+    BT.listen();
+    delay(180);
+    hmDrainRx();
+
+    // Repeat short AT commands to maximize the chance of a clean match on
+    // clones whose current UART baud is too fast for reliable reply parsing.
+    BT.print("AT");
+    delay(80);
+    BT.print(targetBaudCommand);
+    delay(140);
+    BT.print(targetBaudCommand);
+    delay(140);
+  }
+
+  hmActiveBaud = hmPreferredBaud;
+  BT.begin(hmActiveBaud);
+  BT.listen();
+  delay(250);
 }
 
 static bool hmApplyPeripheralProfile() {
@@ -556,7 +913,8 @@ static bool hmApplyPeripheralProfile() {
   ok &= hmSendCommandExpect("AT+RESET", "OK", AT_CONFIG_TIMEOUT_MS);
 
   delay(300);
-  BT.begin(9600);
+  BT.begin(hmActiveBaud);
+  BT.listen();
   delay(200);
 
   if (!hmSendCommandExpect("AT", "OK", AT_TIMEOUT_MS)) {
@@ -603,20 +961,64 @@ void setup() {
   );
   DBG.print(F("[RNG] seed = "));
   DBG.println(rngState);
+  hmLoadPreferredBaud();
+  DBG.print(F("[HM10] Preferred UART baud = "));
+  DBG.println(hmPreferredBaud);
+  DBG.print(F("[HM10] Pending boot normalize = "));
+  DBG.println(hmNeedsBootNormalize ? F("yes") : F("no"));
 
   ledBlink(4, 80, 80);
-  hmOk = hmHandshake();
-  if (hmOk) {
-    hmOk = hmApplyPeripheralProfile();
+  const bool useAtBoot = HM10_PROBE_BAUD_ON_BOOT || HM10_APPLY_BOOT_PROFILE;
+  const bool shouldBootNormalize =
+    HM10_BLIND_NORMALIZE_TO_PREFERRED_BAUD_ON_BOOT && hmNeedsBootNormalize;
+
+  if (shouldBootNormalize) {
+    hmBlindNormalizeToPreferredBaud();
+  }
+
+  if (useAtBoot) {
+    hmOk = hmHandshake();
+    if (hmOk) {
+      hmOk = hmEnsurePreferredStreamingBaud();
+    }
+    if (hmOk && HM10_APPLY_BOOT_PROFILE) {
+      hmOk = hmApplyPeripheralProfile();
+    }
+  } else {
+    hmActiveBaud = hmPreferredBaud;
+    BT.begin(hmActiveBaud);
+    BT.listen();
+    delay(200);
+    hmOk = true;
+
+    DBG.print(F("[HM10] UART started at "));
+    DBG.print(hmActiveBaud);
+    DBG.println(F(" baud without AT probing."));
+    DBG.println(F("[HM10] This mode is safest for HM-10 / BT05 clones."));
   }
 
   if (hmOk) {
     ledBlink(3, 200, 150);
     DBG.println(F("[HM10] Ready. Advertising as 'HMSoft' or 'BT05'."));
-    DBG.print(F("[HM10] Connect via app profile '"));
-    DBG.print(APP_DEVICE_PROFILE_LABEL);
-    DBG.println(F("'"));
-    DBG.println(F("       (Service FFE0 / Characteristic FFE1)"));
+    if (useAtBoot && HM10_APPLY_BOOT_PROFILE) {
+      DBG.print(F("[HM10] Connect via app profile '"));
+      DBG.print(APP_DEVICE_PROFILE_LABEL);
+      DBG.println(F("'"));
+      DBG.println(F("       (Service FFE0 / Characteristic FFE1)"));
+    } else {
+      DBG.println(F("[HM10] Using the module's existing BLE UART profile."));
+      DBG.print(F("[HM10] Streaming on UART baud "));
+      DBG.print(hmActiveBaud);
+      DBG.println(F("."));
+      DBG.println(F("[HM10] Watch for sensor.hm10_link_probe in the app first."));
+      DBG.println(F("[HM10] If data still does not appear, try FFE0/FFE1 first"));
+      DBG.println(F("       and then FFF0/FFF1 for HM-10 clones."));
+    }
+    if (hmActiveBaud == hmPreferredBaud && hmNeedsBootNormalize && (shouldBootNormalize || useAtBoot)) {
+      hmNeedsBootNormalize = false;
+      hmStorePreferredBaud(hmPreferredBaud, false);
+      DBG.println(F("[HM10] Cleared pending boot normalize flag."));
+    }
   } else {
     digitalWrite(LED_PIN, HIGH);
     DBG.println(F("[ERR] HM-10 setup was not fully confirmed."));
@@ -638,6 +1040,8 @@ void setup() {
 
 void loop() {
   wdt_reset();
+  hmPollIncomingCommands();
+  hmMaybeApplyPendingBaud();
 
   const uint32_t now = millis();
 
@@ -647,9 +1051,5 @@ void loop() {
 
     const TelemetryFrame frame = buildTelemetryFrame(now);
     sendTelemetryFrame(frame);
-  }
-
-  while (BT.available()) {
-    BT.read();
   }
 }
