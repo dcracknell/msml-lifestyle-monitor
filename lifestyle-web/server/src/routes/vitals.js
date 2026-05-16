@@ -52,8 +52,16 @@ const SNAPSHOT_FIELDS = [
   'glucose',
 ];
 
+function toFiniteMetricValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function entriesWithFiniteKey(records = [], key) {
-  return records.filter((entry) => Number.isFinite(Number(entry?.[key])));
+  return records.filter((entry) => toFiniteMetricValue(entry?.[key]) != null);
 }
 
 function recentEntriesForKey(records = [], key, limit = 7) {
@@ -64,13 +72,15 @@ function recentEntriesForPair(records = [], leftKey, rightKey, limit = 7) {
   return records
     .filter(
       (entry) =>
-        Number.isFinite(Number(entry?.[leftKey])) && Number.isFinite(Number(entry?.[rightKey]))
+        toFiniteMetricValue(entry?.[leftKey]) != null && toFiniteMetricValue(entry?.[rightKey]) != null
     )
     .slice(-limit);
 }
 
 function averageOfKey(records = [], key) {
-  const values = entriesWithFiniteKey(records, key).map((entry) => Number(entry[key]));
+  const values = entriesWithFiniteKey(records, key)
+    .map((entry) => toFiniteMetricValue(entry[key]))
+    .filter((value) => value != null);
   if (!values.length) return null;
   const sum = values.reduce((total, value) => total + value, 0);
   return Math.round((sum / values.length) * 10) / 10;
@@ -79,9 +89,9 @@ function averageOfKey(records = [], key) {
 function deltaFromLast(records = [], key) {
   const nonNullEntries = entriesWithFiniteKey(records, key);
   if (nonNullEntries.length < 2) return null;
-  const latest = Number(nonNullEntries[nonNullEntries.length - 1]?.[key]);
-  const previous = Number(nonNullEntries[nonNullEntries.length - 2]?.[key]);
-  if (!Number.isFinite(latest) || !Number.isFinite(previous)) return null;
+  const latest = toFiniteMetricValue(nonNullEntries[nonNullEntries.length - 1]?.[key]);
+  const previous = toFiniteMetricValue(nonNullEntries[nonNullEntries.length - 2]?.[key]);
+  if (latest == null || previous == null) return null;
   return Math.round((latest - previous) * 10) / 10;
 }
 
@@ -96,8 +106,8 @@ function buildLatestSnapshot(timeline = []) {
   };
 
   SNAPSHOT_FIELDS.forEach((field) => {
-    const match = [...timeline].reverse().find((entry) => Number.isFinite(Number(entry?.[field])));
-    latest[field] = match ? Number(match[field]) : null;
+    const match = [...timeline].reverse().find((entry) => toFiniteMetricValue(entry?.[field]) != null);
+    latest[field] = match ? toFiniteMetricValue(match[field]) : null;
     latest.fieldDates[field] = match?.date || null;
   });
 
