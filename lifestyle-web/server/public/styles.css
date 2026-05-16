@@ -421,7 +421,27 @@ form button[type="submit"]:hover { opacity: .88; }
   font-size: 28px; font-weight: 700; color: var(--text);
   letter-spacing: -.02em; line-height: 1; margin-top: 4px;
 }
+.metric-unit {
+  min-height: 16px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
 .metric-status { font-size: 12px; margin-top: 2px; margin-bottom: 8px; }
+.metric-helper {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.metric-card.is-empty .metric-value {
+  font-size: 16px;
+  line-height: 1.25;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+.metric-card.is-empty .metric-unit { color: transparent; }
+.metric-card.is-empty .metric-status { color: var(--muted); }
 .metric-bar {
   height: 4px; background: var(--border-2);
   border-radius: 2px; overflow: hidden; margin-top: auto;
@@ -1602,27 +1622,50 @@ li[data-zone="peak"]     .zone-dot { background: var(--red); }
 .stage-tag.light { color: var(--muted); background: var(--surface-2); }
 
 /* ─── Vitals subpage ─────────────────────────────────────────────────────── */
-.vitals-signals-row { grid-template-columns: repeat(6, 1fr); }
+.vitals-signals-row { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.vitals-signals-row .metric-card {
+  min-height: 150px;
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.26);
+}
+.vitals-signals-row .metric-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.34);
+}
 .vitals-bp-value { font-size: 22px; letter-spacing: -.01em; }
 
 .vitals-mid-row {
-  display: grid; grid-template-columns: 3fr 2fr; gap: var(--gap);
+  display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, .85fr); gap: var(--gap);
 }
+.vitals-secondary-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* Signal Summary table */
+.vitals-summary-card { min-height: 100%; }
+.vitals-summary-caption {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
 .vitals-summary-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
 .vitals-summary-table tr { border-bottom: 1px solid var(--border); }
 .vitals-summary-table tr:last-child { border-bottom: none; }
 .vitals-summary-table td { padding: 10px 0; vertical-align: baseline; }
-.vs-label { font-size: 12px; color: var(--muted); width: 50%; }
-.vs-value { font-size: 18px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; padding-right: 6px; }
+.vs-label { font-size: 12px; color: var(--muted); width: 36%; }
+.vs-value { font-size: 17px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; padding-right: 6px; }
+.vs-value.is-empty { font-size: 13px; font-weight: 600; color: var(--muted); }
 .vs-unit  { font-size: 11px; color: var(--muted); }
+.vs-status {
+  text-align: right;
+  font-size: 11px;
+  color: var(--label);
+  white-space: nowrap;
+}
+.vs-status.is-empty { color: var(--muted); }
 
 /* Vitals Log list */
 .vitals-log-card { overflow: hidden; }
 .vitals-log-list { display: flex; flex-direction: column; margin-top: 12px; max-height: 260px; overflow-y: auto; }
 .vitals-log-list li {
-  display: grid; grid-template-columns: 52px 1fr 90px 72px auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
   align-items: center; gap: 12px;
   padding: 6px 0; border-bottom: 1px solid var(--border);
   font-size: 12px;
@@ -2175,6 +2218,7 @@ li.pending-delete { opacity: 0.38; pointer-events: none; transition: opacity 0.2
 
 @media (max-width: 1200px) {
   .signals-row { grid-template-columns: repeat(2,1fr); }
+  .vitals-signals-row { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
   .trend-boards { grid-template-columns: repeat(2,1fr); }
   .nutrition-goal-list { grid-template-columns: repeat(2, 1fr); }
 }

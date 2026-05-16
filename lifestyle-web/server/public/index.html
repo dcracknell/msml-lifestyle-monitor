@@ -838,43 +838,38 @@
         <!-- ── Vitals subpage ─────────────────────────────────────────── -->
         <div class="subpage hidden" data-subpage="vitals">
 
-          <!-- 1 · 6 metric cards -->
+          <!-- 1 · Core signal cards -->
           <div class="signals-row vitals-signals-row">
-            <article class="metric-card metric-teal">
+            <article class="metric-card metric-teal" id="vitalsRestingHrCard">
               <p class="metric-label">Resting HR</p>
-              <p class="metric-value" id="vitalsRestingHr">48</p>
+              <p class="metric-value" id="vitalsRestingHr">&mdash;</p>
               <p class="metric-unit">bpm</p>
-              <p class="metric-status">Optimal</p>
+              <p class="metric-status" id="vitalsRestingHrStatus">No recent reading</p>
             </article>
-            <article class="metric-card metric-teal">
-              <p class="metric-label">SpO₂</p>
-              <p class="metric-value" id="vitalsSpo2">99</p>
+            <article class="metric-card metric-teal" id="vitalsSpo2Card">
+              <p class="metric-label">SpO2</p>
+              <p class="metric-value" id="vitalsSpo2">&mdash;</p>
               <p class="metric-unit">%</p>
-              <p class="metric-status">Normal</p>
+              <p class="metric-status" id="vitalsSpo2Status">No recent reading</p>
             </article>
-            <article class="metric-card metric-teal">
+            <article class="metric-card metric-teal" id="vitalsHrvCard">
               <p class="metric-label">HRV</p>
-              <p class="metric-value" id="vitalsHrv">113</p>
+              <p class="metric-value" id="vitalsHrv">&mdash;</p>
               <p class="metric-unit">ms</p>
-              <p class="metric-status">High recovery</p>
+              <p class="metric-status" id="vitalsHrvStatus">No recent reading</p>
             </article>
-            <article class="metric-card metric-blue">
+            <article class="metric-card metric-blue hidden" id="vitalsStressCard">
               <p class="metric-label">Stress</p>
-              <p class="metric-value" id="vitalsStress">22</p>
+              <p class="metric-value" id="vitalsStress">&mdash;</p>
               <p class="metric-unit">score</p>
-              <p class="metric-status">Low</p>
+              <p class="metric-status" id="vitalsStressStatus">No recent reading</p>
             </article>
-            <article class="metric-card metric-teal">
-              <p class="metric-label">Blood Pressure</p>
-              <p class="metric-value vitals-bp-value" id="vitalsBloodPressure">115/70</p>
-              <p class="metric-unit">mmHg</p>
-              <p class="metric-status">Optimal</p>
-            </article>
-            <article class="metric-card metric-teal">
-              <p class="metric-label">Glucose</p>
-              <p class="metric-value" id="vitalsGlucose">92</p>
+            <article class="metric-card metric-teal metric-glucose-card" id="vitalsGlucoseCard">
+              <p class="metric-label">Glucose record</p>
+              <p class="metric-value" id="vitalsGlucose">&mdash;</p>
               <p class="metric-unit">mg/dL</p>
-              <p class="metric-status">Normal fasting</p>
+              <p class="metric-status" id="vitalsGlucoseStatus">No recent reading</p>
+              <p class="metric-helper">This dashboard displays stored glucose records. Live BGL inference is not currently connected.</p>
             </article>
           </div>
 
@@ -889,23 +884,19 @@
                 <canvas id="vitalsHrvChart"></canvas>
               </div>
             </article>
-            <article class="card">
+            <article class="card vitals-summary-card">
               <p class="section-eyebrow">Signal Summary</p>
+              <p class="vitals-summary-caption">Latest stored readings from the vitals data stream.</p>
               <table class="vitals-summary-table">
-                <tbody>
-                  <tr><td class="vs-label">Resting HR</td><td class="vs-value">48</td><td class="vs-unit">bpm</td></tr>
-                  <tr><td class="vs-label">SpO₂</td><td class="vs-value">99</td><td class="vs-unit">%</td></tr>
-                  <tr><td class="vs-label">HRV</td><td class="vs-value">113</td><td class="vs-unit">ms</td></tr>
-                  <tr><td class="vs-label">Stress Index</td><td class="vs-value">22</td><td class="vs-unit">score</td></tr>
-                  <tr><td class="vs-label">Blood Pressure</td><td class="vs-value">115/70</td><td class="vs-unit">mmHg</td></tr>
-                  <tr><td class="vs-label">Glucose</td><td class="vs-value">92</td><td class="vs-unit">mg/dL</td></tr>
+                <tbody id="vitalsSummaryBody">
+                  <tr><td class="vs-label">Readings</td><td class="vs-value">No recent reading</td><td class="vs-unit"></td><td class="vs-status">Awaiting data</td></tr>
                 </tbody>
               </table>
             </article>
           </div>
 
           <!-- 3 · HR Trend + Glucose Trend -->
-          <div class="act-charts-row">
+          <div class="act-charts-row vitals-secondary-row">
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">Resting HR · 14 Days</p>
@@ -917,7 +908,7 @@
             </article>
             <article class="card chart-card">
               <div class="act-chart-header">
-                <p class="section-eyebrow">Blood Glucose · 14 Days</p>
+                <p class="section-eyebrow">Glucose records &middot; 14 days</p>
                 <span class="chart-legend-dot" style="background:#a78bfa"></span>
               </div>
               <div class="chart-canvas-frame chart-canvas-frame-240">
@@ -946,11 +937,7 @@
           <article class="card vitals-log-card">
             <p class="section-eyebrow">Vitals Log</p>
             <ul class="vitals-log-list" id="vitalsHistory">
-              <li><span class="vl-date">Mar 13</span><span class="vl-summary">48 bpm · 115/70 mmHg · 92 mg/dL</span><span class="vl-stat">HRV 113 ms</span><span class="vl-stat">SpO₂ 99%</span><span class="vitals-tag teal">Good</span></li>
-              <li><span class="vl-date">Mar 10</span><span class="vl-summary">51 bpm · 118/72 mmHg · 88 mg/dL</span><span class="vl-stat">HRV 108 ms</span><span class="vl-stat">SpO₂ 98%</span><span class="vitals-tag teal">Good</span></li>
-              <li><span class="vl-date">Mar 7</span><span class="vl-summary">54 bpm · 122/74 mmHg · 96 mg/dL</span><span class="vl-stat">HRV 94 ms</span><span class="vl-stat">SpO₂ 98%</span><span class="vitals-tag amber">Elevated</span></li>
-              <li><span class="vl-date">Mar 4</span><span class="vl-summary">49 bpm · 116/71 mmHg · 90 mg/dL</span><span class="vl-stat">HRV 118 ms</span><span class="vl-stat">SpO₂ 99%</span><span class="vitals-tag teal">Good</span></li>
-              <li><span class="vl-date">Mar 1</span><span class="vl-summary">52 bpm · 120/73 mmHg · 94 mg/dL</span><span class="vl-stat">HRV 101 ms</span><span class="vl-stat">SpO₂ 97%</span><span class="vitals-tag blue">Monitor</span></li>
+              <li class="empty-row">Vitals sync required to populate history.</li>
             </ul>
             <p class="form-feedback" id="vitalsFeedback"></p>
           </article>
@@ -1485,8 +1472,8 @@
               </div>
               <div class="strava-credentials">
                 <div class="card-subsection">
-                  <p class="subsection-eyebrow">BGL inference profile</p>
-                  <p class="field-hint">Required for live BGL inference: age, sex, BMI, and diabetes history. Prototype estimate only, not clinically validated.</p>
+                  <p class="subsection-eyebrow">BGL profile fields</p>
+                  <p class="field-hint">Stored for future BGL integration work: age, sex, BMI, and diabetes history. Prototype only, not clinically validated.</p>
                 </div>
                 <div class="profile-grid">
                   <label>Age<input type="number" id="profileAge" name="age" min="1" max="120" step="1" inputmode="numeric" placeholder="e.g. 62" /></label>
