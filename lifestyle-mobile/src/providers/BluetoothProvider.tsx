@@ -1,12 +1,15 @@
 import { ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useQueryClient } from '@tanstack/react-query';
 import { BleErrorCode, BleManager, Device, Subscription, State } from 'react-native-ble-plx';
 import { encode as encodeBase64, decode as decodeBase64 } from 'base-64';
 import { useSyncQueue } from './SyncProvider';
 
 const CONFIG_KEY = 'msml.bluetooth.config';
 const MAX_RECENT_SAMPLES = 120;
+const SAMPLE_HISTORY_KEY = 'msml.bluetooth.sampleHistory';
+const MAX_SAMPLE_HISTORY = 240;
 const ANDROID_CONNECTION_TIMEOUT_MS = 15_000;
 const MAX_TRANSPORT_TEXT_PREVIEW_CHARS = 180;
 const MAX_TRANSPORT_HEX_PREVIEW_BYTES = 24;
@@ -172,6 +175,7 @@ interface BluetoothContextValue {
   connectedDevice: BluetoothDeviceSummary | null;
   lastSample: BluetoothSample | null;
   recentSamples: BluetoothSample[];
+  sampleHistory: BluetoothSample[];
   transportDebug: BluetoothTransportDebug;
   hm10LinkGuard: BluetoothLinkGuard;
   lastUploadStatus: UploadStatus | null;
@@ -904,7 +908,7 @@ const METRIC_RANGES: Record<string, [number, number]> = {
   'exercise.max_hr':    [20,  300],
   'vitals.spo2':        [50,  100],
   'vitals.hrv':         [1,   300],
-  'vitals.glucose':     [1,    60],
+  'vitals.glucose':     [40,  600],
   'body.weight_kg':     [10,  500],
   'phone.steps':        [0,  200000],
   'vitals.systolic_bp': [40,  300],
@@ -950,6 +954,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     promise: Promise<number>;
   } | null>(null);
   const { runOrQueue } = useSyncQueue();
+  const queryClient = useQueryClient();
 
   const [config, setConfig] = useState<BluetoothConfig>(DEFAULT_CONFIG);
   const configRef = useRef<BluetoothConfig>(DEFAULT_CONFIG);
@@ -961,12 +966,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDeviceSummary | null>(null);
   const [lastSample, setLastSample] = useState<BluetoothSample | null>(null);
   const [recentSamples, setRecentSamples] = useState<BluetoothSample[]>([]);
+  const [sampleHistory, setSampleHistory] = useState<BluetoothSample[]>([]);
   const [transportDebug, setTransportDebug] = useState<BluetoothTransportDebug>(DEFAULT_TRANSPORT_DEBUG);
   const [hm10LinkGuard, setHm10LinkGuard] = useState<BluetoothLinkGuard>(DEFAULT_HM10_LINK_GUARD);
   const [lastUploadStatus, setLastUploadStatus] = useState<UploadStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const suppressWorkoutMirrorRef = useRef(false);
   const connectionAttemptIdRef = useRef(0);
+  const [isSampleHistoryReady, setIsSampleHistoryReady] = useState(false);
 
   const clearPendingHm10LinkCheck = useCallback((message: string) => {
     const pending = pendingHm10LinkCheckRef.current;
@@ -1021,9 +1028,45 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let canceled = false;
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem(SAMPLE_HISTORY_KEY);
+        if (!stored || canceled) {
+          return;
+        }
+        const parsed = JSON.parse(stored);
+        if (!Array.isArray(parsed)) {
+          return;
+        }
+        const sanitized = parsed
+          .map((entry) => sanitizeBluetoothSample(entry))
+          .filter((entry): entry is BluetoothSample => Boolean(entry));
+        if (!canceled) {
+          setSampleHistory(sanitized.slice(-MAX_SAMPLE_HISTORY));
+        }
+      } catch {
+        // ignore errors
+      } finally {
+        if (!canceled) {
+          setIsSampleHistoryReady(true);
+        }
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isConfigReady) return;
     AsyncStorage.setItem(CONFIG_KEY, JSON.stringify(config)).catch(() => {});
   }, [config, isConfigReady]);
+
+  useEffect(() => {
+    if (!isSampleHistoryReady) return;
+    AsyncStorage.setItem(SAMPLE_HISTORY_KEY, JSON.stringify(sampleHistory)).catch(() => {});
+  }, [isSampleHistoryReady, sampleHistory]);
 
   useEffect(() => {
     configRef.current = config;
@@ -1110,6 +1153,50 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const shouldSkipWorkoutMirror = useCallback((metric: string) => {
     return suppressWorkoutMirrorRef.current && normalizeMetricName(metric, '').startsWith('exercise.');
   }, []);
+
+  const appendSampleHistory = useCallback((samples: BluetoothSample[]) => {
+    if (!samples.length) {
+      return;
+    }
+    setSampleHistory((prev) => {
+      const next = [...prev, ...samples];
+      return next.length > MAX_SAMPLE_HISTORY ? next.slice(next.length - MAX_SAMPLE_HISTORY) : next;
+    });
+  }, []);
+
+  const invalidateMetricQueries = useCallback((metrics: string[]) => {
+    const normalizedMetrics = Array.from(
+      new Set(metrics.map((metric) => String(metric || '').trim()).filter(Boolean))
+    );
+    if (!normalizedMetrics.length) {
+      return;
+    }
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['stream-history'] }),
+      ...normalizedMetrics.flatMap((metric) => {
+        if (metric.startsWith('exercise.')) {
+          const invalidations = [
+            queryClient.invalidateQueries({ queryKey: ['activity'] }),
+            queryClient.invalidateQueries({ queryKey: ['exercise'] }),
+          ];
+          if (metric === 'exercise.hr') {
+            invalidations.push(queryClient.invalidateQueries({ queryKey: ['vitals'] }));
+          }
+          return invalidations;
+        }
+        if (metric.startsWith('vitals.')) {
+          return [queryClient.invalidateQueries({ queryKey: ['vitals'] })];
+        }
+        if (metric.startsWith('sleep.')) {
+          return [queryClient.invalidateQueries({ queryKey: ['sleep'] })];
+        }
+        if (metric.startsWith('body.')) {
+          return [queryClient.invalidateQueries({ queryKey: ['weight'] })];
+        }
+        return [];
+      }),
+    ]);
+  }, [queryClient]);
 
   const handleCharacteristicValue = useCallback(
     async (value: string | null) => {
@@ -1236,6 +1323,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           const next = [...prev, ...appendedSamples];
           return next.length > MAX_RECENT_SAMPLES ? next.slice(next.length - MAX_RECENT_SAMPLES) : next;
         });
+        appendSampleHistory(appendedSamples);
 
         if (!activeConfig.autoUpload) return;
         try {
@@ -1249,7 +1337,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                     : null,
                 }))
                 .filter((sample) => Number.isFinite(sample.ts));
-              if (!sanitizedSamples.length) return Promise.resolve({ status: 'sent' as const });
+              if (!sanitizedSamples.length) {
+                return Promise.resolve({ metric: batch.metric, status: 'sent' as const });
+              }
               return runOrQueue({
                 endpoint: '/api/streams',
                 payload: {
@@ -1258,11 +1348,18 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
                   samples: sanitizedSamples,
                 },
                 description: `Sensor sample (${batch.metric})`,
-              });
+              }).then((result) => ({
+                metric: batch.metric,
+                status: result.status,
+              }));
             })
           );
           const queuedCount = uploadResults.filter((r) => r.status === 'queued').length;
           const sentCount = uploadResults.length - queuedCount;
+          const sentMetrics = uploadResults
+            .filter((result) => result.status === 'sent')
+            .map((result) => result.metric);
+          invalidateMetricQueries(sentMetrics);
           setLastUploadStatus({
             status: queuedCount > 0 ? 'queued' : 'sent',
             timestamp: Date.now(),
@@ -1359,6 +1456,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       commitTransportDebug('empty', { lineBufferLength: 0 });
     },
     [
+      appendSampleHistory,
+      invalidateMetricQueries,
       runOrQueue,
       shouldSkipWorkoutMirror,
     ]
@@ -1865,6 +1964,15 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       if (!Number.isFinite(sampleValue)) {
         throw new Error('Enter a numeric value to publish.');
       }
+      const sampleTs = Date.now();
+      appendSampleHistory([
+        {
+          ts: sampleTs,
+          metric,
+          value: sampleValue,
+          raw: 'Manual entry',
+        },
+      ]);
       try {
         const result = await runOrQueue({
           endpoint: '/api/streams',
@@ -1875,7 +1983,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
               options?.skipWorkoutMirror === true || shouldSkipWorkoutMirror(metric),
             samples: [
               {
-                ts: Date.now(),
+                ts: sampleTs,
                 value: sampleValue,
                 ...(options?.localDate ? { localDate: options.localDate } : {}),
               },
@@ -1888,11 +1996,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           timestamp: Date.now(),
           message: result.status === 'sent' ? 'Manual sample uploaded.' : 'Manual sample queued offline.',
         });
+        if (result.status === 'sent') {
+          invalidateMetricQueries([metric]);
+        }
       } catch (uploadError) {
         setError(uploadError instanceof Error ? uploadError.message : 'Unable to publish sample.');
       }
     },
-    [config.metric, runOrQueue, shouldSkipWorkoutMirror]
+    [appendSampleHistory, config.metric, invalidateMetricQueries, runOrQueue, shouldSkipWorkoutMirror]
   );
 
   const value = useMemo(
@@ -1909,6 +2020,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       connectedDevice,
       lastSample,
       recentSamples,
+      sampleHistory,
       transportDebug,
       hm10LinkGuard,
       lastUploadStatus,
@@ -1936,6 +2048,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       connectedDevice,
       lastSample,
       recentSamples,
+      sampleHistory,
       transportDebug,
       hm10LinkGuard,
       lastUploadStatus,
@@ -1962,4 +2075,22 @@ export function useBluetooth() {
     throw new Error('useBluetooth must be used within a BluetoothProvider');
   }
   return context;
+}
+
+function sanitizeBluetoothSample(value: unknown): BluetoothSample | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const sample = value as Partial<BluetoothSample>;
+  const ts = typeof sample.ts === 'number' ? sample.ts : NaN;
+  const numericValue = typeof sample.value === 'number' ? sample.value : NaN;
+  if (!Number.isFinite(ts) || typeof sample.metric !== 'string' || typeof sample.raw !== 'string') {
+    return null;
+  }
+  return {
+    ts: Math.round(ts),
+    metric: sample.metric,
+    value: Number.isFinite(numericValue) ? numericValue : null,
+    raw: sample.raw,
+  };
 }

@@ -45,9 +45,14 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 const mockRunOrQueue = jest.fn().mockResolvedValue({ status: 'sent' });
+const mockInvalidateQueries = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('../SyncProvider', () => ({
   useSyncQueue: () => ({ runOrQueue: mockRunOrQueue }),
+}));
+
+jest.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }),
 }));
 
 jest.mock('react-native-ble-plx', () => {
@@ -106,6 +111,7 @@ afterEach(() => {
   mockCancelDeviceConnection.mockResolvedValue(undefined);
   mockWriteWithResponse.mockResolvedValue(undefined);
   mockWriteWithoutResponse.mockResolvedValue(undefined);
+  mockInvalidateQueries.mockResolvedValue(undefined);
 });
 
 async function renderWithProvider(probe: (ctx: ReturnType<typeof useBluetooth>) => void) {
@@ -219,7 +225,7 @@ describe('validateMetricValue', () => {
     expect(validateMetricValue('vitals.heart_rate', 75)).toBe(75);
     expect(validateMetricValue('vitals.spo2',       98)).toBe(98);
     expect(validateMetricValue('vitals.hrv',        45)).toBe(45);
-    expect(validateMetricValue('vitals.glucose',   5.2)).toBe(5.2);
+    expect(validateMetricValue('vitals.glucose',    95)).toBe(95);
     expect(validateMetricValue('body.weight_kg',  70.5)).toBe(70.5);
     expect(validateMetricValue('phone.steps',     8000)).toBe(8000);
   });
@@ -1429,6 +1435,40 @@ describe('BluetoothProvider manualPublish', () => {
         payload: expect.objectContaining({ metric: 'sensor.aht20_temperature_c', samples: [expect.objectContaining({ value: 22 })] }),
       })
     );
+  });
+
+  it('stores a manual publish sample in local app history', async () => {
+    const { ctx, getCtx } = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => { await ctx.manualPublish(36.6); });
+
+    expect(getCtx().sampleHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metric: 'sensor.aht20_temperature_c',
+          value: 36.6,
+          raw: 'Manual entry',
+        }),
+      ])
+    );
+  });
+
+  it('refreshes the weight view when a body metric is uploaded', async () => {
+    const { ctx } = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => { await ctx.manualPublish(18.4, 'body.body_fat_pct'); });
+
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['stream-history'] });
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['weight'] });
+  });
+
+  it('refreshes vitals when exercise heart-rate samples are uploaded', async () => {
+    const { ctx } = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => { await ctx.manualPublish(148, 'exercise.hr'); });
+
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['exercise'] });
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['vitals'] });
   });
 });
 

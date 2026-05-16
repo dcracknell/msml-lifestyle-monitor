@@ -424,3 +424,112 @@ export interface StreamPublishResponse {
   metric: string;
   accepted: number;
 }
+
+export interface PpgPredictionPayload {
+  model_name: string | null;
+  model_version?: string | null;
+  input?: {
+    signal_path?: string;
+    demographics_path?: string;
+    fs_hz?: number;
+    window_seconds?: number;
+    n_samples?: number;
+  };
+  prediction?: {
+    class_index?: number;
+    label?: string | null;
+    probabilities?: Record<string, number>;
+  };
+  quality?: {
+    n_subwindows_attempted?: number | null;
+    n_subwindows_used?: number | null;
+    mean_sqi?: number | null;
+    min_sqi?: number | null;
+  };
+  warnings?: string[];
+}
+
+export interface PpgRunRequestMeta {
+  signalMetric: string | null;
+  signalSampleCount: number | null;
+  signalStartedAt: string | null;
+  signalEndedAt: string | null;
+  signalDurationMs: number | null;
+  fsHz: number | null;
+  strictLength: boolean;
+}
+
+export interface PpgRunResultSummary {
+  label: string | null;
+  confidence: number | null;
+  modelName: string | null;
+  meanSqi: number | null;
+  usedSubwindows: number | null;
+  attemptedSubwindows: number | null;
+}
+
+export interface PpgRunSummary {
+  id: number;
+  userId: number;
+  requestedByUserId: number;
+  mode: string;
+  isDemo: boolean;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: string | null;
+  completedAt: string | null;
+  elapsedSeconds: number | null;
+  error: string | null;
+  request: PpgRunRequestMeta;
+  resultSummary: PpgRunResultSummary | null;
+}
+
+export interface PpgStatusInfo {
+  ready: boolean;
+  message: string;
+  missingModules?: string[];
+  missingFiles?: string[];
+  missingFields?: string[];
+  metric?: string;
+  sampleCount?: number;
+  requiredSamples?: number;
+  fsHz?: number;
+  windowSeconds?: number;
+  spanMs?: number;
+  expectedSpanMs?: number;
+  pythonBin?: string;
+  modelDir?: string;
+  signalPath?: string;
+  demographicsPath?: string;
+}
+
+export interface PpgStatusResponse {
+  running: boolean;
+  inMemory: PpgRunSummary | null;
+  latestRun: PpgRunSummary | null;
+  latestPrediction: PpgPredictionPayload | null;
+  runtime: PpgStatusInfo;
+  bundle: PpgStatusInfo;
+  demoInput: PpgStatusInfo;
+  liveInput: PpgStatusInfo;
+  profile: PpgStatusInfo;
+  signalMetric: string;
+  subject: {
+    id: number;
+    name: string;
+    role: string;
+  };
+}
+
+export interface PpgResultsResponse {
+  run: PpgRunSummary | null;
+  prediction: PpgPredictionPayload | null;
+}
+
+export interface PpgRunStartResponse {
+  message: string;
+  mode: string;
+  fsHz: number;
+  strictLength: boolean;
+  metric: string;
+  athleteId: number;
+}

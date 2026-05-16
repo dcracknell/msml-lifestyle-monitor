@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { AppButton, AppInput, AppText, Card, SectionHeader, TrendChart } from '../../components';
+import { AppButton, AppInput, AppText, Card, SectionHeader } from '../../components';
 import {
   BluetoothDeviceSummary,
   HM10_BAUD_RATE_OPTIONS,
@@ -8,10 +8,16 @@ import {
   useBluetooth,
 } from '../../providers/BluetoothProvider';
 import { colors, spacing } from '../../theme';
-import { formatDate, formatNumber } from '../../utils/format';
+import { formatDate } from '../../utils/format';
+import {
+  BLUETOOTH_DIAGNOSTIC_METRICS,
+  formatBluetoothMetricLabel,
+  formatBluetoothMetricReading,
+} from './bluetoothMetricUtils';
 
 const LIVE_SAMPLE_WINDOW_MS = 10_000;
 const LIVE_METRIC_SNAPSHOT_LIMIT = 6;
+const STORED_SAMPLE_HISTORY_LIMIT = 12;
 
 function formatSampleFreshness(ts: number | null | undefined, now: number) {
   if (!ts) {
@@ -191,6 +197,7 @@ export function BluetoothDevicesSection() {
     connectedDevice,
     lastSample,
     recentSamples,
+    sampleHistory,
     transportDebug,
     hm10LinkGuard,
     lastUploadStatus,
@@ -205,6 +212,8 @@ export function BluetoothDevicesSection() {
   } = useBluetooth();
   const [now, setNow] = useState(() => Date.now());
   const [isApplyingHm10Baud, setIsApplyingHm10Baud] = useState(false);
+  const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [hm10ControlNotice, setHm10ControlNotice] = useState<{
     kind: 'info' | 'error';
     text: string;
@@ -229,17 +238,6 @@ export function BluetoothDevicesSection() {
     [profiles, config.profile]
   );
 
-  const focusMetric = useMemo(() => {
-    const configuredMetric = config.metric.trim();
-    const latestConfiguredMetric = [...recentSamples]
-      .reverse()
-      .find((sample) => sample.metric === configuredMetric && sample.value !== null);
-    if (latestConfiguredMetric) {
-      return configuredMetric;
-    }
-    return lastSample?.metric || configuredMetric;
-  }, [config.metric, lastSample?.metric, recentSamples]);
-
   const latestMetricSamples = useMemo(() => {
     const latestByMetric = new Map<string, (typeof recentSamples)[number]>();
     [...recentSamples].reverse().forEach((sample) => {
@@ -252,25 +250,13 @@ export function BluetoothDevicesSection() {
       .sort((a, b) => b.ts - a.ts)
       .slice(0, LIVE_METRIC_SNAPSHOT_LIMIT);
   }, [recentSamples]);
-
-  const focusedSample = useMemo(
-    () => latestMetricSamples.find((sample) => sample.metric === focusMetric) || lastSample,
-    [focusMetric, lastSample, latestMetricSamples]
-  );
-
-  const liveTrend = useMemo(
+  const storedSampleHistory = useMemo(
     () =>
-      recentSamples
-        .filter(
-          (sample) =>
-            sample.metric === focusMetric && sample.value !== null && Number.isFinite(sample.value)
-        )
-        .slice(-32)
-        .map((sample) => ({
-          label: formatDate(new Date(sample.ts).toISOString(), 'HH:mm:ss'),
-          value: sample.value as number,
-        })),
-    [focusMetric, recentSamples]
+      [...sampleHistory]
+        .filter((sample) => !BLUETOOTH_DIAGNOSTIC_METRICS.has(sample.metric))
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, STORED_SAMPLE_HISTORY_LIMIT),
+    [sampleHistory]
   );
 
   const scanStatusLabel = status === 'connected' ? 'Connected' : isScanning ? 'Scanning' : 'Ready';
@@ -355,6 +341,29 @@ export function BluetoothDevicesSection() {
       // The provider records a user-facing failure message in hm10LinkGuard.
     }
   };
+  const handleQuickPairedConnect = async () => {
+    if (isScanning) {
+      stopScan();
+    }
+    setHm10ControlNotice(null);
+    try {
+      await confirmSystemDevice();
+    } catch {
+      // Provider state already exposes the user-facing error.
+    }
+  };
+  const handleQuickScan = async () => {
+    setHm10ControlNotice(null);
+    if (isScanning) {
+      stopScan();
+      return;
+    }
+    try {
+      await startScan();
+    } catch {
+      // Provider state already exposes the user-facing error.
+    }
+  };
 
   useEffect(() => {
     if (config.profile !== 'arduino_hm10' || !connectedDevice || status !== 'connected') {
@@ -382,13 +391,28 @@ export function BluetoothDevicesSection() {
     <>
       <Card>
         <SectionHeader
-          title="Device scanner"
-          subtitle={
-            connectedDevice
-              ? 'Connected and ready to receive live samples.'
-              : `Adapter: ${bluetoothState}`
-          }
+          title="Quick connect"
+          subtitle="Pick the device type, then connect with a paired-device tap or a nearby scan."
         />
+        <AppText variant="label" style={styles.profileLabel}>
+          1. Device type
+        </AppText>
+        <View style={styles.profileRow}>
+          {profiles.map((profile) => (
+            <AppButton
+              key={profile.id}
+              title={profile.shortLabel}
+              variant={config.profile === profile.id ? 'secondary' : 'ghost'}
+              onPress={() => applyProfile(profile.id)}
+              style={styles.profileButton}
+            />
+          ))}
+        </View>
+        {activeProfile ? (
+          <AppText variant="muted" style={styles.profileDescription}>
+            {activeProfile.description}
+          </AppText>
+        ) : null}
 
         <View style={styles.statusStack}>
           <View style={styles.statusPills}>
@@ -396,13 +420,18 @@ export function BluetoothDevicesSection() {
             <StatusPill label={scanStatusLabel} active={status === 'connected' || isScanning} />
             <StatusPill label={streamStatusLabel} active={isReceivingLiveData || isReceivingAnyTraffic} />
           </View>
-          {activeProfile ? (
-            <AppText variant="muted" style={styles.profileSummary}>
-              Using the {activeProfile.label} preset.
-            </AppText>
-          ) : null}
+          <AppText variant="muted" style={styles.profileSummary}>
+            {connectedDevice
+              ? 'Live charts now appear on the Exercise and Vitals pages.'
+              : showPairedDeviceHint
+              ? 'If the device is already paired in system Bluetooth settings, try the paired-device button first.'
+              : 'Use scan for nearby wearables, or open advanced setup if you need custom UUIDs.'}
+          </AppText>
         </View>
 
+        <AppText variant="label" style={styles.profileLabel}>
+          2. Connect
+        </AppText>
         {connectedDevice ? (
           <>
             <View style={styles.connectedPanel}>
@@ -410,6 +439,9 @@ export function BluetoothDevicesSection() {
                 {connectedDevice.name || 'Unnamed device'}
               </AppText>
               <AppText variant="muted">{connectedDevice.id}</AppText>
+              <AppText variant="muted" style={styles.helper}>
+                {liveStatusMessage} {statusFreshnessLabel}
+              </AppText>
             </View>
             <AppButton
               title="Disconnect"
@@ -421,29 +453,23 @@ export function BluetoothDevicesSection() {
         ) : (
           <>
             <AppButton
-              title={isScanning ? 'Stop scanning' : 'Scan for devices'}
-              onPress={isScanning ? stopScan : startScan}
+              title="Connect paired device"
+              onPress={() => {
+                void handleQuickPairedConnect();
+              }}
               loading={isConnectionBusy}
+              disabled={isConnectionBusy}
               style={styles.fullWidthButton}
             />
             <AppButton
-              title="Confirm paired device"
+              title={isScanning ? 'Stop scan' : 'Scan nearby devices'}
               variant="ghost"
               onPress={() => {
-                if (isScanning) {
-                  stopScan();
-                }
-                confirmSystemDevice();
+                void handleQuickScan();
               }}
               disabled={isConnectionBusy}
               style={styles.secondaryActionButton}
             />
-            {showPairedDeviceHint ? (
-              <AppText variant="muted" style={styles.helper}>
-                Use this when the HM-10 is already paired in system Bluetooth settings and does not
-                appear in the scan list.
-              </AppText>
-            ) : null}
             {isScanning ? (
               <AppText variant="muted" style={styles.scanningLabel}>
                 Searching for nearby sensors...
@@ -474,7 +500,7 @@ export function BluetoothDevicesSection() {
                 <AppText variant="muted">
                   {isScanning
                     ? 'Keep your sensor powered on and nearby. It will appear here when it is discovered.'
-                    : 'Tap "Scan for devices" to look for nearby BLE sensors.'}
+                    : 'Start a scan to pick from nearby BLE devices.'}
                 </AppText>
               </View>
             )}
@@ -491,138 +517,142 @@ export function BluetoothDevicesSection() {
             Last upload: {lastUploadStatus.message}
           </AppText>
         ) : null}
-      </Card>
 
-      <Card>
-        <SectionHeader title="Sensor setup" subtitle="Choose the preset that matches your device." />
-        <AppText variant="label" style={styles.profileLabel}>
-          Device profile
-        </AppText>
-        <View style={styles.profileRow}>
-          {profiles.map((profile) => (
-            <AppButton
-              key={profile.id}
-              title={profile.shortLabel}
-              variant={config.profile === profile.id ? 'secondary' : 'ghost'}
-              onPress={() => applyProfile(profile.id)}
-              style={styles.profileButton}
-            />
-          ))}
-        </View>
-        {activeProfile ? (
-          <>
-            <AppText variant="muted" style={styles.profileDescription}>
-              {activeProfile.description}
-            </AppText>
-            <View style={styles.configSummary}>
-              <AppText variant="label">Preset details</AppText>
-              <AppText variant="muted" style={styles.configSummaryText}>
-                Service {config.serviceUUID}, characteristic {config.characteristicUUID}, metric{' '}
-                {config.metric}.
-              </AppText>
-            </View>
-            <AppText variant="muted" style={styles.profileTip}>
-              {config.profile === 'arduino_hm10'
-                ? 'HM-10 modules usually use FFE0 / FFE1. Some clones use FFF0 / FFF1 instead.'
-                : 'Edit the UUIDs below if your peripheral advertises different values.'}
-            </AppText>
-          </>
-        ) : null}
-        <AppInput
-          label="Service UUID"
-          value={config.serviceUUID}
-          onChangeText={(value) => updateConfig({ serviceUUID: value })}
-          placeholder="FFE0"
-          autoCapitalize="characters"
-          autoCorrect={false}
-        />
-        <AppInput
-          label="Characteristic UUID"
-          value={config.characteristicUUID}
-          onChangeText={(value) => updateConfig({ characteristicUUID: value })}
-          placeholder="FFE1"
-          autoCapitalize="characters"
-          autoCorrect={false}
-        />
-        <AppInput
-          label="Metric name"
-          value={config.metric}
-          onChangeText={(value) => updateConfig({ metric: value })}
-          placeholder="sensor.aht20_temperature_c"
-          autoCapitalize="none"
-          autoCorrect={false}
-          helperText={
-            config.profile === 'arduino_hm10'
-              ? 'The Arduino mock sends named sensor.* metrics. This field controls the live chart focus and acts as a fallback if a packet omits its metric.'
-              : 'Used as the upload metric when the payload is a bare number or omits a metric name.'
-          }
-        />
-        {config.profile === 'arduino_hm10' ? (
-          <View style={styles.hm10ControlCard}>
-            <AppText variant="label">HM-10 UART baud</AppText>
-            <View style={styles.hm10BaudRow}>
-              {HM10_BAUD_RATE_OPTIONS.map((baud) => (
-                <AppButton
-                  key={baud}
-                  title={String(baud)}
-                  variant={config.hm10BaudRate === baud ? 'secondary' : 'ghost'}
-                  onPress={() => {
-                    setHm10ControlNotice(null);
-                    updateConfig({ hm10BaudRate: baud });
-                  }}
-                  style={styles.hm10BaudButton}
-                />
-              ))}
-            </View>
-            <AppText variant="muted" style={styles.hm10ControlHint}>
-              The app can switch the HM-10 between 1200, 2400, 4800, 9600, 19200, 38400, 57600,
-              and 115200 baud. Uno SoftwareSerial is usually happiest from 1200 through 38400, so
-              start there and only try the faster rates if you need recovery or a board with a
-              stronger serial link. If Transport debug shows changing hex/text but no parsed sample,
-              the HM-10 UART baud is still wrong.
-              {selectedHm10BaudNeedsCaution
-                ? ' The currently selected rate is in the higher-speed caution range for an Uno.'
-                : ''}
-            </AppText>
-            <AppButton
-              title={connectedDevice ? 'Apply baud and disconnect' : 'Connect to apply baud'}
-              variant="ghost"
-              onPress={handleApplyHm10Baud}
-              loading={isApplyingHm10Baud}
-              disabled={!connectedDevice}
-              style={styles.fullWidthButton}
-            />
-            {hm10ControlNotice ? (
-              <AppText
-                variant="muted"
-                style={[
-                  styles.hm10ControlNotice,
-                  hm10ControlNotice.kind === 'error' ? styles.hm10ControlNoticeError : null,
-                ]}
-              >
-                {hm10ControlNotice.text}
-              </AppText>
-            ) : null}
-          </View>
-        ) : null}
-        <View style={styles.switchRow}>
-          <AppText variant="body">Auto upload samples</AppText>
-          <AppToggle
-            value={config.autoUpload}
-            onValueChange={(value) => updateConfig({ autoUpload: value })}
+        <View style={styles.sectionToggleRow}>
+          <AppButton
+            title={showAdvancedSetup ? 'Hide advanced setup' : 'Show advanced setup'}
+            variant="ghost"
+            onPress={() => setShowAdvancedSetup((value) => !value)}
+            style={styles.sectionToggleButton}
+          />
+          <AppButton
+            title={showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'}
+            variant="ghost"
+            onPress={() => setShowDiagnostics((value) => !value)}
+            style={styles.sectionToggleButton}
           />
         </View>
       </Card>
 
-      <Card>
-        <SectionHeader
-          title="Live data"
-          subtitle={
-            focusedSample
-              ? `${focusMetric} - ${formatDate(new Date(focusedSample.ts).toISOString(), 'MMM D, HH:mm:ss')}`
-              : 'Waiting for payloads'
-          }
-        />
+      {showAdvancedSetup ? (
+        <Card>
+          <SectionHeader
+            title="Advanced setup"
+            subtitle="Only change UUIDs, baud, or metric routing when the quick connect flow is not enough."
+          />
+          {activeProfile ? (
+            <>
+              <View style={styles.configSummary}>
+                <AppText variant="label">Preset details</AppText>
+                <AppText variant="muted" style={styles.configSummaryText}>
+                  Service {config.serviceUUID}, characteristic {config.characteristicUUID}, metric{' '}
+                  {config.metric}.
+                </AppText>
+              </View>
+              <AppText variant="muted" style={styles.profileTip}>
+                {config.profile === 'arduino_hm10'
+                  ? 'HM-10 modules usually use FFE0 / FFE1. Some clones use FFF0 / FFF1 instead.'
+                  : 'Edit the UUIDs below only if your peripheral advertises different values.'}
+              </AppText>
+            </>
+          ) : null}
+          <AppInput
+            label="Service UUID"
+            value={config.serviceUUID}
+            onChangeText={(value) => updateConfig({ serviceUUID: value })}
+            placeholder="FFE0"
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+          <AppInput
+            label="Characteristic UUID"
+            value={config.characteristicUUID}
+            onChangeText={(value) => updateConfig({ characteristicUUID: value })}
+            placeholder="FFE1"
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+          <AppInput
+            label="Metric name"
+            value={config.metric}
+            onChangeText={(value) => updateConfig({ metric: value })}
+            placeholder="sensor.aht20_temperature_c"
+            autoCapitalize="none"
+            autoCorrect={false}
+            helperText={
+              config.profile === 'arduino_hm10'
+                ? 'The Arduino mock sends named sensor.* metrics. This field acts as a fallback if a packet omits its metric.'
+                : 'Used as the upload metric when the payload is a bare number or omits a metric name.'
+            }
+          />
+          {config.profile === 'arduino_hm10' ? (
+            <View style={styles.hm10ControlCard}>
+              <AppText variant="label">HM-10 UART baud</AppText>
+              <View style={styles.hm10BaudRow}>
+                {HM10_BAUD_RATE_OPTIONS.map((baud) => (
+                  <AppButton
+                    key={baud}
+                    title={String(baud)}
+                    variant={config.hm10BaudRate === baud ? 'secondary' : 'ghost'}
+                    onPress={() => {
+                      setHm10ControlNotice(null);
+                      updateConfig({ hm10BaudRate: baud });
+                    }}
+                    style={styles.hm10BaudButton}
+                  />
+                ))}
+              </View>
+              <AppText variant="muted" style={styles.hm10ControlHint}>
+                The app can switch the HM-10 between 1200, 2400, 4800, 9600, 19200, 38400, 57600,
+                and 115200 baud. Uno SoftwareSerial is usually happiest from 1200 through 38400, so
+                start there and only try the faster rates if you need recovery or a board with a
+                stronger serial link. If Transport debug shows changing hex/text but no parsed sample,
+                the HM-10 UART baud is still wrong.
+                {selectedHm10BaudNeedsCaution
+                  ? ' The currently selected rate is in the higher-speed caution range for an Uno.'
+                  : ''}
+              </AppText>
+              <AppButton
+                title={connectedDevice ? 'Apply baud and disconnect' : 'Connect to apply baud'}
+                variant="ghost"
+                onPress={handleApplyHm10Baud}
+                loading={isApplyingHm10Baud}
+                disabled={!connectedDevice}
+                style={styles.fullWidthButton}
+              />
+              {hm10ControlNotice ? (
+                <AppText
+                  variant="muted"
+                  style={[
+                    styles.hm10ControlNotice,
+                    hm10ControlNotice.kind === 'error' ? styles.hm10ControlNoticeError : null,
+                  ]}
+                >
+                  {hm10ControlNotice.text}
+                </AppText>
+              ) : null}
+            </View>
+          ) : null}
+          <View style={styles.switchRow}>
+            <AppText variant="body">Auto upload samples</AppText>
+            <AppToggle
+              value={config.autoUpload}
+              onValueChange={(value) => updateConfig({ autoUpload: value })}
+            />
+          </View>
+        </Card>
+      ) : null}
+
+      {showDiagnostics ? (
+        <Card>
+          <SectionHeader
+            title="Connection diagnostics"
+            subtitle={
+              lastSample
+                ? `${formatBluetoothMetricLabel(lastSample.metric)} · ${formatDate(new Date(lastSample.ts).toISOString(), 'MMM D, HH:mm:ss')}`
+                : 'Waiting for payloads'
+            }
+          />
         <View
           style={[
             styles.liveBanner,
@@ -644,10 +674,20 @@ export function BluetoothDevicesSection() {
             </AppText>
           </View>
         </View>
-        <View style={styles.metricsRow}>
-          <Metric label="Metric" value={focusMetric} compact valueNumberOfLines={2} />
-          <Metric label="Value" value={formatNumber(focusedSample?.value)} />
-        </View>
+        {lastSample ? (
+          <View style={styles.metricsRow}>
+            <Metric
+              label="Metric"
+              value={formatBluetoothMetricLabel(lastSample.metric)}
+              compact
+              valueNumberOfLines={2}
+            />
+            <Metric
+              label="Value"
+              value={formatBluetoothMetricReading(lastSample.metric, lastSample.value)}
+            />
+          </View>
+        ) : null}
         <View style={styles.rawPayload}>
           <AppText variant="label">Last parsed payload</AppText>
           <AppText variant="muted" style={styles.rawPayloadText}>
@@ -726,23 +766,61 @@ export function BluetoothDevicesSection() {
               {latestMetricSamples.map((sample) => (
                 <View key={`${sample.metric}-${sample.ts}`} style={styles.metricSnapshotRow}>
                   <AppText variant="body" weight="semibold" style={styles.metricSnapshotMetric}>
-                    {sample.metric}
+                    {formatBluetoothMetricLabel(sample.metric)}
                   </AppText>
                   <AppText variant="muted" style={styles.metricSnapshotValue}>
-                    {formatNumber(sample.value)}
+                    {formatBluetoothMetricReading(sample.metric, sample.value)}
                   </AppText>
                 </View>
               ))}
             </View>
           </View>
         ) : null}
-        {liveTrend.length === 0 ? (
-          <View style={styles.emptyChart}>
-            <AppText style={styles.emptyChartIcon}>o</AppText>
-            <AppText variant="muted">Waiting for samples for {focusMetric}</AppText>
+        {latestMetricSamples.length === 0 ? (
+          <View style={styles.emptyState}>
+            <AppText variant="body" weight="semibold">
+              No live diagnostics yet
+            </AppText>
+            <AppText variant="muted">
+              Once the device sends packets, the latest parsed metrics will appear here.
+            </AppText>
+          </View>
+        ) : null}
+      </Card>
+      ) : null}
+
+      <Card>
+        <SectionHeader
+          title="Stored history"
+          subtitle="Saved on this device so you can review entered and received samples in the app."
+        />
+        {storedSampleHistory.length ? (
+          <View style={styles.historyList}>
+            {storedSampleHistory.map((sample) => (
+              <View key={`${sample.metric}-${sample.ts}-${sample.raw}`} style={styles.historyRow}>
+                <View style={styles.historyCopy}>
+                  <AppText variant="body" weight="semibold" style={styles.historyMetric}>
+                    {formatBluetoothMetricLabel(sample.metric)}
+                  </AppText>
+                  <AppText variant="muted" style={styles.historyMeta}>
+                    {sample.metric} · {formatDate(new Date(sample.ts).toISOString(), 'MMM D, HH:mm:ss')}
+                  </AppText>
+                </View>
+                <AppText variant="body" weight="semibold" style={styles.historyValue}>
+                  {formatBluetoothMetricReading(sample.metric, sample.value)}
+                </AppText>
+              </View>
+            ))}
           </View>
         ) : (
-          <TrendChart data={liveTrend} yLabel="Live value" />
+          <View style={styles.emptyState}>
+            <AppText variant="body" weight="semibold">
+              No stored samples yet
+            </AppText>
+            <AppText variant="muted">
+              Connect a sensor or publish a sample and it will be kept here for quick review.
+            </AppText>
+          </View>
         )}
       </Card>
     </>
@@ -986,6 +1064,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     gap: spacing.sm,
   },
+  sectionToggleRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  sectionToggleButton: {
+    flex: 1,
+  },
   metricsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1073,13 +1159,34 @@ const styles = StyleSheet.create({
   metricSnapshotValue: {
     fontSize: 13,
   },
-  emptyChart: {
-    alignItems: 'center',
-    paddingVertical: spacing.lg,
-    gap: spacing.xs,
+  historyList: {
+    gap: spacing.sm,
   },
-  emptyChartIcon: {
-    fontSize: 28,
-    color: colors.muted,
+  historyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.glass,
+  },
+  historyCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  historyMetric: {
+    minWidth: 0,
+  },
+  historyMeta: {
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  historyValue: {
+    fontSize: 14,
+    textAlign: 'right',
   },
 });

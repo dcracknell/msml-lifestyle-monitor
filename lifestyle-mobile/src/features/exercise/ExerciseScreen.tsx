@@ -53,6 +53,7 @@ import { useBluetooth } from '../../providers/BluetoothProvider';
 import { useSyncQueue } from '../../providers/SyncProvider';
 import { colors, spacing } from '../../theme';
 import { formatDate, formatDateTime, formatDistance, formatPace, titleCase } from '../../utils/format';
+import { buildBluetoothTrendSeries } from '../devices/bluetoothMetricUtils';
 import {
   startExerciseBackgroundLocationUpdates,
   stopExerciseBackgroundLocationUpdates,
@@ -164,10 +165,12 @@ export function ExerciseScreen() {
   const { runOrQueue } = useSyncQueue();
   const queryClient = useQueryClient();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
+  const viewingOwnData = !requestSubject;
 
   const {
     connectedDevice,
     recentSamples,
+    sampleHistory,
     sendCommand,
     manualPublish,
     setWorkoutMirrorSuppressed,
@@ -704,6 +707,41 @@ export function ExerciseScreen() {
       return latest;
     }, 0);
   }, [recentSamples]);
+  const liveExerciseSeries = useMemo(
+    () =>
+      buildBluetoothTrendSeries(
+        sampleHistory,
+        [
+          {
+            key: DEVICE_METRICS.heartRate,
+            label: 'Heart rate',
+            yLabel: 'bpm',
+            matches: isWatchHeartRateMetric,
+            normalize: (value) => (value > 0 ? Math.round(value) : null),
+            formatValue: (value) => (value != null ? `${Math.round(value)} bpm` : '--'),
+          },
+          {
+            key: DEVICE_METRICS.distance,
+            label: 'Distance',
+            yLabel: 'km',
+            matches: isWatchDistanceMetric,
+            normalize: (value, metric) => normalizeDistanceSample(metric, value),
+            formatValue: (value) =>
+              value != null ? `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} km` : '--',
+          },
+          {
+            key: DEVICE_METRICS.pace,
+            label: 'Pace',
+            yLabel: 'sec/km',
+            matches: (metric) => isWatchPaceMetric(metric) || isWatchSpeedMetric(metric),
+            normalize: (value, metric) => normalizePaceSample(metric, value),
+            formatValue: (value) => formatPace(value),
+          },
+        ],
+        { limit: 24, labelFormat: 'HH:mm:ss' }
+      ),
+    [sampleHistory]
+  );
 
   const liveDistanceKm = [watchMetrics.distance, phoneDistanceKm]
     .filter((value): value is number => value !== null && Number.isFinite(value))
@@ -1736,6 +1774,49 @@ export function ExerciseScreen() {
           </AppText>
         )}
       </View>
+
+      {viewingOwnData ? (
+        <View style={styles.card}>
+          <View style={styles.sectionIntroCompact}>
+            <EyebrowLabel>LIVE DEVICE FEED</EyebrowLabel>
+            <AppText style={styles.cardTitle}>Wearable charts</AppText>
+          </View>
+          <AppText style={styles.cardSubtitle}>
+            {liveExerciseSeries.length
+              ? `${connectedDevice?.name || 'Bluetooth device'} · ${formatDateTime(
+                  new Date((liveExerciseSeries[0]?.latestTs || latestWatchSignalTs) as number).toISOString(),
+                  'MMM D, HH:mm:ss'
+                )}`
+              : connectedDevice
+              ? 'Connected and waiting for distance, pace, or heart-rate samples.'
+              : 'Connect a wearable in Settings to see live heart-rate, distance, and pace charts here.'}
+          </AppText>
+          {liveExerciseSeries.length ? (
+            liveExerciseSeries.map((series) => (
+              <View key={series.key} style={styles.liveFeedPanel}>
+                <View style={styles.liveFeedHeader}>
+                  <AppText style={styles.liveFeedTitle}>{series.label}</AppText>
+                  <AppText style={styles.liveFeedValue}>{series.latestValueLabel}</AppText>
+                </View>
+                {series.points.length > 1 ? (
+                  <TrendChart
+                    data={series.points}
+                    yLabel={series.yLabel}
+                    height={150}
+                    chartPadding={{ top: 20, bottom: 40, left: 52, right: 16 }}
+                  />
+                ) : (
+                  <AppText style={styles.mutedText}>Waiting for a few more samples to draw the chart.</AppText>
+                )}
+              </View>
+            ))
+          ) : (
+            <Pressable onPress={() => navigation.navigate('Settings' as never)}>
+              <AppText style={styles.linkText}>Open device settings</AppText>
+            </Pressable>
+          )}
+        </View>
+      ) : null}
 
       <View style={styles.card}>
         <View style={styles.sectionIntroCompact}>
@@ -2818,6 +2899,29 @@ const styles = StyleSheet.create({
   },
   trendSpacing: {
     marginTop: spacing.md,
+  },
+  liveFeedPanel: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    gap: spacing.sm,
+  },
+  liveFeedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  liveFeedTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  liveFeedValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffd1bf',
   },
 
   // ── Watch link card ───────────────────────────────────────────────────────────
