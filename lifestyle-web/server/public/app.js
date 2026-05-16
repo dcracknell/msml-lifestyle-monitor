@@ -9933,13 +9933,21 @@ function describeVitalsDelta(delta, unit = '') {
   return `${Math.abs(delta)}${unit ? ` ${unit}` : ''} ${direction} vs previous reading.`;
 }
 
+function toFiniteVitalsMetricValue(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function pickVitalsNumber(primary, secondary) {
-  const primaryValue = Number(primary);
-  if (Number.isFinite(primaryValue)) {
+  const primaryValue = toFiniteVitalsMetricValue(primary);
+  if (primaryValue != null) {
     return primaryValue;
   }
-  const secondaryValue = Number(secondary);
-  if (Number.isFinite(secondaryValue)) {
+  const secondaryValue = toFiniteVitalsMetricValue(secondary);
+  if (secondaryValue != null) {
     return secondaryValue;
   }
   return null;
@@ -9947,13 +9955,13 @@ function pickVitalsNumber(primary, secondary) {
 
 function formatBloodPressure(entry) {
   if (!entry) return '— mmHg';
-  const systolic = Number(entry.systolic);
-  const diastolic = Number(entry.diastolic);
-  if (Number.isFinite(systolic) && Number.isFinite(diastolic)) {
+  const systolic = toFiniteVitalsMetricValue(entry.systolic);
+  const diastolic = toFiniteVitalsMetricValue(entry.diastolic);
+  if (systolic != null && diastolic != null) {
     return `${systolic}/${diastolic} mmHg`;
   }
-  if (Number.isFinite(systolic) || Number.isFinite(diastolic)) {
-    return `${Number.isFinite(systolic) ? systolic : diastolic} mmHg`;
+  if (systolic != null || diastolic != null) {
+    return `${systolic != null ? systolic : diastolic} mmHg`;
   }
   return '— mmHg';
 }
@@ -9981,8 +9989,8 @@ function renderVitalsDashboard(vitals = state.vitals) {
   const windowLabel = stats?.window ? `last ${stats.window} days` : 'latest sync';
 
   if (vitalsRestingHrValue) {
-    const value = Number(latest?.restingHr);
-    vitalsRestingHrValue.textContent = Number.isFinite(value) ? `${value} bpm` : '—';
+    const value = toFiniteVitalsMetricValue(latest?.restingHr);
+    vitalsRestingHrValue.textContent = value != null ? `${value} bpm` : '—';
   }
   if (vitalsRestingHrNote) {
     const deltaCopy = describeVitalsDelta(stats?.restingHrDelta, 'bpm');
@@ -10019,8 +10027,8 @@ function renderVitalsDashboard(vitals = state.vitals) {
     }
   }
   if (vitalsGlucoseValue) {
-    const value = Number(latest?.glucose);
-    vitalsGlucoseValue.textContent = Number.isFinite(value) ? `${value} mg/dL` : '—';
+    const value = toFiniteVitalsMetricValue(latest?.glucose);
+    vitalsGlucoseValue.textContent = value != null ? `${value} mg/dL` : '—';
   }
   if (vitalsGlucoseNote) {
     const deltaCopy = describeVitalsDelta(stats?.glucoseDelta, 'mg/dL');
@@ -10044,7 +10052,7 @@ function renderVitalsHrvChart(timeline = []) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const chronological = sortVitalsTimeline(timeline).filter((entry) =>
-    Number.isFinite(Number(entry?.hrvScore))
+    toFiniteVitalsMetricValue(entry?.hrvScore) != null
   );
   if (!chronological.length) {
     state.charts.vitalsHrv?.destroy();
@@ -10062,7 +10070,7 @@ function renderVitalsHrvChart(timeline = []) {
       datasets: [
         {
           label: 'HRV (ms)',
-          data: chronological.map((entry) => Number(entry.hrvScore)),
+          data: chronological.map((entry) => toFiniteVitalsMetricValue(entry.hrvScore)),
           borderColor: '#43d9c9',
           backgroundColor: 'rgba(67, 217, 201, 0.12)',
           borderWidth: 2,
@@ -10105,7 +10113,7 @@ function renderVitalsRestingHrChart(timeline = []) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const chronological = sortVitalsTimeline(timeline).filter((entry) =>
-    Number.isFinite(Number(entry?.restingHr))
+    toFiniteVitalsMetricValue(entry?.restingHr) != null
   );
   if (!chronological.length) {
     state.charts.vitalsRestingHr?.destroy();
@@ -10116,7 +10124,7 @@ function renderVitalsRestingHrChart(timeline = []) {
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
   const averageHr =
-    chronological.reduce((sum, entry) => sum + Number(entry.restingHr), 0) / chronological.length;
+    chronological.reduce((sum, entry) => sum + toFiniteVitalsMetricValue(entry.restingHr), 0) / chronological.length;
   state.charts.vitalsRestingHr?.destroy();
   state.charts.vitalsRestingHr = createChart(ctx, {
     type: 'line',
@@ -10125,7 +10133,7 @@ function renderVitalsRestingHrChart(timeline = []) {
       datasets: [
         {
           label: 'Resting HR',
-          data: chronological.map((entry) => Number(entry.restingHr)),
+          data: chronological.map((entry) => toFiniteVitalsMetricValue(entry.restingHr)),
           borderColor: '#f87171',
           backgroundColor: 'rgba(248, 113, 113, 0.14)',
           borderWidth: 2,
@@ -10177,7 +10185,7 @@ function renderVitalsGlucoseChart(timeline = []) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const chronological = sortVitalsTimeline(timeline).filter((entry) =>
-    Number.isFinite(Number(entry?.glucose))
+    toFiniteVitalsMetricValue(entry?.glucose) != null
   );
   if (!chronological.length) {
     state.charts.vitalsGlucose?.destroy();
@@ -10195,7 +10203,7 @@ function renderVitalsGlucoseChart(timeline = []) {
       datasets: [
         {
           label: 'Glucose',
-          data: chronological.map((entry) => Number(entry.glucose)),
+          data: chronological.map((entry) => toFiniteVitalsMetricValue(entry.glucose)),
           borderColor: '#a78bfa',
           backgroundColor: 'rgba(167, 139, 250, 0.14)',
           borderWidth: 2,
@@ -10396,43 +10404,48 @@ function hasVitalsAverage(count) {
 }
 
 function classifyRestingHr(value) {
-  if (!Number.isFinite(value)) return 'Awaiting data';
-  if (value < 50) return 'Below typical';
-  if (value <= 60) return 'Steady';
-  if (value <= 80) return 'Within range';
+  const numeric = toFiniteVitalsMetricValue(value);
+  if (numeric == null) return 'Awaiting data';
+  if (numeric < 50) return 'Below typical';
+  if (numeric <= 60) return 'Steady';
+  if (numeric <= 80) return 'Within range';
   return 'Elevated';
 }
 
 function classifySpo2(value) {
-  if (!Number.isFinite(value)) return 'Awaiting data';
-  if (value >= 95) return 'Normal oxygenation';
-  if (value >= 92) return 'Slightly low';
+  const numeric = toFiniteVitalsMetricValue(value);
+  if (numeric == null) return 'Awaiting data';
+  if (numeric >= 95) return 'Normal oxygenation';
+  if (numeric >= 92) return 'Slightly low';
   return 'Low oxygen';
 }
 
 function classifyHrv(value, baseline) {
-  if (!Number.isFinite(value)) return 'Awaiting data';
-  if (Number.isFinite(baseline)) {
-    if (value >= baseline + 8) return 'Above baseline';
-    if (value <= baseline - 8) return 'Below baseline';
+  const numeric = toFiniteVitalsMetricValue(value);
+  const normalizedBaseline = toFiniteVitalsMetricValue(baseline);
+  if (numeric == null) return 'Awaiting data';
+  if (normalizedBaseline != null) {
+    if (numeric >= normalizedBaseline + 8) return 'Above baseline';
+    if (numeric <= normalizedBaseline - 8) return 'Below baseline';
     return 'Near baseline';
   }
-  if (value >= 100) return 'Strong recovery';
-  if (value >= 60) return 'Moderate recovery';
+  if (numeric >= 100) return 'Strong recovery';
+  if (numeric >= 60) return 'Moderate recovery';
   return 'Suppressed recovery';
 }
 
 function classifyStress(value) {
-  if (!Number.isFinite(value)) return 'Awaiting data';
-  if (value <= 25) return 'Low strain';
-  if (value <= 50) return 'Moderate strain';
+  const numeric = toFiniteVitalsMetricValue(value);
+  if (numeric == null) return 'Awaiting data';
+  if (numeric <= 25) return 'Low strain';
+  if (numeric <= 50) return 'Moderate strain';
   return 'High strain';
 }
 
 function classifyBloodPressure(entry) {
-  const systolic = Number(entry?.systolic);
-  const diastolic = Number(entry?.diastolic);
-  if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
+  const systolic = toFiniteVitalsMetricValue(entry?.systolic);
+  const diastolic = toFiniteVitalsMetricValue(entry?.diastolic);
+  if (systolic == null || diastolic == null) {
     return 'Awaiting data';
   }
   if (systolic < 120 && diastolic < 80) return 'In range';
@@ -10441,9 +10454,10 @@ function classifyBloodPressure(entry) {
 }
 
 function classifyGlucose(value) {
-  if (!Number.isFinite(value)) return 'Awaiting data';
-  if (value < 70) return 'Below target';
-  if (value <= 140) return 'In target band';
+  const numeric = toFiniteVitalsMetricValue(value);
+  if (numeric == null) return 'Awaiting data';
+  if (numeric < 70) return 'Below target';
+  if (numeric <= 140) return 'In target band';
   return 'Above target';
 }
 
@@ -10454,36 +10468,36 @@ function renderVitalsSummaryTable(latest, stats) {
   const rows = [
     {
       label: 'Resting HR',
-      value: Number.isFinite(Number(latest?.restingHr)) ? Math.round(Number(latest.restingHr)) : '—',
+      value: toFiniteVitalsMetricValue(latest?.restingHr) != null ? Math.round(toFiniteVitalsMetricValue(latest.restingHr)) : '—',
       unit: 'bpm',
-      copy: `${classifyRestingHr(Number(latest?.restingHr))}. ${formatVitalsRecency(
+      copy: `${classifyRestingHr(latest?.restingHr)}. ${formatVitalsRecency(
         latestVitalsDateForField(latest, 'restingHr'),
         'No recent heart-rate reading.'
       )}`,
     },
     {
       label: 'SpO₂',
-      value: Number.isFinite(Number(latest?.spo2)) ? Math.round(Number(latest.spo2)) : '—',
+      value: toFiniteVitalsMetricValue(latest?.spo2) != null ? Math.round(toFiniteVitalsMetricValue(latest.spo2)) : '—',
       unit: '%',
-      copy: `${classifySpo2(Number(latest?.spo2))}. ${formatVitalsRecency(
+      copy: `${classifySpo2(latest?.spo2)}. ${formatVitalsRecency(
         latestVitalsDateForField(latest, 'spo2'),
         'No recent oxygen reading.'
       )}`,
     },
     {
       label: 'HRV',
-      value: Number.isFinite(Number(latest?.hrvScore)) ? Math.round(Number(latest.hrvScore)) : '—',
+      value: toFiniteVitalsMetricValue(latest?.hrvScore) != null ? Math.round(toFiniteVitalsMetricValue(latest.hrvScore)) : '—',
       unit: 'ms',
-      copy: `${classifyHrv(Number(latest?.hrvScore), hrvBaseline)}. ${formatVitalsRecency(
+      copy: `${classifyHrv(latest?.hrvScore, hrvBaseline)}. ${formatVitalsRecency(
         latestVitalsDateForField(latest, 'hrvScore'),
         'No recent HRV reading.'
       )}`,
     },
     {
       label: 'Stress',
-      value: Number.isFinite(Number(latest?.stressScore)) ? Math.round(Number(latest.stressScore)) : '—',
+      value: toFiniteVitalsMetricValue(latest?.stressScore) != null ? Math.round(toFiniteVitalsMetricValue(latest.stressScore)) : '—',
       unit: 'score',
-      copy: `${classifyStress(Number(latest?.stressScore))}. ${formatVitalsRecency(
+      copy: `${classifyStress(latest?.stressScore)}. ${formatVitalsRecency(
         latestVitalsDateForField(latest, 'stressScore'),
         'No recent stress reading.'
       )}`,
@@ -10499,9 +10513,9 @@ function renderVitalsSummaryTable(latest, stats) {
     },
     {
       label: 'Glucose',
-      value: Number.isFinite(Number(latest?.glucose)) ? Math.round(Number(latest.glucose)) : '—',
+      value: toFiniteVitalsMetricValue(latest?.glucose) != null ? Math.round(toFiniteVitalsMetricValue(latest.glucose)) : '—',
       unit: 'mg/dL',
-      copy: `${classifyGlucose(Number(latest?.glucose))}. ${formatVitalsRecency(
+      copy: `${classifyGlucose(latest?.glucose)}. ${formatVitalsRecency(
         latestVitalsDateForField(latest, 'glucose'),
         'No recent glucose reading.'
       )}`,
@@ -10529,7 +10543,7 @@ function renderVitalsGlucoseChartEnhanced(timeline = []) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const chronological = sortVitalsTimeline(timeline).filter((entry) =>
-    Number.isFinite(Number(entry?.glucose))
+    toFiniteVitalsMetricValue(entry?.glucose) != null
   );
   if (!chronological.length) {
     state.charts.vitalsGlucose?.destroy();
@@ -10540,7 +10554,7 @@ function renderVitalsGlucoseChartEnhanced(timeline = []) {
 
   const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
   const ctx = (activeCanvas || canvas).getContext('2d');
-  const glucoseValues = chronological.map((entry) => Number(entry.glucose));
+  const glucoseValues = chronological.map((entry) => toFiniteVitalsMetricValue(entry.glucose));
 
   state.charts.vitalsGlucose?.destroy();
   state.charts.vitalsGlucose = createChart(ctx, {
@@ -10628,11 +10642,11 @@ function renderVitalsDashboardEnhanced(vitals = state.vitals) {
   const timeline = Array.isArray(vitals?.timeline) ? vitals.timeline : [];
 
   if (vitalsRestingHrValue) {
-    const value = Number(latest?.restingHr);
-    vitalsRestingHrValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+    const value = toFiniteVitalsMetricValue(latest?.restingHr);
+    vitalsRestingHrValue.textContent = value != null ? `${Math.round(value)}` : '—';
   }
   if (vitalsRestingHrStatus) {
-    vitalsRestingHrStatus.textContent = classifyRestingHr(Number(latest?.restingHr));
+    vitalsRestingHrStatus.textContent = classifyRestingHr(latest?.restingHr);
   }
   if (vitalsRestingHrNote) {
     const deltaCopy = describeVitalsDelta(stats?.restingHrDelta, 'bpm');
@@ -10651,8 +10665,8 @@ function renderVitalsDashboardEnhanced(vitals = state.vitals) {
   }
   if (vitalsHrvStatus) {
     vitalsHrvStatus.textContent = classifyHrv(
-      Number(latest?.hrvScore),
-      hasVitalsAverage(stats?.hrvCount) ? Number(stats?.hrvAvg) : null
+      latest?.hrvScore,
+      hasVitalsAverage(stats?.hrvCount) ? stats?.hrvAvg : null
     );
   }
   if (vitalsHrvNote) {
@@ -10666,7 +10680,7 @@ function renderVitalsDashboardEnhanced(vitals = state.vitals) {
     vitalsSpo2Value.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
   }
   if (vitalsSpo2Status) {
-    vitalsSpo2Status.textContent = classifySpo2(Number(latest?.spo2));
+    vitalsSpo2Status.textContent = classifySpo2(latest?.spo2);
   }
   if (vitalsSpo2Note) {
     vitalsSpo2Note.textContent = hasVitalsAverage(stats?.spo2Count) && Number.isFinite(stats?.spo2Avg)
@@ -10679,7 +10693,7 @@ function renderVitalsDashboardEnhanced(vitals = state.vitals) {
     vitalsStressValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
   }
   if (vitalsStressStatus) {
-    vitalsStressStatus.textContent = classifyStress(Number(latest?.stressScore));
+    vitalsStressStatus.textContent = classifyStress(latest?.stressScore);
   }
   if (vitalsStressNote) {
     vitalsStressNote.textContent = hasVitalsAverage(stats?.stressCount) && Number.isFinite(stats?.stressAvg)
@@ -10706,11 +10720,11 @@ function renderVitalsDashboardEnhanced(vitals = state.vitals) {
   }
 
   if (vitalsGlucoseValue) {
-    const value = Number(latest?.glucose);
-    vitalsGlucoseValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+    const value = toFiniteVitalsMetricValue(latest?.glucose);
+    vitalsGlucoseValue.textContent = value != null ? `${Math.round(value)}` : '—';
   }
   if (vitalsGlucoseStatus) {
-    vitalsGlucoseStatus.textContent = classifyGlucose(Number(latest?.glucose));
+    vitalsGlucoseStatus.textContent = classifyGlucose(latest?.glucose);
   }
   if (vitalsGlucoseNote) {
     const deltaCopy = describeVitalsDelta(stats?.glucoseDelta, 'mg/dL');
