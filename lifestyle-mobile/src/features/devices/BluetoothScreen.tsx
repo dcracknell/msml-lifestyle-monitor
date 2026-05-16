@@ -4,6 +4,7 @@ import { AppButton, AppInput, AppText, Card, SectionHeader, TrendChart } from '.
 import {
   BluetoothDeviceSummary,
   HM10_BAUD_RATE_OPTIONS,
+  isHm10UnoCautionBaudRate,
   useBluetooth,
 } from '../../providers/BluetoothProvider';
 import { colors, spacing } from '../../theme';
@@ -33,6 +34,45 @@ function formatSampleFreshness(ts: number | null | undefined, now: number) {
 
   const ageHours = Math.round(ageMinutes / 60);
   return `Last packet ${ageHours}h ago.`;
+}
+
+function formatTrafficFreshness(ts: number | null | undefined, now: number) {
+  if (!ts) {
+    return 'No BLE notifications received yet.';
+  }
+  return formatSampleFreshness(ts, now);
+}
+
+function formatTransportOutcome(outcome: string) {
+  switch (outcome) {
+    case 'parsed':
+      return 'Parsed sample';
+    case 'buffering':
+      return 'Waiting for newline';
+    case 'binary_only':
+      return 'Bytes only';
+    case 'overflow':
+      return 'Buffer overflow';
+    case 'unparsed':
+      return 'Unparsed text';
+    case 'empty':
+      return 'Empty packet';
+    default:
+      return 'Idle';
+  }
+}
+
+function formatHm10LinkGuardStatus(status: string) {
+  switch (status) {
+    case 'checking':
+      return 'Checking';
+    case 'verified':
+      return 'Verified';
+    case 'failed':
+      return 'Needs attention';
+    default:
+      return 'Idle';
+  }
 }
 
 function StatusPill({ label, active }: { label: string; active?: boolean }) {
@@ -151,6 +191,8 @@ export function BluetoothDevicesSection() {
     connectedDevice,
     lastSample,
     recentSamples,
+    transportDebug,
+    hm10LinkGuard,
     lastUploadStatus,
     error,
     startScan,
@@ -159,6 +201,7 @@ export function BluetoothDevicesSection() {
     confirmSystemDevice,
     disconnectFromDevice,
     applyHm10BaudRate,
+    verifyHm10Link,
   } = useBluetooth();
   const [now, setNow] = useState(() => Date.now());
   const [isApplyingHm10Baud, setIsApplyingHm10Baud] = useState(false);
@@ -170,7 +213,7 @@ export function BluetoothDevicesSection() {
   useEffect(() => {
     setNow(Date.now());
 
-    if (!connectedDevice && !lastSample) {
+    if (!connectedDevice && !lastSample && !transportDebug.lastNotificationTs) {
       return undefined;
     }
 
@@ -179,7 +222,7 @@ export function BluetoothDevicesSection() {
     }, 1_000);
 
     return () => clearInterval(timer);
-  }, [connectedDevice, lastSample?.ts]);
+  }, [connectedDevice, lastSample?.ts, transportDebug.lastNotificationTs]);
 
   const activeProfile = useMemo(
     () => profiles.find((profile) => profile.id === config.profile) || profiles[0],
@@ -232,26 +275,52 @@ export function BluetoothDevicesSection() {
 
   const scanStatusLabel = status === 'connected' ? 'Connected' : isScanning ? 'Scanning' : 'Ready';
   const lastSampleAgeMs = lastSample ? Math.max(0, now - lastSample.ts) : null;
+  const lastTrafficAgeMs = transportDebug.lastNotificationTs
+    ? Math.max(0, now - transportDebug.lastNotificationTs)
+    : null;
   const isReceivingLiveData = lastSampleAgeMs !== null && lastSampleAgeMs <= LIVE_SAMPLE_WINDOW_MS;
+  const isReceivingAnyTraffic = lastTrafficAgeMs !== null && lastTrafficAgeMs <= LIVE_SAMPLE_WINDOW_MS;
+  const hasNeverSeenHm10Traffic =
+    config.profile === 'arduino_hm10' &&
+    Boolean(connectedDevice) &&
+    transportDebug.totalNotifications === 0;
   const isConnectionBusy = status === 'connecting';
   const streamStatusLabel = isReceivingLiveData
     ? 'Data live'
+    : isReceivingAnyTraffic
+      ? 'Traffic only'
     : lastSample
       ? 'Data waiting'
       : 'No data';
   const liveStatusTitle = isReceivingLiveData
     ? 'Live data is coming in'
+    : isReceivingAnyTraffic
+      ? 'BLE traffic detected'
     : connectedDevice
       ? 'Connected, waiting for data'
       : 'No live data yet';
   const liveStatusMessage = connectedDevice
     ? isReceivingLiveData
       ? 'Packets are arriving from your sensor now.'
+      : isReceivingAnyTraffic
+        ? 'Notifications are arriving, but the app has not parsed a clean sensor sample yet.'
+      : hasNeverSeenHm10Traffic
+        ? 'Connected, but the HM-10 has not emitted any BLE notifications on this service yet. That usually means the UART baud or BLE UART profile still needs repair.'
       : 'The device is connected, but no new packets have arrived recently.'
     : 'Connect a device to start receiving live samples.';
   const liveFreshnessLabel = formatSampleFreshness(lastSample?.ts, now);
+  const trafficFreshnessLabel = formatTrafficFreshness(transportDebug.lastNotificationTs, now);
+  const statusFreshnessLabel = isReceivingLiveData ? liveFreshnessLabel : trafficFreshnessLabel;
   const showPairedDeviceHint =
     config.profile === 'arduino_hm10' || config.profile === 'apple_watch_companion';
+  const selectedHm10BaudNeedsCaution = isHm10UnoCautionBaudRate(config.hm10BaudRate);
+  const isCheckingHm10Link = hm10LinkGuard.status === 'checking';
+  const hm10LinkProbeFreshness = hm10LinkGuard.lastProbeTs
+    ? formatSampleFreshness(hm10LinkGuard.lastProbeTs, now)
+    : 'No stream probe parsed yet.';
+  const hm10LinkVerifiedFreshness = hm10LinkGuard.lastVerifiedTs
+    ? formatSampleFreshness(hm10LinkGuard.lastVerifiedTs, now)
+    : 'Bidirectional link has not been verified yet.';
   const handleApplyHm10Baud = async () => {
     setIsApplyingHm10Baud(true);
     setHm10ControlNotice(null);
@@ -262,7 +331,10 @@ export function BluetoothDevicesSection() {
         kind: 'info',
         text:
           `Saved ${appliedBaud} baud. The app disconnected so the Arduino can switch ` +
-          'the HM-10 UART side. Wait 2 seconds, then reconnect.',
+          'the HM-10 UART side. Wait 2 seconds, reconnect, then watch for sensor.hm10_link_probe or Transport debug traffic.' +
+          (isHm10UnoCautionBaudRate(appliedBaud)
+            ? ' That rate is above the usual Uno SoftwareSerial comfort zone, so if the stream goes noisy try 38400 or below.'
+            : ''),
       });
     } catch (applyError) {
       setHm10ControlNotice({
@@ -276,6 +348,35 @@ export function BluetoothDevicesSection() {
       setIsApplyingHm10Baud(false);
     }
   };
+  const handleVerifyHm10Link = async () => {
+    try {
+      await verifyHm10Link();
+    } catch {
+      // The provider records a user-facing failure message in hm10LinkGuard.
+    }
+  };
+
+  useEffect(() => {
+    if (config.profile !== 'arduino_hm10' || !connectedDevice || status !== 'connected') {
+      return undefined;
+    }
+    if (transportDebug.totalNotifications > 0 || hm10LinkGuard.lastCheckStartedTs !== null) {
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      verifyHm10Link().catch(() => {
+        // The provider records a user-facing failure message in hm10LinkGuard.
+      });
+    }, 1_500);
+    return () => clearTimeout(timer);
+  }, [
+    config.profile,
+    connectedDevice?.id,
+    hm10LinkGuard.lastCheckStartedTs,
+    status,
+    transportDebug.totalNotifications,
+    verifyHm10Link,
+  ]);
 
   return (
     <>
@@ -293,7 +394,7 @@ export function BluetoothDevicesSection() {
           <View style={styles.statusPills}>
             <StatusPill label={isPoweredOn ? 'Bluetooth on' : 'Bluetooth off'} active={isPoweredOn} />
             <StatusPill label={scanStatusLabel} active={status === 'connected' || isScanning} />
-            <StatusPill label={streamStatusLabel} active={isReceivingLiveData} />
+            <StatusPill label={streamStatusLabel} active={isReceivingLiveData || isReceivingAnyTraffic} />
           </View>
           {activeProfile ? (
             <AppText variant="muted" style={styles.profileSummary}>
@@ -474,9 +575,14 @@ export function BluetoothDevicesSection() {
               ))}
             </View>
             <AppText variant="muted" style={styles.hm10ControlHint}>
-              Safe Uno SoftwareSerial rates are 9600, 19200, and 38400. The app sends the
-              selected baud to the Arduino, then disconnects so the sketch can switch the HM-10
-              UART side cleanly.
+              The app can switch the HM-10 between 1200, 2400, 4800, 9600, 19200, 38400, 57600,
+              and 115200 baud. Uno SoftwareSerial is usually happiest from 1200 through 38400, so
+              start there and only try the faster rates if you need recovery or a board with a
+              stronger serial link. If Transport debug shows changing hex/text but no parsed sample,
+              the HM-10 UART baud is still wrong.
+              {selectedHm10BaudNeedsCaution
+                ? ' The currently selected rate is in the higher-speed caution range for an Uno.'
+                : ''}
             </AppText>
             <AppButton
               title={connectedDevice ? 'Apply baud and disconnect' : 'Connect to apply baud'}
@@ -520,13 +626,13 @@ export function BluetoothDevicesSection() {
         <View
           style={[
             styles.liveBanner,
-            isReceivingLiveData ? styles.liveBannerActive : styles.liveBannerInactive,
+            isReceivingLiveData || isReceivingAnyTraffic ? styles.liveBannerActive : styles.liveBannerInactive,
           ]}
         >
           <View
             style={[
               styles.liveBannerDot,
-              isReceivingLiveData ? styles.liveBannerDotActive : styles.liveBannerDotInactive,
+              isReceivingLiveData || isReceivingAnyTraffic ? styles.liveBannerDotActive : styles.liveBannerDotInactive,
             ]}
           />
           <View style={styles.liveBannerContent}>
@@ -534,7 +640,7 @@ export function BluetoothDevicesSection() {
               {liveStatusTitle}
             </AppText>
             <AppText variant="muted" style={styles.liveBannerText}>
-              {liveStatusMessage} {liveFreshnessLabel}
+              {liveStatusMessage} {statusFreshnessLabel}
             </AppText>
           </View>
         </View>
@@ -543,10 +649,75 @@ export function BluetoothDevicesSection() {
           <Metric label="Value" value={formatNumber(focusedSample?.value)} />
         </View>
         <View style={styles.rawPayload}>
-          <AppText variant="label">Raw payload</AppText>
+          <AppText variant="label">Last parsed payload</AppText>
           <AppText variant="muted" style={styles.rawPayloadText}>
             {lastSample?.raw || 'Waiting for device data'}
           </AppText>
+        </View>
+        <View style={styles.rawPayload}>
+          <AppText variant="label">Transport debug</AppText>
+          <View style={styles.metricsRow}>
+            <Metric label="Packets" value={String(transportDebug.totalNotifications)} compact />
+            <Metric label="Last bytes" value={String(transportDebug.lastNotificationBytes)} compact />
+            <Metric label="Buffer" value={String(transportDebug.lineBufferLength)} compact />
+          </View>
+          <AppText variant="muted" style={styles.rawPayloadText}>
+            {trafficFreshnessLabel} Parser state: {formatTransportOutcome(transportDebug.lastOutcome)}.
+            {transportDebug.parseIssueCount > 0
+              ? ` Suspect packets: ${transportDebug.parseIssueCount}.`
+              : ''}
+          </AppText>
+          <AppText variant="label">Last chunk text</AppText>
+          <AppText variant="muted" style={styles.rawPayloadText}>
+            {transportDebug.lastNotificationText || 'No printable UTF-8 text decoded from the last BLE notification yet.'}
+          </AppText>
+          <AppText variant="label">Last chunk hex</AppText>
+          <AppText variant="muted" style={styles.rawPayloadText}>
+            {transportDebug.lastNotificationHex || 'No BLE bytes captured yet.'}
+          </AppText>
+          {config.profile === 'arduino_hm10' ? (
+            <>
+              <AppText variant="label">Link guard</AppText>
+              <View style={styles.metricsRow}>
+                <Metric
+                  label="Verify"
+                  value={formatHm10LinkGuardStatus(hm10LinkGuard.status)}
+                  compact
+                  valueNumberOfLines={2}
+                />
+                <Metric
+                  label="Probe"
+                  value={hm10LinkGuard.lastProbeTs ? 'Seen' : 'Missing'}
+                  compact
+                />
+                <Metric
+                  label="Ack"
+                  value={hm10LinkGuard.lastAckTs ? 'Seen' : 'Missing'}
+                  compact
+                />
+              </View>
+              <AppText variant="muted" style={styles.rawPayloadText}>
+                {hm10LinkGuard.message ||
+                  'Run the HM-10 link guard to prove the app can write to the Arduino and the Arduino can stream the ack back.'}
+              </AppText>
+              <AppText variant="muted" style={styles.rawPayloadText}>
+                {hm10LinkProbeFreshness} {hm10LinkVerifiedFreshness}
+              </AppText>
+              <AppButton
+                title="Verify HM-10 link"
+                variant="ghost"
+                onPress={handleVerifyHm10Link}
+                loading={isCheckingHm10Link}
+                disabled={!connectedDevice}
+                style={styles.fullWidthButton}
+              />
+              <AppText variant="muted" style={styles.transportHint}>
+                {transportDebug.totalNotifications === 0
+                  ? 'Zero packets here usually means the module is connected on the wrong BLE UART service or the HM-10 UART/profile still needs repair. Start with FFE0/FFE1, then try FFF0/FFF1 for clones. The link guard will also fail until the module can answer back.'
+                  : 'Watch for `sensor.hm10_link_probe` first. If hex changes here but parsed data stays blank, start with 9600, then try 4800, 19200, and 38400. The app also exposes 1200, 2400, 57600, and 115200 for recovery or faster boards.'}
+              </AppText>
+            </>
+          ) : null}
         </View>
         {latestMetricSamples.length > 0 ? (
           <View style={styles.metricSnapshot}>
@@ -870,6 +1041,11 @@ const styles = StyleSheet.create({
   },
   rawPayloadText: {
     fontSize: 13,
+    lineHeight: 18,
+  },
+  transportHint: {
+    marginTop: spacing.xs,
+    fontSize: 12,
     lineHeight: 18,
   },
   metricSnapshot: {

@@ -36,19 +36,23 @@ static const uint8_t BT_RX_PIN = 7;
 static const uint8_t BT_TX_PIN = 8;
 // Default streaming baud. The app can store a preferred replacement in EEPROM.
 static const uint32_t HM10_DEFAULT_UART_BAUD = 9600UL;
+// Practical comfort ceiling for sustained Uno SoftwareSerial streaming. Faster
+// rates are still allowed for recovery and faster boards, but may be noisy.
 static const uint32_t HM10_MAX_SAFE_SOFTWARESERIAL_BAUD = 38400UL;
 static const bool HM10_BLIND_NORMALIZE_TO_PREFERRED_BAUD_ON_BOOT = true;
-static const bool HM10_PROBE_BAUD_ON_BOOT = false;
+// Default on: detect the module's live UART baud at boot so reused HM-10s do
+// not silently stream on the wrong serial speed.
+static const bool HM10_PROBE_BAUD_ON_BOOT = true;
 static const uint16_t HM10_BAUD_APPLY_DELAY_MS = 1800U;
 static const uint8_t HM10_BAUD_PREF_EEPROM_SIGNATURE = 0xB5;
 static const uint8_t HM10_BAUD_PREF_EEPROM_SIGNATURE_V1 = 0xB4;
 // FIX 1: was true, which caused sendTelemetryFrame() to return after only the
 // link-probe metric — no sensor data was ever transmitted.
 static const bool HM10_DEBUG_LINK_ONLY = false;
-// Default off: many HM-10 / BT05 clones stop forwarding UART data after
-// aggressive boot-time reconfiguration. Enable only when you need to repair
-// a module's BLE role/UUID settings and have confirmed the AT command set.
-static const bool HM10_APPLY_BOOT_PROFILE = false;
+// Default on: push the module back to the common BLE UART profile so reused
+// HM-10 / BT05 boards do not stay stranded on stale UUIDs or central mode.
+// Disable only if you know your clone rejects these boot-time AT commands.
+static const bool HM10_APPLY_BOOT_PROFILE = true;
 
 SoftwareSerial BT(BT_RX_PIN, BT_TX_PIN);
 #define DBG Serial
@@ -70,6 +74,7 @@ static const char STREAM_NAMESPACE_LABEL[]   = "sensor.*";
 
 static const char METRIC_TIME_MS[]                = "sensor.time_ms";
 static const char METRIC_HM10_LINK_PROBE[]        = "sensor.hm10_link_probe";
+static const char METRIC_HM10_LINK_ACK[]          = "sensor.hm10_link_ack";
 static const char METRIC_AHT20_TEMPERATURE_C[]    = "sensor.aht20_temperature_c";
 static const char METRIC_AHT20_HUMIDITY_PERCENT[] = "sensor.aht20_humidity_percent";
 static const char METRIC_TMP117_TEMPERATURE_C[]   = "sensor.tmp117_temperature_c";
@@ -105,6 +110,18 @@ static const uint32_t AT_CONFIG_TIMEOUT_MS = 900UL;
 static const uint8_t MAX_LINE_BYTES = 96;
 static const uint8_t MAX_AT_REPLY_BYTES = 96;
 static const uint8_t MAX_COMMAND_BYTES = 48;
+static const uint32_t HM10_SUPPORTED_UART_BAUDS[] = {
+  1200UL,
+  2400UL,
+  4800UL,
+  9600UL,
+  19200UL,
+  38400UL,
+  57600UL,
+  115200UL
+};
+static const uint8_t HM10_SUPPORTED_UART_BAUD_COUNT =
+  sizeof(HM10_SUPPORTED_UART_BAUDS) / sizeof(HM10_SUPPORTED_UART_BAUDS[0]);
 
 // -----------------------------------------------------------------------
 // State
@@ -154,6 +171,7 @@ struct TelemetryFrame {
 
 static TelemetryFrame buildTelemetryFrame(uint32_t now);
 static void sendTelemetryFrame(const TelemetryFrame &frame);
+static bool btSendUint32(const char *metric, uint32_t value);
 static bool hmApplyPeripheralProfile(void);
 static bool hmEnsurePreferredStreamingBaud(void);
 static void hmBlindNormalizeToPreferredBaud(void);
@@ -228,27 +246,45 @@ static bool hmSendCommandExpect(const char *command,
 }
 
 static bool hmIsSupportedBaud(uint32_t baud) {
-  switch (baud) {
-    case 9600UL:
-    case 19200UL:
-    case 38400UL:
+  for (uint8_t i = 0; i < HM10_SUPPORTED_UART_BAUD_COUNT; i++) {
+    if (HM10_SUPPORTED_UART_BAUDS[i] == baud) {
       return true;
-    default:
-      return false;
+    }
   }
+  return false;
 }
 
 static const char *hmBaudCommandFor(uint32_t baud) {
   switch (baud) {
+    case 1200UL:
+      return "AT+BAUD7";
+    case 2400UL:
+      return "AT+BAUD6";
+    case 4800UL:
+      return "AT+BAUD5";
     case 9600UL:
       return "AT+BAUD0";
     case 19200UL:
       return "AT+BAUD1";
     case 38400UL:
       return "AT+BAUD2";
+    case 57600UL:
+      return "AT+BAUD3";
+    case 115200UL:
+      return "AT+BAUD4";
     default:
       return NULL;
   }
+}
+
+static void hmWarnIfBaudMayBeNoisy(uint32_t baud) {
+  if (baud <= HM10_MAX_SAFE_SOFTWARESERIAL_BAUD) {
+    return;
+  }
+
+  DBG.print(F("[HM10] Warning: "));
+  DBG.print(baud);
+  DBG.println(F(" baud is above the usual Uno SoftwareSerial comfort range; proceeding anyway."));
 }
 
 static void hmLoadPreferredBaud() {
@@ -296,11 +332,7 @@ static bool hmApplyBaudChange(uint32_t targetBaud) {
     return false;
   }
 
-  if (targetBaud > HM10_MAX_SAFE_SOFTWARESERIAL_BAUD) {
-    DBG.print(F("[HM10] Requested UART baud is too fast for Uno SoftwareSerial: "));
-    DBG.println(targetBaud);
-    return false;
-  }
+  hmWarnIfBaudMayBeNoisy(targetBaud);
 
   if (hmActiveBaud == targetBaud) {
     BT.begin(hmActiveBaud);
@@ -345,6 +377,23 @@ static void hmHandleCommandLine(const char *line) {
     return;
   }
 
+  if (strncmp(line, "HM10:PING=", 10) == 0) {
+    char *end = NULL;
+    const unsigned long parsedToken = strtoul(line + 10, &end, 10);
+    if (end == line + 10 || (end && *end != '\0')) {
+      DBG.print(F("[HM10] Could not parse link ping token: "));
+      DBG.println(line);
+      return;
+    }
+
+    const uint32_t token = static_cast<uint32_t>(parsedToken);
+    DBG.print(F("[HM10] App link ping "));
+    DBG.print(token);
+    DBG.println(F(" received; sending ack."));
+    btSendUint32(METRIC_HM10_LINK_ACK, token);
+    return;
+  }
+
   if (strncmp(line, "HM10:BAUD=", 10) != 0) {
     DBG.print(F("[HM10] Ignoring app command: "));
     DBG.println(line);
@@ -363,7 +412,7 @@ static void hmHandleCommandLine(const char *line) {
   if (!hmIsSupportedBaud(requestedBaud)) {
     DBG.print(F("[HM10] App requested unsupported UART baud "));
     DBG.println(requestedBaud);
-    DBG.println(F("[HM10] Supported values: 9600, 19200, 38400."));
+    DBG.println(F("[HM10] Supported values: 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200."));
     return;
   }
 
@@ -374,6 +423,7 @@ static void hmHandleCommandLine(const char *line) {
   DBG.print(F("[HM10] App saved preferred UART baud "));
   DBG.print(hmPreferredBaud);
   DBG.println(F("."));
+  hmWarnIfBaudMayBeNoisy(hmPreferredBaud);
 
   if (hmActiveBaud == hmPreferredBaud) {
     DBG.println(F("[HM10] Requested baud is already active."));
@@ -784,25 +834,16 @@ static bool tryAtHandshake(uint32_t baud) {
 }
 
 static bool hmHandshake() {
-  static const uint32_t BAUDS[] = {
-    9600UL,
-    19200UL,
-    38400UL,
-    57600UL,
-    115200UL
-  };
-  static const uint8_t BAUD_COUNT = sizeof(BAUDS) / sizeof(BAUDS[0]);
-
   DBG.println(F("[HM10] Running AT handshake..."));
 
-  for (uint8_t i = 0; i < BAUD_COUNT; i++) {
+  for (uint8_t i = 0; i < HM10_SUPPORTED_UART_BAUD_COUNT; i++) {
     DBG.print(F("[HM10] Trying "));
-    DBG.print(BAUDS[i]);
+    DBG.print(HM10_SUPPORTED_UART_BAUDS[i]);
     DBG.print(F(" baud ... "));
 
-    if (tryAtHandshake(BAUDS[i])) {
+    if (tryAtHandshake(HM10_SUPPORTED_UART_BAUDS[i])) {
       DBG.println(F("OK"));
-      hmActiveBaud = BAUDS[i];
+      hmActiveBaud = HM10_SUPPORTED_UART_BAUDS[i];
       DBG.print(F("[HM10] Detected UART baud "));
       DBG.print(hmActiveBaud);
       DBG.println(F("."));
@@ -826,11 +867,7 @@ static bool hmHandshake() {
 }
 
 static bool hmEnsurePreferredStreamingBaud() {
-  if (hmPreferredBaud > HM10_MAX_SAFE_SOFTWARESERIAL_BAUD) {
-    DBG.print(F("[HM10] Preferred UART baud is not safe for Uno SoftwareSerial: "));
-    DBG.println(hmPreferredBaud);
-    return false;
-  }
+  hmWarnIfBaudMayBeNoisy(hmPreferredBaud);
 
   if (hmActiveBaud == hmPreferredBaud) {
     BT.begin(hmActiveBaud);
@@ -857,14 +894,6 @@ static bool hmEnsurePreferredStreamingBaud() {
 }
 
 static void hmBlindNormalizeToPreferredBaud() {
-  static const uint32_t BAUDS[] = {
-    9600UL,
-    19200UL,
-    38400UL,
-    57600UL,
-    115200UL
-  };
-  static const uint8_t BAUD_COUNT = sizeof(BAUDS) / sizeof(BAUDS[0]);
   const char *targetBaudCommand = hmBaudCommandFor(hmPreferredBaud);
   if (!targetBaudCommand) {
     hmPreferredBaud = HM10_DEFAULT_UART_BAUD;
@@ -875,8 +904,8 @@ static void hmBlindNormalizeToPreferredBaud() {
   DBG.print(hmPreferredBaud);
   DBG.println(F("..."));
 
-  for (uint8_t i = 0; i < BAUD_COUNT; i++) {
-    BT.begin(BAUDS[i]);
+  for (uint8_t i = 0; i < HM10_SUPPORTED_UART_BAUD_COUNT; i++) {
+    BT.begin(HM10_SUPPORTED_UART_BAUDS[i]);
     BT.listen();
     delay(180);
     hmDrainRx();
@@ -923,8 +952,8 @@ static bool hmApplyPeripheralProfile() {
   }
 
   if (!ok) {
-    DBG.println(F("[HM10] One or more setup commands failed; using partial config."));
-    return false;
+    DBG.println(F("[HM10] One or more setup commands failed; continuing with the best partial config."));
+    return true;
   }
 
   DBG.println(F("[HM10] BLE UART profile confirmed."));

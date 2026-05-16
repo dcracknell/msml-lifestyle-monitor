@@ -96,6 +96,7 @@ const full = (short: string) => `0000${short}${BASE}`;
 
 // Encode a plain string as base-64 the same way the BLE stack does.
 const encode = (s: string) => require('base-64').encode(s);
+const decode = (s: string) => require('base-64').decode(s);
 
 afterEach(() => {
   cleanup();
@@ -520,6 +521,19 @@ describe('Arduino HM-10 line buffer', () => {
     );
   });
 
+  it('tracks partial HM-10 lines so the app can show traffic before a newline arrives', async () => {
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => {
+      connection.monitorCallback(null, { value: encode('{"metric":"sensor.hm10_link_probe"') });
+      await Promise.resolve();
+    });
+
+    expect(connection.getCtx().transportDebug.totalNotifications).toBe(1);
+    expect(connection.getCtx().transportDebug.lastOutcome).toBe('buffering');
+    expect(connection.getCtx().transportDebug.lineBufferLength).toBeGreaterThan(0);
+  });
+
   it('sends each metric in a multi-metric session to a separate runOrQueue call', async () => {
     const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
 
@@ -543,7 +557,8 @@ describe('Arduino HM-10 line buffer', () => {
 
   it('clears the buffer and recovers after an overflow (> 512 chars without newline)', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+    const { monitorCallback } = connection;
 
     // Send 513 chars of noise — no newline
     await act(async () => {
@@ -553,6 +568,9 @@ describe('Arduino HM-10 line buffer', () => {
 
     expect(mockRunOrQueue).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('overflow'));
+    expect(connection.getCtx().transportDebug.lastOutcome).toBe('overflow');
+    expect(connection.getCtx().transportDebug.parseIssueCount).toBe(1);
+    expect(connection.getCtx().transportDebug.lineBufferLength).toBe(0);
 
     // A valid line arriving after the overflow should still be parsed
     await act(async () => {
@@ -567,6 +585,20 @@ describe('Arduino HM-10 line buffer', () => {
     );
 
     warn.mockRestore();
+  });
+
+  it('captures unreadable BLE bytes in transport debug so baud mismatches are visible', async () => {
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => {
+      connection.monitorCallback(null, { value: encode(String.fromCharCode(0xff, 0xfe, 0xfd)) });
+      await Promise.resolve();
+    });
+
+    expect(connection.getCtx().lastSample).toBeNull();
+    expect(connection.getCtx().transportDebug.lastOutcome).toBe('binary_only');
+    expect(connection.getCtx().transportDebug.lastNotificationHex).toContain('ff fe fd');
+    expect(connection.getCtx().transportDebug.parseIssueCount).toBe(1);
   });
 
   it('drops samples with out-of-range values (validateMetricValue integration)', async () => {
@@ -1253,12 +1285,78 @@ describe('BluetoothProvider applyHm10BaudRate', () => {
     );
   });
 
+  it('supports wider HM-10 baud values for recovery and faster serial links', async () => {
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+    const { ctx } = connection;
+
+    await act(async () => { ctx.updateConfig({ hm10BaudRate: 57600 as any }); });
+
+    let appliedBaud: number | null = null;
+    await act(async () => {
+      appliedBaud = await ctx.applyHm10BaudRate();
+    });
+
+    expect(appliedBaud).toBe(57600);
+    expect(connection.getCtx().config.hm10BaudRate).toBe(57600);
+    expect(mockWriteWithResponse).toHaveBeenCalledWith(
+      expect.any(String),
+      full('FFE0'),
+      full('FFE1'),
+      encode('HM10:BAUD=57600\n')
+    );
+  });
+
   it('rejects baud control outside the Arduino HM-10 profile', async () => {
     let snapshot: ReturnType<typeof useBluetooth> | null = null;
     await renderWithProvider((ctx) => { snapshot = ctx; });
 
     await expect(
       act(async () => { await snapshot!.applyHm10BaudRate(19200); })
+    ).rejects.toThrow(/arduino \+ hm-10 profile/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verifyHm10Link
+// ---------------------------------------------------------------------------
+
+describe('BluetoothProvider verifyHm10Link', () => {
+  it('sends a ping command and marks the HM-10 link verified when a matching ack returns', async () => {
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+    const { ctx } = connection;
+
+    let verifyPromise: Promise<number> | null = null;
+    await act(async () => {
+      verifyPromise = ctx.verifyHm10Link();
+      await Promise.resolve();
+    });
+
+    const lastWriteCall = mockWriteWithResponse.mock.calls[mockWriteWithResponse.mock.calls.length - 1];
+    const encodedPayload = lastWriteCall?.[3];
+    expect(typeof encodedPayload).toBe('string');
+    const decodedPayload = decode(encodedPayload);
+    expect(decodedPayload).toMatch(/^HM10:PING=\d+\n$/);
+    const token = Number(decodedPayload.match(/^HM10:PING=(\d+)\n$/)?.[1]);
+
+    await act(async () => {
+      connection.monitorCallback(
+        null,
+        { value: encode(`{"metric":"sensor.hm10_link_ack","value":${token}}\n`) }
+      );
+      await Promise.resolve();
+    });
+
+    await expect(verifyPromise!).resolves.toBe(token);
+    expect(connection.getCtx().hm10LinkGuard.status).toBe('verified');
+    expect(connection.getCtx().hm10LinkGuard.lastAckValue).toBe(token);
+  });
+
+  it('rejects link verification outside the Arduino HM-10 profile', async () => {
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await expect(
+      act(async () => { await snapshot!.verifyHm10Link(); })
     ).rejects.toThrow(/arduino \+ hm-10 profile/i);
   });
 });
@@ -1355,6 +1453,18 @@ describe('BluetoothProvider updateConfig', () => {
     expect(snapshot!.config.autoUpload).toBe(false);
     expect(snapshot!.config.serviceUUID).toBe('FFE0');
     expect(snapshot!.config.metric).toBe('sensor.aht20_temperature_c');
+  });
+
+  it('accepts new supported HM-10 baud values and rejects unsupported ones', async () => {
+    let snapshot: ReturnType<typeof useBluetooth> | null = null;
+    await renderWithProvider((ctx) => { snapshot = ctx; });
+
+    await act(async () => { snapshot!.applyProfile('arduino_hm10'); });
+    await act(async () => { snapshot!.updateConfig({ hm10BaudRate: 115200 as any }); });
+    expect(snapshot!.config.hm10BaudRate).toBe(115200);
+
+    await act(async () => { snapshot!.updateConfig({ hm10BaudRate: 12345 as any }); });
+    expect(snapshot!.config.hm10BaudRate).toBe(9600);
   });
 });
 

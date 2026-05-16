@@ -8,9 +8,19 @@ import { useSyncQueue } from './SyncProvider';
 const CONFIG_KEY = 'msml.bluetooth.config';
 const MAX_RECENT_SAMPLES = 120;
 const ANDROID_CONNECTION_TIMEOUT_MS = 15_000;
-export const HM10_BAUD_RATE_OPTIONS = [9600, 19_200, 38_400] as const;
+const MAX_TRANSPORT_TEXT_PREVIEW_CHARS = 180;
+const MAX_TRANSPORT_HEX_PREVIEW_BYTES = 24;
+const HM10_LINK_CHECK_TIMEOUT_MS = 4_500;
+const HM10_LINK_ACK_METRIC = 'sensor.hm10_link_ack';
+const HM10_LINK_PROBE_METRIC = 'sensor.hm10_link_probe';
+export const HM10_BAUD_RATE_OPTIONS = [1200, 2400, 4800, 9600, 19_200, 38_400, 57_600, 115_200] as const;
+export const HM10_UNO_SOFTWARESERIAL_MAX_BAUD = 38_400;
 export type Hm10BaudRate = (typeof HM10_BAUD_RATE_OPTIONS)[number];
 const DEFAULT_HM10_BAUD_RATE: Hm10BaudRate = 9600;
+
+export function isHm10UnoCautionBaudRate(value: number) {
+  return Number.isFinite(value) && value > HM10_UNO_SOFTWARESERIAL_MAX_BAUD;
+}
 
 export type BluetoothProfileId = 'custom' | 'ble_hrm' | 'apple_watch_companion' | 'arduino_hm10';
 
@@ -108,6 +118,41 @@ export interface BluetoothSample {
   raw: string;
 }
 
+export type BluetoothTransportOutcome =
+  | 'idle'
+  | 'parsed'
+  | 'buffering'
+  | 'binary_only'
+  | 'overflow'
+  | 'empty'
+  | 'unparsed';
+
+export interface BluetoothTransportDebug {
+  lastNotificationTs: number | null;
+  lastNotificationBytes: number;
+  lastNotificationText: string | null;
+  lastNotificationHex: string | null;
+  totalNotifications: number;
+  totalBytes: number;
+  lineBufferLength: number;
+  parseIssueCount: number;
+  lastOutcome: BluetoothTransportOutcome;
+}
+
+export type BluetoothLinkGuardStatus = 'idle' | 'checking' | 'verified' | 'failed';
+
+export interface BluetoothLinkGuard {
+  status: BluetoothLinkGuardStatus;
+  lastCheckStartedTs: number | null;
+  lastCheckFinishedTs: number | null;
+  lastVerifiedTs: number | null;
+  lastProbeTs: number | null;
+  lastAckTs: number | null;
+  pendingAckValue: number | null;
+  lastAckValue: number | null;
+  message: string | null;
+}
+
 interface UploadStatus {
   status: 'sent' | 'queued';
   timestamp: number;
@@ -127,6 +172,8 @@ interface BluetoothContextValue {
   connectedDevice: BluetoothDeviceSummary | null;
   lastSample: BluetoothSample | null;
   recentSamples: BluetoothSample[];
+  transportDebug: BluetoothTransportDebug;
+  hm10LinkGuard: BluetoothLinkGuard;
   lastUploadStatus: UploadStatus | null;
   error: string | null;
   startScan: () => Promise<void>;
@@ -136,6 +183,7 @@ interface BluetoothContextValue {
   disconnectFromDevice: () => Promise<void>;
   sendCommand: (payload: string) => Promise<void>;
   applyHm10BaudRate: (baudOverride?: number) => Promise<Hm10BaudRate>;
+  verifyHm10Link: () => Promise<number>;
   manualPublish: (
     value: number,
     metricOverride?: string,
@@ -145,6 +193,30 @@ interface BluetoothContextValue {
 }
 
 const BluetoothContext = createContext<BluetoothContextValue | undefined>(undefined);
+
+const DEFAULT_TRANSPORT_DEBUG: BluetoothTransportDebug = {
+  lastNotificationTs: null,
+  lastNotificationBytes: 0,
+  lastNotificationText: null,
+  lastNotificationHex: null,
+  totalNotifications: 0,
+  totalBytes: 0,
+  lineBufferLength: 0,
+  parseIssueCount: 0,
+  lastOutcome: 'idle',
+};
+
+const DEFAULT_HM10_LINK_GUARD: BluetoothLinkGuard = {
+  status: 'idle',
+  lastCheckStartedTs: null,
+  lastCheckFinishedTs: null,
+  lastVerifiedTs: null,
+  lastProbeTs: null,
+  lastAckTs: null,
+  pendingAckValue: null,
+  lastAckValue: null,
+  message: null,
+};
 
 async function ensureAndroidPermissions() {
   if (Platform.OS !== 'android') {
@@ -334,6 +406,10 @@ function buildHm10BaudCommand(baud: Hm10BaudRate) {
   return `HM10:BAUD=${baud}\n`;
 }
 
+function buildHm10PingCommand(token: number) {
+  return `HM10:PING=${token}\n`;
+}
+
 function decodePayload(value: string | null) {
   if (!value) {
     return { text: '', binary: '' };
@@ -367,6 +443,29 @@ function encodePayload(value: string) {
     String.fromCharCode(Number.parseInt(hex, 16))
   );
   return encodeBase64(sanitized);
+}
+
+function previewTransportText(text: string) {
+  if (!text) return null;
+  const escaped = text
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/[^\x20-\x7E]/g, (char) => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  if (!escaped) return null;
+  return escaped.length > MAX_TRANSPORT_TEXT_PREVIEW_CHARS
+    ? `${escaped.slice(0, MAX_TRANSPORT_TEXT_PREVIEW_CHARS - 3)}...`
+    : escaped;
+}
+
+function previewTransportHex(binary: string) {
+  if (!binary) return null;
+  const bytes = binary.split('').map((char) => char.charCodeAt(0) & 0xff);
+  if (!bytes.length) return null;
+  const preview = bytes
+    .slice(0, MAX_TRANSPORT_HEX_PREVIEW_BYTES)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join(' ');
+  return bytes.length > MAX_TRANSPORT_HEX_PREVIEW_BYTES ? `${preview} ...` : preview;
 }
 
 function isBleOperationCancelledError(error: unknown) {
@@ -835,6 +934,17 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   // Accumulates BLE notification chunks for UART-based sensors (Arduino + HM-10)
   // until a newline is received, at which point the complete JSON line is parsed.
   const lineBufferRef = useRef<string>('');
+  const transportDebugRef = useRef<BluetoothTransportDebug>(DEFAULT_TRANSPORT_DEBUG);
+  const hm10LinkSequenceRef = useRef(1);
+  const pendingHm10LinkCheckRef = useRef<{
+    token: number;
+    startedAt: number;
+    notificationCountAtStart: number;
+    timeoutHandle: ReturnType<typeof setTimeout>;
+    resolve: (token: number) => void;
+    reject: (error: Error) => void;
+    promise: Promise<number>;
+  } | null>(null);
   const { runOrQueue } = useSyncQueue();
 
   const [config, setConfig] = useState<BluetoothConfig>(DEFAULT_CONFIG);
@@ -847,10 +957,33 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDeviceSummary | null>(null);
   const [lastSample, setLastSample] = useState<BluetoothSample | null>(null);
   const [recentSamples, setRecentSamples] = useState<BluetoothSample[]>([]);
+  const [transportDebug, setTransportDebug] = useState<BluetoothTransportDebug>(DEFAULT_TRANSPORT_DEBUG);
+  const [hm10LinkGuard, setHm10LinkGuard] = useState<BluetoothLinkGuard>(DEFAULT_HM10_LINK_GUARD);
   const [lastUploadStatus, setLastUploadStatus] = useState<UploadStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const suppressWorkoutMirrorRef = useRef(false);
   const connectionAttemptIdRef = useRef(0);
+
+  const clearPendingHm10LinkCheck = useCallback((message: string) => {
+    const pending = pendingHm10LinkCheckRef.current;
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeoutHandle);
+    pendingHm10LinkCheckRef.current = null;
+    pending.reject(new Error(message));
+  }, []);
+
+  const resetHm10LinkGuard = useCallback((message?: string) => {
+    if (message) {
+      clearPendingHm10LinkCheck(message);
+    }
+    setHm10LinkGuard(DEFAULT_HM10_LINK_GUARD);
+  }, [clearPendingHm10LinkCheck]);
+
+  useEffect(() => {
+    transportDebugRef.current = transportDebug;
+  }, [transportDebug]);
 
   useEffect(() => {
     let canceled = false;
@@ -905,6 +1038,9 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         setIsScanning(false);
         setStatus('idle');
         setConnectedDevice(null);
+        transportDebugRef.current = DEFAULT_TRANSPORT_DEBUG;
+        setTransportDebug(DEFAULT_TRANSPORT_DEBUG);
+        resetHm10LinkGuard('Bluetooth powered off during HM-10 link verification.');
         devicesRef.current.clear();
         setDevices([]);
       }
@@ -912,18 +1048,18 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     return () => {
       subscription.remove();
     };
-  }, [unsupportedMessage]);
+  }, [resetHm10LinkGuard, unsupportedMessage]);
 
   useEffect(() => {
     return () => {
       stopScan();
+      clearPendingHm10LinkCheck('Bluetooth provider unmounted during HM-10 link verification.');
       monitorRef.current?.remove();
       disconnectRef.current?.remove();
       managerRef.current?.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
   const isPoweredOn = managerRef.current != null && bluetoothState === State.PoweredOn;
 
   const applyProfile = useCallback((profileId: BluetoothProfileId) => {
@@ -976,6 +1112,32 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       if (!value) return;
       const activeConfig = configRef.current;
       const { text, binary } = decodePayload(value);
+      const receivedAt = Date.now();
+      const receivedBytes = binary.length;
+      const textPreview = previewTransportText(text);
+      const hexPreview = previewTransportHex(binary);
+      let parsedAny = false;
+
+      const commitTransportDebug = (
+        outcome: BluetoothTransportOutcome,
+        options?: { lineBufferLength?: number; incrementIssue?: boolean }
+      ) => {
+        setTransportDebug((prev) => {
+          const next = {
+            lastNotificationTs: receivedAt,
+            lastNotificationBytes: receivedBytes,
+            lastNotificationText: textPreview,
+            lastNotificationHex: hexPreview,
+            totalNotifications: prev.totalNotifications + 1,
+            totalBytes: prev.totalBytes + receivedBytes,
+            lineBufferLength: options?.lineBufferLength ?? prev.lineBufferLength,
+            parseIssueCount: prev.parseIssueCount + (options?.incrementIssue ? 1 : 0),
+            lastOutcome: outcome,
+          };
+          transportDebugRef.current = next;
+          return next;
+        });
+      };
 
       // Inner helper: process a fully-assembled payload string.
       async function processBatches(rawText: string, rawBinary: string) {
@@ -987,8 +1149,61 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           characteristicUUID: activeConfig.characteristicUUID,
         });
         if (!parsedBatches.length) return;
+        parsedAny = true;
 
-        const appendedSamples: BluetoothSample[] = parsedBatches
+        const visibleBatches = parsedBatches.filter((batch) => {
+          if (batch.metric === HM10_LINK_PROBE_METRIC) {
+            const latestProbe = batch.samples[batch.samples.length - 1];
+            if (latestProbe) {
+              setHm10LinkGuard((prev) => ({
+                ...prev,
+                lastProbeTs: latestProbe.ts,
+                message:
+                  prev.status === 'idle' && !prev.message
+                    ? 'Arduino stream probe packets are reaching the app.'
+                    : prev.message,
+              }));
+            }
+            return true;
+          }
+
+          if (batch.metric !== HM10_LINK_ACK_METRIC) {
+            return true;
+          }
+
+          const latestAck = batch.samples[batch.samples.length - 1];
+          const ackTs = latestAck?.ts ?? Date.now();
+          const ackValue =
+            latestAck && Number.isFinite(latestAck.value as number)
+              ? Math.round(latestAck.value as number)
+              : null;
+
+          setHm10LinkGuard((prev) => ({
+            ...prev,
+            lastAckTs: ackTs,
+            lastAckValue: ackValue,
+          }));
+
+          const pending = pendingHm10LinkCheckRef.current;
+          if (pending && ackValue !== null && ackValue === pending.token) {
+            clearTimeout(pending.timeoutHandle);
+            pendingHm10LinkCheckRef.current = null;
+            setHm10LinkGuard((prev) => ({
+              ...prev,
+              status: 'verified',
+              lastAckTs: ackTs,
+              lastAckValue: ackValue,
+              lastCheckFinishedTs: Date.now(),
+              lastVerifiedTs: Date.now(),
+              pendingAckValue: null,
+              message: 'Bidirectional HM-10 link verified. The app can write commands and the Arduino can stream back.',
+            }));
+            pending.resolve(ackValue);
+          }
+          return false;
+        });
+
+        const appendedSamples: BluetoothSample[] = visibleBatches
           .map((batch) => {
             const sanitized = batch.samples
               .map((sample) => ({
@@ -1021,7 +1236,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         if (!activeConfig.autoUpload) return;
         try {
           const uploadResults = await Promise.all(
-            parsedBatches.map((batch) => {
+            visibleBatches.map((batch) => {
               const sanitizedSamples = batch.samples
                 .map((sample) => ({
                   ts: Number.isFinite(sample.ts) ? Math.round(sample.ts) : Date.now(),
@@ -1061,6 +1276,18 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       // is self-contained – parse immediately without line buffering.
       if (activeConfig.profile === 'ble_hrm') {
         await processBatches(text, binary);
+        commitTransportDebug(
+          parsedAny ? 'parsed' : receivedBytes > 0 ? 'binary_only' : 'empty',
+          { lineBufferLength: 0, incrementIssue: !parsedAny && receivedBytes > 0 }
+        );
+        return;
+      }
+
+      if (!text && receivedBytes > 0) {
+        commitTransportDebug('binary_only', {
+          lineBufferLength: lineBufferRef.current.length,
+          incrementIssue: true,
+        });
         return;
       }
 
@@ -1079,16 +1306,19 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           'Check HM-10 baud rate and UUID configuration.'
         );
         lineBufferRef.current = '';
+        commitTransportDebug('overflow', { lineBufferLength: 0, incrementIssue: true });
         return;
       }
 
       const lines = lineBufferRef.current.split('\n');
       // Everything after the last '\n' is an incomplete line – keep it buffered.
       lineBufferRef.current = lines.pop() ?? '';
+      let sawCompleteLine = false;
 
       for (const rawLine of lines) {
         const trimmedLine = rawLine.replace(/\r$/, '').trim();
         if (!trimmedLine) continue;
+        sawCompleteLine = true;
         await processBatches(trimmedLine, '');
       }
 
@@ -1106,6 +1336,23 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           // Incomplete JSON fragment – keep buffered until more data arrives.
         }
       }
+
+      if (parsedAny) {
+        commitTransportDebug('parsed', { lineBufferLength: lineBufferRef.current.length });
+        return;
+      }
+
+      if (lineBufferRef.current.length > 0) {
+        commitTransportDebug('buffering', { lineBufferLength: lineBufferRef.current.length });
+        return;
+      }
+
+      if (sawCompleteLine) {
+        commitTransportDebug('unparsed', { lineBufferLength: 0, incrementIssue: true });
+        return;
+      }
+
+      commitTransportDebug('empty', { lineBufferLength: 0 });
     },
     [
       runOrQueue,
@@ -1166,6 +1413,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
 
   const disconnectFromDevice = useCallback(async () => {
     connectionAttemptIdRef.current += 1;
+    clearPendingHm10LinkCheck('Bluetooth device disconnected during HM-10 link verification.');
     monitorRef.current?.remove();
     monitorRef.current = null;
     disconnectRef.current?.remove();
@@ -1174,6 +1422,11 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     const deviceId = connectedDeviceIdRef.current;
     connectedDeviceIdRef.current = null;
     setConnectedDevice(null);
+    setTransportDebug((prev) => ({
+      ...prev,
+      lineBufferLength: 0,
+    }));
+    setHm10LinkGuard(DEFAULT_HM10_LINK_GUARD);
     setStatus('idle');
     if (!deviceId || !managerRef.current) {
       return;
@@ -1183,7 +1436,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore disconnect errors
     }
-  }, []);
+  }, [clearPendingHm10LinkCheck]);
 
   const performConnection = useCallback(
     async (deviceId: string, fallback?: BluetoothDeviceSummary | null) => {
@@ -1202,6 +1455,10 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       monitorRef.current?.remove();
       disconnectRef.current?.remove();
       lineBufferRef.current = '';
+      clearPendingHm10LinkCheck('HM-10 link verification was cancelled by a new connection attempt.');
+      transportDebugRef.current = DEFAULT_TRANSPORT_DEBUG;
+      setTransportDebug(DEFAULT_TRANSPORT_DEBUG);
+      setHm10LinkGuard(DEFAULT_HM10_LINK_GUARD);
       try {
         const normalizedService = normalizeUuid(config.serviceUUID);
         const normalizedCharacteristic = normalizeUuid(config.characteristicUUID);
@@ -1325,8 +1582,14 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
         });
         disconnectRef.current = manager.onDeviceDisconnected(readyDevice.id, () => {
           connectionAttemptIdRef.current += 1;
+          clearPendingHm10LinkCheck('Bluetooth device disconnected during HM-10 link verification.');
           connectedDeviceIdRef.current = null;
           setConnectedDevice(null);
+          setTransportDebug((prev) => ({
+            ...prev,
+            lineBufferLength: 0,
+          }));
+          setHm10LinkGuard(DEFAULT_HM10_LINK_GUARD);
           setStatus('idle');
         });
         monitorRef.current = readyDevice.monitorCharacteristicForService(
@@ -1342,6 +1605,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
               }
               connectedDeviceIdRef.current = null;
               setConnectedDevice(null);
+              clearPendingHm10LinkCheck('HM-10 link verification was interrupted by a Bluetooth monitor error.');
               setError(normalizeConnectionError(monitorError));
               setStatus('error');
               manager.cancelDeviceConnection(readyDevice.id).catch(() => {});
@@ -1358,13 +1622,21 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
           return;
         }
         await manager.cancelDeviceConnection(deviceId).catch(() => {});
+        clearPendingHm10LinkCheck('HM-10 link verification failed because the Bluetooth connection did not finish.');
         connectedDeviceIdRef.current = null;
         setConnectedDevice(null);
         setStatus('error');
         setError(normalizeConnectionError(connectionError));
       }
     },
-    [config.characteristicUUID, config.serviceUUID, handleCharacteristicValue, stopScan, unsupportedMessage]
+    [
+      clearPendingHm10LinkCheck,
+      config.characteristicUUID,
+      config.serviceUUID,
+      handleCharacteristicValue,
+      stopScan,
+      unsupportedMessage,
+    ]
   );
 
   const connectToDevice = useCallback(
@@ -1494,6 +1766,90 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
     [sendCommand]
   );
 
+  const verifyHm10Link = useCallback(async () => {
+    const activeConfig = configRef.current;
+    if (activeConfig.profile !== 'arduino_hm10') {
+      throw new Error('HM-10 link verification is only available for the Arduino + HM-10 profile.');
+    }
+    if (!connectedDeviceIdRef.current) {
+      throw new Error('Connect to the HM-10 before running the link verification.');
+    }
+
+    const existingCheck = pendingHm10LinkCheckRef.current;
+    if (existingCheck) {
+      return existingCheck.promise;
+    }
+
+    const startedAt = Date.now();
+    const token = hm10LinkSequenceRef.current++;
+    let resolveCheck!: (value: number) => void;
+    let rejectCheck!: (error: Error) => void;
+    const promise = new Promise<number>((resolve, reject) => {
+      resolveCheck = resolve;
+      rejectCheck = reject;
+    });
+
+    const timeoutHandle = setTimeout(() => {
+      const pending = pendingHm10LinkCheckRef.current;
+      if (!pending || pending.token !== token) {
+        return;
+      }
+      pendingHm10LinkCheckRef.current = null;
+      const sawTraffic = transportDebugRef.current.totalNotifications > pending.notificationCountAtStart;
+      const message = sawTraffic
+        ? 'BLE traffic came back, but no matching sensor.hm10_link_ack reply arrived. The Arduino may be streaming one-way or still running an older sketch.'
+        : 'No BLE reply arrived after the HM-10 link ping. Check the UUIDs, UART baud, and that the updated Arduino sketch is flashed.';
+      setHm10LinkGuard((prev) => ({
+        ...prev,
+        status: 'failed',
+        lastCheckFinishedTs: Date.now(),
+        pendingAckValue: null,
+        message,
+      }));
+      rejectCheck(new Error(message));
+    }, HM10_LINK_CHECK_TIMEOUT_MS);
+
+    pendingHm10LinkCheckRef.current = {
+      token,
+      startedAt,
+      notificationCountAtStart: transportDebugRef.current.totalNotifications,
+      timeoutHandle,
+      resolve: resolveCheck,
+      reject: rejectCheck,
+      promise,
+    };
+
+    setHm10LinkGuard((prev) => ({
+      ...prev,
+      status: 'checking',
+      lastCheckStartedTs: startedAt,
+      lastCheckFinishedTs: null,
+      pendingAckValue: token,
+      message: 'Sent an HM-10 link ping. Waiting for sensor.hm10_link_ack from the Arduino...',
+    }));
+
+    try {
+      await sendCommand(buildHm10PingCommand(token));
+    } catch (sendError) {
+      clearTimeout(timeoutHandle);
+      pendingHm10LinkCheckRef.current = null;
+      const message =
+        sendError instanceof Error
+          ? sendError.message
+          : 'Unable to send the HM-10 link ping.';
+      setHm10LinkGuard((prev) => ({
+        ...prev,
+        status: 'failed',
+        lastCheckFinishedTs: Date.now(),
+        pendingAckValue: null,
+        message,
+      }));
+      throw sendError;
+    }
+
+    return promise;
+  }, [sendCommand]);
+
   const manualPublish = useCallback(
     async (
       value: number,
@@ -1549,6 +1905,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       connectedDevice,
       lastSample,
       recentSamples,
+      transportDebug,
+      hm10LinkGuard,
       lastUploadStatus,
       error,
       startScan,
@@ -1558,6 +1916,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       disconnectFromDevice,
       sendCommand,
       applyHm10BaudRate,
+      verifyHm10Link,
       manualPublish,
       setWorkoutMirrorSuppressed,
     }),
@@ -1573,6 +1932,8 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       connectedDevice,
       lastSample,
       recentSamples,
+      transportDebug,
+      hm10LinkGuard,
       lastUploadStatus,
       error,
       startScan,
@@ -1582,6 +1943,7 @@ export function BluetoothProvider({ children }: { children: ReactNode }) {
       disconnectFromDevice,
       sendCommand,
       applyHm10BaudRate,
+      verifyHm10Link,
       manualPublish,
       setWorkoutMirrorSuppressed,
     ]
