@@ -607,6 +607,20 @@ describe('Arduino HM-10 line buffer', () => {
     expect(connection.getCtx().transportDebug.parseIssueCount).toBe(1);
   });
 
+  it('marks printable HM-10 noise as unparsed instead of pretending it is a sample', async () => {
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+
+    await act(async () => {
+      connection.monitorCallback(null, { value: encode('10:P|~\n') });
+      await Promise.resolve();
+    });
+
+    expect(mockRunOrQueue).not.toHaveBeenCalled();
+    expect(connection.getCtx().lastSample).toBeNull();
+    expect(connection.getCtx().transportDebug.lastOutcome).toBe('unparsed');
+    expect(connection.getCtx().transportDebug.parseIssueCount).toBe(1);
+  });
+
   it('drops samples with out-of-range values (validateMetricValue integration)', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     const { monitorCallback } = await connectDevice({ profile: 'arduino_hm10' });
