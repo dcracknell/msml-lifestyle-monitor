@@ -225,7 +225,7 @@ describe('validateMetricValue', () => {
     expect(validateMetricValue('vitals.heart_rate', 75)).toBe(75);
     expect(validateMetricValue('vitals.spo2',       98)).toBe(98);
     expect(validateMetricValue('vitals.hrv',        45)).toBe(45);
-    expect(validateMetricValue('vitals.glucose',   5.2)).toBe(5.2);
+    expect(validateMetricValue('vitals.glucose',    95)).toBe(95);
     expect(validateMetricValue('body.weight_kg',  70.5)).toBe(70.5);
     expect(validateMetricValue('phone.steps',     8000)).toBe(8000);
   });
