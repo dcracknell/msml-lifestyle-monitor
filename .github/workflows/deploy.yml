@@ -214,6 +214,55 @@ jobs:
             fi
           }
 
+          stop_conflicting_docker_publisher() {
+            local port="$1"
+            local publishers id name compose_dir compose_service
+
+            publishers="$(docker ps --filter "publish=${port}" --format '{{.ID}}|{{.Names}}' 2>/dev/null || true)"
+            [ -n "${publishers}" ] || return 0
+
+            while IFS='|' read -r id name; do
+              [ -n "${id}" ] || continue
+              compose_dir="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${id}" 2>/dev/null || true)"
+              compose_service="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "${id}" 2>/dev/null || true)"
+              echo "tcp:${port} is published by container ${name} (${id}) service=${compose_service} dir=${compose_dir}"
+
+              case "${compose_service}:${compose_dir}" in
+                "lifestyle-web:${DEPLOY_ROOT}/lifestyle-web")
+                  echo "Removing stale lifestyle-web container ${name}."
+                  docker rm -f "${id}"
+                  ;;
+                *)
+                  echo "Refusing to stop unrelated container publishing tcp:${port}."
+                  return 1
+                  ;;
+              esac
+            done <<EOF
+          ${publishers}
+          EOF
+          }
+
+          wait_for_port_release() {
+            local port="$1"
+            local attempt listener_pids publisher_ids
+
+            for attempt in $(seq 1 15); do
+              listener_pids="$(lsof -tiTCP:${port} -sTCP:LISTEN 2>/dev/null || true)"
+              publisher_ids="$(docker ps --filter "publish=${port}" --format '{{.ID}}' 2>/dev/null || true)"
+
+              if [ -z "${listener_pids}" ] && [ -z "${publisher_ids}" ]; then
+                return 0
+              fi
+
+              sleep 1
+            done
+
+            echo "tcp:${port} is still occupied after waiting for release."
+            [ -n "${listener_pids}" ] && echo "Remaining host listeners: ${listener_pids}"
+            [ -n "${publisher_ids}" ] && echo "Remaining docker publishers: ${publisher_ids}"
+            return 1
+          }
+
           pulled_image=false
           if docker pull "${LIFESTYLE_WEB_IMAGE}"; then
             pulled_image=true
@@ -229,8 +278,11 @@ jobs:
           fi
 
           stop_conflicting_host_listener "${deploy_port}"
+          stop_conflicting_docker_publisher "${deploy_port}"
+          compose rm -fs lifestyle-web || true
+          wait_for_port_release "${deploy_port}"
           compose up -d --remove-orphans portainer
-          compose up -d --remove-orphans --force-recreate lifestyle-web
+          compose up -d --remove-orphans lifestyle-web
 
           for attempt in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${deploy_port}/api/health" >/dev/null; then
