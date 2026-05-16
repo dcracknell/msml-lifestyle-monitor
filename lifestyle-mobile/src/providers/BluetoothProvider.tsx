@@ -551,7 +551,7 @@ function mapGroupedSamples(groups: Map<string, Array<{ ts: number; value: number
 function parseStandardPayload(rawText: string, fallbackMetric: string): ParsedBatch[] {
   const now = Date.now();
   if (!rawText || !rawText.trim()) {
-    return [{ metric: fallbackMetric, samples: [{ ts: now, value: null }] }];
+    return [];
   }
 
   const trimmed = rawText.trim();
@@ -611,7 +611,11 @@ function parseStandardPayload(rawText: string, fallbackMetric: string): ParsedBa
   }
 
   const numeric = Number(trimmed);
-  return [{ metric: fallbackMetric, samples: [{ ts: now, value: Number.isFinite(numeric) ? numeric : null }] }];
+  if (Number.isFinite(numeric)) {
+    return [{ metric: fallbackMetric, samples: [{ ts: now, value: numeric }] }];
+  }
+
+  return [];
 }
 
 function parseHeartRateMeasurement(binary: string) {
