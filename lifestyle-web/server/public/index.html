@@ -842,39 +842,45 @@
           <div class="signals-row vitals-signals-row">
             <article class="metric-card metric-teal">
               <p class="metric-label">Resting HR</p>
-              <p class="metric-value" id="vitalsRestingHr">48</p>
+              <p class="metric-value" id="vitalsRestingHr">—</p>
               <p class="metric-unit">bpm</p>
-              <p class="metric-status">Optimal</p>
+              <p class="metric-status" id="vitalsRestingHrStatus">Awaiting data</p>
+              <p class="metric-note" id="vitalsRestingHrNote">Needs a recent sync.</p>
             </article>
             <article class="metric-card metric-teal">
               <p class="metric-label">SpO₂</p>
-              <p class="metric-value" id="vitalsSpo2">99</p>
+              <p class="metric-value" id="vitalsSpo2">—</p>
               <p class="metric-unit">%</p>
-              <p class="metric-status">Normal</p>
+              <p class="metric-status" id="vitalsSpo2Status">Awaiting data</p>
+              <p class="metric-note" id="vitalsSpo2Note">No oxygen trend yet.</p>
             </article>
             <article class="metric-card metric-teal">
               <p class="metric-label">HRV</p>
-              <p class="metric-value" id="vitalsHrv">113</p>
+              <p class="metric-value" id="vitalsHrv">—</p>
               <p class="metric-unit">ms</p>
-              <p class="metric-status">High recovery</p>
+              <p class="metric-status" id="vitalsHrvStatus">Awaiting data</p>
+              <p class="metric-note" id="vitalsHrvNote">No recovery baseline yet.</p>
             </article>
             <article class="metric-card metric-blue">
               <p class="metric-label">Stress</p>
-              <p class="metric-value" id="vitalsStress">22</p>
+              <p class="metric-value" id="vitalsStress">—</p>
               <p class="metric-unit">score</p>
-              <p class="metric-status">Low</p>
+              <p class="metric-status" id="vitalsStressStatus">Awaiting data</p>
+              <p class="metric-note" id="vitalsStressNote">No recent stress reading.</p>
             </article>
             <article class="metric-card metric-teal">
               <p class="metric-label">Blood Pressure</p>
-              <p class="metric-value vitals-bp-value" id="vitalsBloodPressure">115/70</p>
+              <p class="metric-value vitals-bp-value" id="vitalsBloodPressure">—</p>
               <p class="metric-unit">mmHg</p>
-              <p class="metric-status">Optimal</p>
+              <p class="metric-status" id="vitalsBloodPressureStatus">Awaiting data</p>
+              <p class="metric-note" id="vitalsBloodPressureNote">Connect a cuff to monitor BP trends.</p>
             </article>
             <article class="metric-card metric-teal">
               <p class="metric-label">Glucose</p>
-              <p class="metric-value" id="vitalsGlucose">92</p>
+              <p class="metric-value" id="vitalsGlucose">—</p>
               <p class="metric-unit">mg/dL</p>
-              <p class="metric-status">Normal fasting</p>
+              <p class="metric-status" id="vitalsGlucoseStatus">Awaiting data</p>
+              <p class="metric-note" id="vitalsGlucoseNote">Logs appear once data syncs.</p>
             </article>
           </div>
 
@@ -892,14 +898,7 @@
             <article class="card">
               <p class="section-eyebrow">Signal Summary</p>
               <table class="vitals-summary-table">
-                <tbody>
-                  <tr><td class="vs-label">Resting HR</td><td class="vs-value">48</td><td class="vs-unit">bpm</td></tr>
-                  <tr><td class="vs-label">SpO₂</td><td class="vs-value">99</td><td class="vs-unit">%</td></tr>
-                  <tr><td class="vs-label">HRV</td><td class="vs-value">113</td><td class="vs-unit">ms</td></tr>
-                  <tr><td class="vs-label">Stress Index</td><td class="vs-value">22</td><td class="vs-unit">score</td></tr>
-                  <tr><td class="vs-label">Blood Pressure</td><td class="vs-value">115/70</td><td class="vs-unit">mmHg</td></tr>
-                  <tr><td class="vs-label">Glucose</td><td class="vs-value">92</td><td class="vs-unit">mg/dL</td></tr>
-                </tbody>
+                <tbody id="vitalsSummaryBody"></tbody>
               </table>
             </article>
           </div>
@@ -962,8 +961,30 @@
               <div class="ppg-actions">
                 <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm" title="Run with the bundled demo PPG signal — no live stream required">Run Demo Signal</button>
                 <button id="ppgRunFull" type="button" class="btn-primary btn-sm" title="Run using the latest ppg.raw stream (500 Hz, 15 min window)">Run ppg.raw Window</button>
-                <button id="ppgArduinoToggle" type="button" class="btn-secondary btn-sm" title="Configure and run inference from an Arduino or custom BLE signal">Arduino Signal ▾</button>
+                <button id="ppgCsvToggle" type="button" class="btn-secondary btn-sm" title="Upload a PPG CSV source and run inference on that recording">CSV Upload v</button>
+                <button id="ppgArduinoToggle" type="button" class="btn-secondary btn-sm" title="Configure and run inference from an Arduino or custom BLE signal">Arduino Signal v</button>
               </div>
+            </div>
+
+            <div id="ppgCsvPanel" class="ppg-csv-panel hidden">
+              <p class="section-eyebrow" style="margin-bottom:8px">CSV Signal Source</p>
+              <p class="field-hint">Upload a PPG CSV each time you want to analyze a different recording. The signal file is required. Heart-rate and RR files are optional and only improve the preview graph.</p>
+              <div class="ppg-csv-controls">
+                <label class="ppg-csv-field">
+                  PPG signal CSV
+                  <input type="file" id="ppgCsvSignalInput" accept=".csv,text/csv" />
+                </label>
+                <label class="ppg-csv-field">
+                  Heart-rate CSV
+                  <input type="file" id="ppgCsvHeartRateInput" accept=".csv,text/csv" />
+                </label>
+                <label class="ppg-csv-field">
+                  RR-interval CSV
+                  <input type="file" id="ppgCsvRrInput" accept=".csv,text/csv" />
+                </label>
+              </div>
+              <p class="ppg-csv-status" id="ppgCsvStatus">Select a PPG signal CSV to enable imported inference.</p>
+              <button type="button" id="ppgRunCsv" class="btn-primary btn-sm">Run Inference on Uploaded CSV</button>
             </div>
 
             <!-- Arduino / custom signal panel -->
@@ -1009,6 +1030,10 @@
                   <span id="ppgQualitySub" class="ppg-metric-sub">SQI summary —</span>
                 </div>
               </div>
+              <p id="ppgSourceMeta" class="ppg-source-meta">Signal preview will appear after inference.</p>
+              <div class="chart-canvas-frame chart-canvas-frame-240">
+                <canvas id="ppgSourceChart"></canvas>
+              </div>
               <div class="chart-canvas-frame chart-canvas-frame-240">
                 <canvas id="ppgModelChart"></canvas>
               </div>
@@ -1017,9 +1042,6 @@
 
           <!-- Hidden for app.js compat -->
           <canvas id="vitalsTrendChart" class="hidden" height="1" aria-hidden="true"></canvas>
-          <span id="vitalsRestingHrNote" class="hidden" aria-hidden="true"></span>
-          <span id="vitalsBloodPressureNote" class="hidden" aria-hidden="true"></span>
-          <span id="vitalsGlucoseNote" class="hidden" aria-hidden="true"></span>
 
         </div><!-- /vitals subpage -->
 

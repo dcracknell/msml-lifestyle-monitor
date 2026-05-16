@@ -47,6 +47,8 @@ const REQUIRED_PYTHON_MODULES = [
   'yaml',
   'pyPPG',
 ];
+const CSV_PREVIEW_MAX_POINTS = 900;
+const MIN_CSV_SIGNAL_SECONDS = 30;
 
 const subjectStatement = db.prepare(
   `SELECT id,
@@ -681,6 +683,317 @@ function prepareDemoRunConfig() {
   };
 }
 
+function normalizeUploadName(value, fallback = 'upload.csv') {
+  const normalized = String(value || '').trim();
+  return normalized || fallback;
+}
+
+function sanitizeCsvText(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label} is empty.`);
+  }
+  return value.replace(/^\uFEFF/, '').trim();
+}
+
+function parseCsvTable(text, label) {
+  const cleaned = sanitizeCsvText(text, label);
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    throw new Error(`${label} must include a header row and at least one data row.`);
+  }
+
+  const headers = lines[0].split(',').map((value) => value.trim());
+  const rows = lines.slice(1).map((line) => {
+    const cells = line.split(',').map((value) => value.trim());
+    const row = {};
+    headers.forEach((header, index) => {
+      row[header] = cells[index] ?? '';
+    });
+    return row;
+  });
+
+  return { headers, rows };
+}
+
+function findCsvColumn(headers = [], candidates = []) {
+  const normalizedHeaders = headers.map((value) => String(value || '').trim().toLowerCase());
+  for (const candidate of candidates) {
+    const index = normalizedHeaders.indexOf(candidate);
+    if (index >= 0) {
+      return headers[index];
+    }
+  }
+  return null;
+}
+
+function toFiniteNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function inferFsHzFromTimes(timesSec = []) {
+  const deltas = [];
+  for (let index = 1; index < timesSec.length; index += 1) {
+    const delta = Number(timesSec[index]) - Number(timesSec[index - 1]);
+    if (Number.isFinite(delta) && delta > 0) {
+      deltas.push(delta);
+    }
+  }
+  if (!deltas.length) {
+    return null;
+  }
+  const sorted = [...deltas].sort((left, right) => left - right);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  if (!Number.isFinite(median) || median <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.round(1 / median));
+}
+
+function downsampleSeries(timesSec = [], values = [], limit = CSV_PREVIEW_MAX_POINTS) {
+  if (!Array.isArray(timesSec) || !Array.isArray(values) || !timesSec.length || !values.length) {
+    return null;
+  }
+
+  if (timesSec.length <= limit) {
+    return {
+      timesSec: timesSec.map((value) => Math.round(Number(value) * 1000) / 1000),
+      values: values.map((value) => Math.round(Number(value) * 1000000) / 1000000),
+    };
+  }
+
+  const sampledTimes = [];
+  const sampledValues = [];
+  const lastIndex = timesSec.length - 1;
+  for (let index = 0; index < limit; index += 1) {
+    const sourceIndex = Math.round((index / (limit - 1)) * lastIndex);
+    sampledTimes.push(Math.round(Number(timesSec[sourceIndex]) * 1000) / 1000);
+    sampledValues.push(Math.round(Number(values[sourceIndex]) * 1000000) / 1000000);
+  }
+
+  return {
+    timesSec: sampledTimes,
+    values: sampledValues,
+  };
+}
+
+function parseSignalCsvSource(csvSignalText, csvSignalName) {
+  const fileName = normalizeUploadName(csvSignalName, 'signal.csv');
+  const { headers, rows } = parseCsvTable(csvSignalText, `${fileName} (signal CSV)`);
+  const timeColumn = findCsvColumn(headers, ['time_s', 'time_sec', 'seconds', 'elapsed_s', 'elapsed_seconds', 'time']);
+  const signalColumn = findCsvColumn(headers, ['synthetic_ppg', 'ppg', 'ppg_raw', 'ppg_value', 'signal', 'value', 'raw']);
+  const embeddedHeartRateColumn = findCsvColumn(headers, ['heart_rate_bpm_interpolated', 'heart_rate_bpm', 'heart_rate', 'hr', 'bpm']);
+
+  if (!timeColumn) {
+    throw new Error(`${fileName} must include a time_s column so sample timing can be inferred.`);
+  }
+  if (!signalColumn) {
+    throw new Error(`${fileName} must include a PPG column such as synthetic_ppg or ppg.`);
+  }
+
+  const parsed = rows
+    .map((row) => ({
+      timeSec: toFiniteNumber(row[timeColumn]),
+      signalValue: toFiniteNumber(row[signalColumn]),
+      heartRateValue: embeddedHeartRateColumn ? toFiniteNumber(row[embeddedHeartRateColumn]) : null,
+    }))
+    .filter((row) => Number.isFinite(row.timeSec) && Number.isFinite(row.signalValue))
+    .sort((left, right) => left.timeSec - right.timeSec);
+
+  if (!parsed.length) {
+    throw new Error(`${fileName} did not contain any numeric PPG samples.`);
+  }
+
+  const baseTimeSec = parsed[0].timeSec;
+  const timesSec = parsed.map((row) => Math.max(0, row.timeSec - baseTimeSec));
+  const signalValues = parsed.map((row) => row.signalValue);
+  const fsHz = inferFsHzFromTimes(timesSec);
+
+  if (!Number.isFinite(fsHz) || fsHz < 1) {
+    throw new Error(`Could not infer a usable sample rate from ${fileName}.`);
+  }
+
+  let embeddedHeartRate = null;
+  if (embeddedHeartRateColumn) {
+    const heartRateRows = parsed.filter((row) => Number.isFinite(row.heartRateValue));
+    if (heartRateRows.length) {
+      embeddedHeartRate = {
+        fileName,
+        ...downsampleSeries(
+          heartRateRows.map((row) => Math.max(0, row.timeSec - baseTimeSec)),
+          heartRateRows.map((row) => row.heartRateValue)
+        ),
+      };
+    }
+  }
+
+  return {
+    fileName,
+    fsHz,
+    timesSec,
+    signalValues,
+    embeddedHeartRate,
+  };
+}
+
+function parseOptionalHeartRateCsv(csvHeartRateText, csvHeartRateName) {
+  if (typeof csvHeartRateText !== 'string' || !csvHeartRateText.trim()) {
+    return null;
+  }
+
+  const fileName = normalizeUploadName(csvHeartRateName, 'heart-rate.csv');
+  const { headers, rows } = parseCsvTable(csvHeartRateText, `${fileName} (heart-rate CSV)`);
+  const timeColumn = findCsvColumn(headers, ['time_s', 'time_sec', 'seconds', 'elapsed_s', 'elapsed_seconds', 'time']);
+  const heartRateColumn = findCsvColumn(headers, ['heart_rate_bpm', 'heart_rate_bpm_interpolated', 'heart_rate', 'hr', 'bpm']);
+
+  if (!timeColumn || !heartRateColumn) {
+    return null;
+  }
+
+  const parsed = rows
+    .map((row) => ({
+      timeSec: toFiniteNumber(row[timeColumn]),
+      value: toFiniteNumber(row[heartRateColumn]),
+    }))
+    .filter((row) => Number.isFinite(row.timeSec) && Number.isFinite(row.value))
+    .sort((left, right) => left.timeSec - right.timeSec);
+
+  if (!parsed.length) {
+    return null;
+  }
+
+  const baseTimeSec = parsed[0].timeSec;
+  return {
+    fileName,
+    ...downsampleSeries(
+      parsed.map((row) => Math.max(0, row.timeSec - baseTimeSec)),
+      parsed.map((row) => row.value)
+    ),
+  };
+}
+
+function parseOptionalRrSummary(csvRrText, csvRrName) {
+  if (typeof csvRrText !== 'string' || !csvRrText.trim()) {
+    return { fileName: normalizeUploadName(csvRrName, 'rr.csv'), sampleCount: 0, meanMs: null };
+  }
+
+  const fileName = normalizeUploadName(csvRrName, 'rr.csv');
+  const { headers, rows } = parseCsvTable(csvRrText, `${fileName} (RR CSV)`);
+  const rrColumn = findCsvColumn(headers, ['rr_interval_ms', 'rr_ms', 'rr_interval', 'rr']);
+  if (!rrColumn) {
+    return { fileName, sampleCount: 0, meanMs: null };
+  }
+
+  const values = rows
+    .map((row) => toFiniteNumber(row[rrColumn]))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) {
+    return { fileName, sampleCount: 0, meanMs: null };
+  }
+
+  const sum = values.reduce((total, value) => total + value, 0);
+  return {
+    fileName,
+    sampleCount: values.length,
+    meanMs: Math.round((sum / values.length) * 100) / 100,
+  };
+}
+
+function prepareCsvRunConfig(subject, input = {}) {
+  const profileStatus = buildProfileStatus(subject);
+  if (!profileStatus.ready) {
+    return { error: profileStatus.message, statusCode: 400 };
+  }
+
+  let signalSource;
+  try {
+    signalSource = parseSignalCsvSource(input.csvSignalText, input.csvSignalName);
+  } catch (error) {
+    return { error: error.message || 'Unable to parse the PPG signal CSV.', statusCode: 400 };
+  }
+
+  const minRequiredSamples = Math.max(1, Math.ceil(signalSource.fsHz * MIN_CSV_SIGNAL_SECONDS));
+  const fullDurationSeconds = signalSource.signalValues.length / signalSource.fsHz;
+  if (signalSource.signalValues.length < minRequiredSamples) {
+    return {
+      error: `${signalSource.fileName} must contain at least ${MIN_CSV_SIGNAL_SECONDS} seconds of PPG data.`,
+      statusCode: 400,
+    };
+  }
+
+  const targetWindowSeconds = Math.max(DEFAULT_WINDOW_SECONDS, MIN_CSV_SIGNAL_SECONDS);
+  const desiredSampleCount = Math.max(
+    minRequiredSamples,
+    Math.round(signalSource.fsHz * targetWindowSeconds)
+  );
+  const useStrictLength = signalSource.signalValues.length >= desiredSampleCount;
+  const startIndex = useStrictLength
+    ? Math.max(0, signalSource.signalValues.length - desiredSampleCount)
+    : 0;
+  const analysisSignal = signalSource.signalValues.slice(startIndex);
+  const analysisStartSec = Number(signalSource.timesSec[startIndex] || 0);
+  const analysisEndSec = Number(signalSource.timesSec[signalSource.timesSec.length - 1] || analysisStartSec);
+  const analysisDurationSeconds = analysisSignal.length / signalSource.fsHz;
+
+  if (analysisSignal.length < minRequiredSamples || analysisDurationSeconds < MIN_CSV_SIGNAL_SECONDS) {
+    return {
+      error: `${signalSource.fileName} does not contain a long enough continuous window for inference.`,
+      statusCode: 400,
+    };
+  }
+
+  const heartRatePreview =
+    parseOptionalHeartRateCsv(input.csvHeartRateText, input.csvHeartRateName)
+    || signalSource.embeddedHeartRate
+    || null;
+  const rrSummary = parseOptionalRrSummary(input.csvRrText, input.csvRrName);
+
+  const runDir = createRunDirectory();
+  const signalPath = path.join(runDir, 'signal.npy');
+  const demographicsPath = path.join(runDir, 'demographics.json');
+  const outputPath = path.join(runDir, 'prediction.json');
+
+  writeFloat32Npy(signalPath, new Float32Array(analysisSignal));
+  writeJson(demographicsPath, buildDemographicsPayload(subject));
+
+  return {
+    mode: 'csv',
+    signalPath,
+    demographicsPath,
+    outputPath,
+    runDir,
+    fsHz: signalSource.fsHz,
+    strictLength: useStrictLength,
+    signalMetric: 'csv.upload',
+    signalSampleCount: analysisSignal.length,
+    signalDurationMs: Math.max(0, Math.round(analysisDurationSeconds * 1000)),
+    signalStartedAt: null,
+    signalEndedAt: null,
+    inputPreview: {
+      sourceType: 'csv',
+      signalFileName: signalSource.fileName,
+      heartRateFileName: heartRatePreview?.fileName || null,
+      rrFileName: rrSummary.fileName || null,
+      sampleRateHz: signalSource.fsHz,
+      sampleCount: signalSource.signalValues.length,
+      durationSeconds: Math.round(fullDurationSeconds * 1000) / 1000,
+      signal: downsampleSeries(signalSource.timesSec, signalSource.signalValues),
+      heartRate: heartRatePreview,
+      rr: rrSummary,
+      window: {
+        startSec: Math.round(analysisStartSec * 1000) / 1000,
+        endSec: Math.round(analysisEndSec * 1000) / 1000,
+        durationSeconds: Math.round(analysisDurationSeconds * 1000) / 1000,
+        usedLatestWindow: useStrictLength,
+      },
+    },
+  };
+}
+
 function normalizeSignalMetric(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -940,7 +1253,10 @@ function spawnInference(runConfig, subject, requestedByUserId) {
   proc.on('close', (code) => {
     activeProcess = null;
     const completedAt = new Date();
-    const payload = readJsonFile(runConfig.outputPath);
+    const rawPayload = readJsonFile(runConfig.outputPath);
+    const payload = rawPayload && runConfig.inputPreview
+      ? { ...rawPayload, input_preview: runConfig.inputPreview }
+      : rawPayload;
 
     if (activeRunState?.id === runId) {
       activeRunState.completedAt = completedAt.toISOString();
@@ -1024,12 +1340,15 @@ router.post('/run', authenticate, (req, res) => {
   }
 
   const isDemo = req.body?.demo === true;
+  const hasCsvSignal = typeof req.body?.csvSignalText === 'string' && req.body.csvSignalText.trim();
   const customMetric = !isDemo ? normalizeSignalMetric(req.body?.metric) : null;
   const customFsHz = !isDemo && customMetric ? parseHzParam(req.body?.fsHz) : null;
 
   let runConfig;
   if (isDemo) {
     runConfig = prepareDemoRunConfig();
+  } else if (hasCsvSignal) {
+    runConfig = prepareCsvRunConfig(requestedSubject.subject, req.body || {});
   } else if (customMetric && customFsHz) {
     runConfig = prepareArduinoRunConfig(requestedSubject.subject, customMetric, customFsHz);
   } else {

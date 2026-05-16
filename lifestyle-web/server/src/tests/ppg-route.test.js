@@ -274,6 +274,89 @@ describe('PPG route', () => {
     proc.emit('close', 0);
   });
 
+  it('accepts an uploaded CSV signal source and persists preview metadata', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const csvSignalText = [
+      'time_s,synthetic_ppg,heart_rate_bpm_interpolated',
+      ...Array.from({ length: 31 }, (_, index) => `${index},${(index + 1) / 100},${60 + (index % 3)}`),
+    ].join('\n');
+
+    const response = await request(app)
+      .post('/api/ppg/run')
+      .send({
+        csvSignalText,
+        csvSignalName: 'activity.csv',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      mode: 'csv',
+      metric: 'csv.upload',
+      fsHz: 1,
+      strictLength: true,
+    });
+
+    const [, args] = spawnMock.mock.calls[0];
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '--signal',
+        expect.stringMatching(/signal\.npy$/),
+        '--demographics',
+        expect.stringMatching(/demographics\.json$/),
+        '--fs',
+        '1',
+      ])
+    );
+    expect(args).not.toContain('--no-strict-length');
+
+    const outputPath = getArgValue(args, '--output');
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(
+        {
+          model_name: 'bgl_catboost_current_ppg_demo_no_preop',
+          model_version: '20260501T165537Z',
+          prediction: {
+            label: 'low',
+            probabilities: {
+              low: 0.72,
+              elevated: 0.22,
+              hyper: 0.06,
+            },
+          },
+          quality: {
+            n_subwindows_attempted: 3,
+            n_subwindows_used: 3,
+            mean_sqi: 0.94,
+            min_sqi: 0.9,
+          },
+          warnings: [],
+        },
+        null,
+        2
+      )
+    );
+
+    proc.emit('close', 0);
+
+    expect(completeRunRunMock).toHaveBeenCalled();
+    const persistedPayload = JSON.parse(completeRunRunMock.mock.calls[0][11]);
+    expect(persistedPayload.input_preview).toMatchObject({
+      sourceType: 'csv',
+      signalFileName: 'activity.csv',
+      sampleRateHz: 1,
+      heartRate: expect.objectContaining({
+        fileName: 'activity.csv',
+      }),
+      window: expect.objectContaining({
+        usedLatestWindow: true,
+        durationSeconds: 30,
+      }),
+    });
+  });
+
   it('rejects live inference when the BGL profile is incomplete', async () => {
     subjectRow = {
       ...subjectRow,

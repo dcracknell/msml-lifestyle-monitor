@@ -42,36 +42,93 @@ const vitalsStatement = db.prepare(
     ORDER BY date ASC`
 );
 
+const SNAPSHOT_FIELDS = [
+  'restingHr',
+  'hrvScore',
+  'spo2',
+  'stressScore',
+  'systolic',
+  'diastolic',
+  'glucose',
+];
+
+function entriesWithFiniteKey(records = [], key) {
+  return records.filter((entry) => Number.isFinite(Number(entry?.[key])));
+}
+
+function recentEntriesForKey(records = [], key, limit = 7) {
+  return entriesWithFiniteKey(records, key).slice(-limit);
+}
+
+function recentEntriesForPair(records = [], leftKey, rightKey, limit = 7) {
+  return records
+    .filter(
+      (entry) =>
+        Number.isFinite(Number(entry?.[leftKey])) && Number.isFinite(Number(entry?.[rightKey]))
+    )
+    .slice(-limit);
+}
+
 function averageOfKey(records = [], key) {
-  const values = records
-    .map((entry) => Number(entry[key]))
-    .filter((value) => Number.isFinite(value));
+  const values = entriesWithFiniteKey(records, key).map((entry) => Number(entry[key]));
   if (!values.length) return null;
   const sum = values.reduce((total, value) => total + value, 0);
   return Math.round((sum / values.length) * 10) / 10;
 }
 
 function deltaFromLast(records = [], key) {
-  if (!records.length) return null;
-  const latest = Number(records[records.length - 1]?.[key]);
-  const previous = Number(records[records.length - 2]?.[key]);
+  const nonNullEntries = entriesWithFiniteKey(records, key);
+  if (nonNullEntries.length < 2) return null;
+  const latest = Number(nonNullEntries[nonNullEntries.length - 1]?.[key]);
+  const previous = Number(nonNullEntries[nonNullEntries.length - 2]?.[key]);
   if (!Number.isFinite(latest) || !Number.isFinite(previous)) return null;
   return Math.round((latest - previous) * 10) / 10;
 }
 
+function buildLatestSnapshot(timeline = []) {
+  if (!timeline.length) {
+    return null;
+  }
+
+  const latest = {
+    date: timeline[timeline.length - 1]?.date || null,
+    fieldDates: {},
+  };
+
+  SNAPSHOT_FIELDS.forEach((field) => {
+    const match = [...timeline].reverse().find((entry) => Number.isFinite(Number(entry?.[field])));
+    latest[field] = match ? Number(match[field]) : null;
+    latest.fieldDates[field] = match?.date || null;
+  });
+
+  return latest;
+}
+
 function buildStats(timeline = []) {
-  const recentWindow = timeline.slice(-7);
+  const restingHrEntries = recentEntriesForKey(timeline, 'restingHr');
+  const glucoseEntries = recentEntriesForKey(timeline, 'glucose');
+  const bpEntries = recentEntriesForPair(timeline, 'systolic', 'diastolic');
+  const hrvEntries = recentEntriesForKey(timeline, 'hrvScore');
+  const spo2Entries = recentEntriesForKey(timeline, 'spo2');
+  const stressEntries = recentEntriesForKey(timeline, 'stressScore');
+
   return {
-    window: recentWindow.length,
-    restingHrAvg: averageOfKey(recentWindow, 'restingHr'),
+    window: Math.min(timeline.length, 7),
+    restingHrCount: restingHrEntries.length,
+    restingHrAvg: averageOfKey(restingHrEntries, 'restingHr'),
     restingHrDelta: deltaFromLast(timeline, 'restingHr'),
-    glucoseAvg: averageOfKey(recentWindow, 'glucose'),
+    glucoseCount: glucoseEntries.length,
+    glucoseAvg: averageOfKey(glucoseEntries, 'glucose'),
     glucoseDelta: deltaFromLast(timeline, 'glucose'),
-    systolicAvg: averageOfKey(recentWindow, 'systolic'),
-    diastolicAvg: averageOfKey(recentWindow, 'diastolic'),
-    hrvAvg: averageOfKey(recentWindow, 'hrvScore'),
-    spo2Avg: averageOfKey(recentWindow, 'spo2'),
-    stressAvg: averageOfKey(recentWindow, 'stressScore'),
+    bloodPressureCount: bpEntries.length,
+    systolicAvg: averageOfKey(bpEntries, 'systolic'),
+    diastolicAvg: averageOfKey(bpEntries, 'diastolic'),
+    hrvCount: hrvEntries.length,
+    hrvAvg: averageOfKey(hrvEntries, 'hrvScore'),
+    spo2Count: spo2Entries.length,
+    spo2Avg: averageOfKey(spo2Entries, 'spo2'),
+    stressCount: stressEntries.length,
+    stressAvg: averageOfKey(stressEntries, 'stressScore'),
   };
 }
 
@@ -95,7 +152,7 @@ router.get('/', authenticate, (req, res) => {
   subject.role = coerceRole(subject.role);
 
   const timeline = vitalsStatement.all(subjectId);
-  const latest = timeline[timeline.length - 1] || null;
+  const latest = buildLatestSnapshot(timeline);
 
   return res.json({
     subject,

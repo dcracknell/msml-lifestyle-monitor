@@ -1357,14 +1357,24 @@ const shareFeedback = document.getElementById('shareFeedback');
 const shareCoachSelect = document.getElementById('shareCoachSelect');
 const shareDisabledMessage = document.getElementById('shareDisabledMessage');
 const vitalsRestingHrValue = document.getElementById('vitalsRestingHr');
+const vitalsRestingHrStatus = document.getElementById('vitalsRestingHrStatus');
 const vitalsRestingHrNote = document.getElementById('vitalsRestingHrNote');
 const vitalsHrvValue = document.getElementById('vitalsHrv');
+const vitalsHrvStatus = document.getElementById('vitalsHrvStatus');
+const vitalsHrvNote = document.getElementById('vitalsHrvNote');
 const vitalsSpo2Value = document.getElementById('vitalsSpo2');
+const vitalsSpo2Status = document.getElementById('vitalsSpo2Status');
+const vitalsSpo2Note = document.getElementById('vitalsSpo2Note');
 const vitalsStressValue = document.getElementById('vitalsStress');
+const vitalsStressStatus = document.getElementById('vitalsStressStatus');
+const vitalsStressNote = document.getElementById('vitalsStressNote');
 const vitalsBloodPressureValue = document.getElementById('vitalsBloodPressure');
+const vitalsBloodPressureStatus = document.getElementById('vitalsBloodPressureStatus');
 const vitalsBloodPressureNote = document.getElementById('vitalsBloodPressureNote');
 const vitalsGlucoseValue = document.getElementById('vitalsGlucose');
+const vitalsGlucoseStatus = document.getElementById('vitalsGlucoseStatus');
 const vitalsGlucoseNote = document.getElementById('vitalsGlucoseNote');
+const vitalsSummaryBody = document.getElementById('vitalsSummaryBody');
 const vitalsHistoryList = document.getElementById('vitalsHistory');
 const vitalsFeedback = document.getElementById('vitalsFeedback');
 const nutritionGoalList = document.getElementById('nutritionGoalList');
@@ -3685,14 +3695,27 @@ function resetVitalsState() {
   state.charts.vitalsTrend?.destroy();
   state.charts.vitalsTrend = null;
   if (vitalsRestingHrValue) vitalsRestingHrValue.textContent = '—';
+  if (vitalsRestingHrStatus) vitalsRestingHrStatus.textContent = 'Awaiting data';
   if (vitalsRestingHrNote) vitalsRestingHrNote.textContent = 'Awaiting vitals sync.';
   if (vitalsHrvValue) vitalsHrvValue.textContent = '—';
+  if (vitalsHrvStatus) vitalsHrvStatus.textContent = 'Awaiting data';
+  if (vitalsHrvNote) vitalsHrvNote.textContent = 'No recovery baseline yet.';
   if (vitalsSpo2Value) vitalsSpo2Value.textContent = '—';
+  if (vitalsSpo2Status) vitalsSpo2Status.textContent = 'Awaiting data';
+  if (vitalsSpo2Note) vitalsSpo2Note.textContent = 'No oxygen trend yet.';
   if (vitalsStressValue) vitalsStressValue.textContent = '—';
+  if (vitalsStressStatus) vitalsStressStatus.textContent = 'Awaiting data';
+  if (vitalsStressNote) vitalsStressNote.textContent = 'No recent stress reading.';
   if (vitalsBloodPressureValue) vitalsBloodPressureValue.textContent = '—';
+  if (vitalsBloodPressureStatus) vitalsBloodPressureStatus.textContent = 'Awaiting data';
   if (vitalsBloodPressureNote) vitalsBloodPressureNote.textContent = 'Connect a cuff to monitor BP trends.';
   if (vitalsGlucoseValue) vitalsGlucoseValue.textContent = '—';
+  if (vitalsGlucoseStatus) vitalsGlucoseStatus.textContent = 'Awaiting data';
   if (vitalsGlucoseNote) vitalsGlucoseNote.textContent = 'Logs appear once data syncs.';
+  if (vitalsSummaryBody) {
+    vitalsSummaryBody.innerHTML =
+      '<tr><td class="vs-label">Vitals summary</td><td class="vs-value">—</td><td class="vs-unit">Sync needed</td></tr>';
+  }
   if (vitalsFeedback) vitalsFeedback.textContent = '';
   if (vitalsHistoryList) {
     renderListPlaceholder(vitalsHistoryList, 'Vitals sync required to populate history.');
@@ -9001,7 +9024,7 @@ async function loadVitals(subjectOverrideId) {
     state.vitals.latest = payload.latest || null;
     state.vitals.timeline = Array.isArray(payload.timeline) ? payload.timeline : [];
     state.vitals.stats = payload.stats || null;
-    renderVitalsDashboard(state.vitals);
+    renderVitalsDashboardEnhanced(state.vitals);
     if (vitalsFeedback) {
       vitalsFeedback.textContent = '';
     }
@@ -9935,6 +9958,10 @@ function formatBloodPressure(entry) {
   return '— mmHg';
 }
 
+function formatBloodPressureValue(entry) {
+  return formatBloodPressure(entry).replace(/\s*mmHg$/i, '').trim() || '—';
+}
+
 function sortVitalsTimeline(timeline = []) {
   return timeline
     .slice()
@@ -10345,6 +10372,362 @@ function renderVitalsChart(timeline = []) {
       },
     },
   });
+}
+
+function latestVitalsDateForField(latest, field) {
+  return latest?.fieldDates?.[field] || latest?.date || null;
+}
+
+function formatVitalsRecency(dateValue, fallback = 'No recent reading.') {
+  if (!dateValue) return fallback;
+  return `Last logged ${formatDate(dateValue)}.`;
+}
+
+function formatVitalsReadingCount(count) {
+  const numeric = Number(count);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 'recent logs';
+  }
+  return `${numeric} logged reading${numeric === 1 ? '' : 's'}`;
+}
+
+function hasVitalsAverage(count) {
+  return Number.isFinite(Number(count)) && Number(count) > 1;
+}
+
+function classifyRestingHr(value) {
+  if (!Number.isFinite(value)) return 'Awaiting data';
+  if (value < 50) return 'Below typical';
+  if (value <= 60) return 'Steady';
+  if (value <= 80) return 'Within range';
+  return 'Elevated';
+}
+
+function classifySpo2(value) {
+  if (!Number.isFinite(value)) return 'Awaiting data';
+  if (value >= 95) return 'Normal oxygenation';
+  if (value >= 92) return 'Slightly low';
+  return 'Low oxygen';
+}
+
+function classifyHrv(value, baseline) {
+  if (!Number.isFinite(value)) return 'Awaiting data';
+  if (Number.isFinite(baseline)) {
+    if (value >= baseline + 8) return 'Above baseline';
+    if (value <= baseline - 8) return 'Below baseline';
+    return 'Near baseline';
+  }
+  if (value >= 100) return 'Strong recovery';
+  if (value >= 60) return 'Moderate recovery';
+  return 'Suppressed recovery';
+}
+
+function classifyStress(value) {
+  if (!Number.isFinite(value)) return 'Awaiting data';
+  if (value <= 25) return 'Low strain';
+  if (value <= 50) return 'Moderate strain';
+  return 'High strain';
+}
+
+function classifyBloodPressure(entry) {
+  const systolic = Number(entry?.systolic);
+  const diastolic = Number(entry?.diastolic);
+  if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
+    return 'Awaiting data';
+  }
+  if (systolic < 120 && diastolic < 80) return 'In range';
+  if (systolic < 130 && diastolic < 80) return 'Slightly elevated';
+  return 'High reading';
+}
+
+function classifyGlucose(value) {
+  if (!Number.isFinite(value)) return 'Awaiting data';
+  if (value < 70) return 'Below target';
+  if (value <= 140) return 'In target band';
+  return 'Above target';
+}
+
+function renderVitalsSummaryTable(latest, stats) {
+  if (!vitalsSummaryBody) return;
+  const hrvBaseline = hasVitalsAverage(stats?.hrvCount) ? Number(stats?.hrvAvg) : null;
+
+  const rows = [
+    {
+      label: 'Resting HR',
+      value: Number.isFinite(Number(latest?.restingHr)) ? Math.round(Number(latest.restingHr)) : '—',
+      unit: 'bpm',
+      copy: `${classifyRestingHr(Number(latest?.restingHr))}. ${formatVitalsRecency(
+        latestVitalsDateForField(latest, 'restingHr'),
+        'No recent heart-rate reading.'
+      )}`,
+    },
+    {
+      label: 'SpO₂',
+      value: Number.isFinite(Number(latest?.spo2)) ? Math.round(Number(latest.spo2)) : '—',
+      unit: '%',
+      copy: `${classifySpo2(Number(latest?.spo2))}. ${formatVitalsRecency(
+        latestVitalsDateForField(latest, 'spo2'),
+        'No recent oxygen reading.'
+      )}`,
+    },
+    {
+      label: 'HRV',
+      value: Number.isFinite(Number(latest?.hrvScore)) ? Math.round(Number(latest.hrvScore)) : '—',
+      unit: 'ms',
+      copy: `${classifyHrv(Number(latest?.hrvScore), hrvBaseline)}. ${formatVitalsRecency(
+        latestVitalsDateForField(latest, 'hrvScore'),
+        'No recent HRV reading.'
+      )}`,
+    },
+    {
+      label: 'Stress',
+      value: Number.isFinite(Number(latest?.stressScore)) ? Math.round(Number(latest.stressScore)) : '—',
+      unit: 'score',
+      copy: `${classifyStress(Number(latest?.stressScore))}. ${formatVitalsRecency(
+        latestVitalsDateForField(latest, 'stressScore'),
+        'No recent stress reading.'
+      )}`,
+    },
+    {
+      label: 'Blood Pressure',
+      value: formatBloodPressureValue(latest),
+      unit: 'mmHg',
+      copy: `${classifyBloodPressure(latest)}. ${formatVitalsRecency(
+        latestVitalsDateForField(latest, 'systolic') || latestVitalsDateForField(latest, 'diastolic'),
+        'No recent cuff reading.'
+      )}`,
+    },
+    {
+      label: 'Glucose',
+      value: Number.isFinite(Number(latest?.glucose)) ? Math.round(Number(latest.glucose)) : '—',
+      unit: 'mg/dL',
+      copy: `${classifyGlucose(Number(latest?.glucose))}. ${formatVitalsRecency(
+        latestVitalsDateForField(latest, 'glucose'),
+        'No recent glucose reading.'
+      )}`,
+    },
+  ];
+
+  vitalsSummaryBody.innerHTML = rows
+    .map(
+      (row) => `
+        <tr>
+          <td class="vs-label">
+            <span>${row.label}</span>
+            <span class="vs-copy">${row.copy}</span>
+          </td>
+          <td class="vs-value">${row.value}</td>
+          <td class="vs-unit">${row.unit}</td>
+        </tr>
+      `
+    )
+    .join('');
+}
+
+function renderVitalsGlucoseChartEnhanced(timeline = []) {
+  const canvasId = 'vitalsGlucoseChart';
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const chronological = sortVitalsTimeline(timeline).filter((entry) =>
+    Number.isFinite(Number(entry?.glucose))
+  );
+  if (!chronological.length) {
+    state.charts.vitalsGlucose?.destroy();
+    state.charts.vitalsGlucose = null;
+    showChartMessage(canvasId, 'Sync glucose readings to reveal blood sugar trend.');
+    return;
+  }
+
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  const glucoseValues = chronological.map((entry) => Number(entry.glucose));
+
+  state.charts.vitalsGlucose?.destroy();
+  state.charts.vitalsGlucose = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: chronological.map((entry) => formatDate(entry.date)),
+      datasets: [
+        {
+          label: 'Glucose',
+          data: glucoseValues,
+          borderColor: '#a78bfa',
+          backgroundColor: 'rgba(167, 139, 250, 0.14)',
+          borderWidth: 2,
+          tension: 0.35,
+          fill: false,
+          pointRadius: 3,
+          pointBackgroundColor: glucoseValues.map((value) => {
+            if (value < 70) return '#f59e0b';
+            if (value > 140) return '#ef4444';
+            return '#a78bfa';
+          }),
+        },
+        {
+          label: 'Low target',
+          data: Array(chronological.length).fill(70),
+          borderColor: 'rgba(245, 158, 11, 0.55)',
+          borderWidth: 1,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          tension: 0,
+        },
+        {
+          label: 'High target',
+          data: Array(chronological.length).fill(140),
+          borderColor: 'rgba(255,255,255,0.35)',
+          borderWidth: 1,
+          borderDash: [5, 4],
+          pointRadius: 0,
+          tension: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 14 }),
+        tooltip: {
+          callbacks: {
+            label(context) {
+              const label = context.dataset.label || '';
+              if (label !== 'Glucose') {
+                return `${label}: ${context.raw} mg/dL`;
+              }
+              const value = Number(context.raw);
+              return `Glucose: ${value} mg/dL · ${classifyGlucose(value)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) {
+              return `${value} mg/dL`;
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+function renderVitalsDashboardEnhanced(vitals = state.vitals) {
+  const latest = vitals?.latest || null;
+  const stats = vitals?.stats || null;
+  const timeline = Array.isArray(vitals?.timeline) ? vitals.timeline : [];
+
+  if (vitalsRestingHrValue) {
+    const value = Number(latest?.restingHr);
+    vitalsRestingHrValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+  }
+  if (vitalsRestingHrStatus) {
+    vitalsRestingHrStatus.textContent = classifyRestingHr(Number(latest?.restingHr));
+  }
+  if (vitalsRestingHrNote) {
+    const deltaCopy = describeVitalsDelta(stats?.restingHrDelta, 'bpm');
+    vitalsRestingHrNote.textContent = deltaCopy
+      || (hasVitalsAverage(stats?.restingHrCount) && Number.isFinite(stats?.restingHrAvg)
+        ? `Avg ${Math.round(stats.restingHrAvg)} bpm across ${formatVitalsReadingCount(stats.restingHrCount)}.`
+        : formatVitalsRecency(
+          latestVitalsDateForField(latest, 'restingHr'),
+          'Awaiting more heart-rate readings.'
+        ));
+  }
+
+  if (vitalsHrvValue) {
+    const value = pickVitalsNumber(latest?.hrvScore, stats?.hrvAvg);
+    vitalsHrvValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+  }
+  if (vitalsHrvStatus) {
+    vitalsHrvStatus.textContent = classifyHrv(
+      Number(latest?.hrvScore),
+      hasVitalsAverage(stats?.hrvCount) ? Number(stats?.hrvAvg) : null
+    );
+  }
+  if (vitalsHrvNote) {
+    vitalsHrvNote.textContent = hasVitalsAverage(stats?.hrvCount) && Number.isFinite(stats?.hrvAvg)
+      ? `Baseline ${Math.round(stats.hrvAvg)} ms across ${formatVitalsReadingCount(stats.hrvCount)}.`
+      : formatVitalsRecency(latestVitalsDateForField(latest, 'hrvScore'), 'No recovery baseline yet.');
+  }
+
+  if (vitalsSpo2Value) {
+    const value = pickVitalsNumber(latest?.spo2, stats?.spo2Avg);
+    vitalsSpo2Value.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+  }
+  if (vitalsSpo2Status) {
+    vitalsSpo2Status.textContent = classifySpo2(Number(latest?.spo2));
+  }
+  if (vitalsSpo2Note) {
+    vitalsSpo2Note.textContent = hasVitalsAverage(stats?.spo2Count) && Number.isFinite(stats?.spo2Avg)
+      ? `Avg ${Math.round(stats.spo2Avg)}% across ${formatVitalsReadingCount(stats.spo2Count)}.`
+      : formatVitalsRecency(latestVitalsDateForField(latest, 'spo2'), 'No oxygen trend yet.');
+  }
+
+  if (vitalsStressValue) {
+    const value = pickVitalsNumber(latest?.stressScore, stats?.stressAvg);
+    vitalsStressValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+  }
+  if (vitalsStressStatus) {
+    vitalsStressStatus.textContent = classifyStress(Number(latest?.stressScore));
+  }
+  if (vitalsStressNote) {
+    vitalsStressNote.textContent = hasVitalsAverage(stats?.stressCount) && Number.isFinite(stats?.stressAvg)
+      ? `Avg ${Math.round(stats.stressAvg)} across ${formatVitalsReadingCount(stats.stressCount)}.`
+      : formatVitalsRecency(latestVitalsDateForField(latest, 'stressScore'), 'No recent stress reading.');
+  }
+
+  if (vitalsBloodPressureValue) {
+    vitalsBloodPressureValue.textContent = formatBloodPressureValue(latest);
+  }
+  if (vitalsBloodPressureStatus) {
+    vitalsBloodPressureStatus.textContent = classifyBloodPressure(latest);
+  }
+  if (vitalsBloodPressureNote) {
+    vitalsBloodPressureNote.textContent =
+      hasVitalsAverage(stats?.bloodPressureCount)
+        && Number.isFinite(stats?.systolicAvg)
+        && Number.isFinite(stats?.diastolicAvg)
+        ? `Avg ${Math.round(stats.systolicAvg)}/${Math.round(stats.diastolicAvg)} mmHg across ${formatVitalsReadingCount(stats.bloodPressureCount)}.`
+        : formatVitalsRecency(
+          latestVitalsDateForField(latest, 'systolic') || latestVitalsDateForField(latest, 'diastolic'),
+          'Add a cuff reading to populate blood pressure insights.'
+        );
+  }
+
+  if (vitalsGlucoseValue) {
+    const value = Number(latest?.glucose);
+    vitalsGlucoseValue.textContent = Number.isFinite(value) ? `${Math.round(value)}` : '—';
+  }
+  if (vitalsGlucoseStatus) {
+    vitalsGlucoseStatus.textContent = classifyGlucose(Number(latest?.glucose));
+  }
+  if (vitalsGlucoseNote) {
+    const deltaCopy = describeVitalsDelta(stats?.glucoseDelta, 'mg/dL');
+    vitalsGlucoseNote.textContent = deltaCopy
+      || (hasVitalsAverage(stats?.glucoseCount) && Number.isFinite(stats?.glucoseAvg)
+        ? `Avg ${Math.round(stats.glucoseAvg)} mg/dL across ${formatVitalsReadingCount(stats.glucoseCount)}.`
+        : formatVitalsRecency(
+          latestVitalsDateForField(latest, 'glucose'),
+          'Sync a glucose reading to view trends.'
+        ));
+  }
+
+  renderVitalsSummaryTable(latest, stats);
+  renderVitalsHistory(timeline);
+  renderVitalsHrvChart(timeline);
+  renderVitalsRestingHrChart(timeline);
+  renderVitalsGlucoseChartEnhanced(timeline);
 }
 
 async function loadHeartRateStream(subjectOverrideId) {
@@ -12846,6 +13229,13 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 
 const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
 const ppgRunFullBtn = document.getElementById('ppgRunFull');
+const ppgCsvToggleBtn = document.getElementById('ppgCsvToggle');
+const ppgCsvPanel = document.getElementById('ppgCsvPanel');
+const ppgCsvSignalInput = document.getElementById('ppgCsvSignalInput');
+const ppgCsvHeartRateInput = document.getElementById('ppgCsvHeartRateInput');
+const ppgCsvRrInput = document.getElementById('ppgCsvRrInput');
+const ppgCsvStatus = document.getElementById('ppgCsvStatus');
+const ppgRunCsvBtn = document.getElementById('ppgRunCsv');
 const ppgArduinoToggleBtn = document.getElementById('ppgArduinoToggle');
 const ppgArduinoPanel = document.getElementById('ppgArduinoPanel');
 const ppgArduinoMetricSelect = document.getElementById('ppgArduinoMetric');
@@ -12860,6 +13250,7 @@ const ppgConfidenceValue = document.getElementById('ppgConfidenceValue');
 const ppgConfidenceSub = document.getElementById('ppgConfidenceSub');
 const ppgQualityValue = document.getElementById('ppgQualityValue');
 const ppgQualitySub = document.getElementById('ppgQualitySub');
+const ppgSourceMeta = document.getElementById('ppgSourceMeta');
 
 let ppgLiveInputStatus = null;
 let ppgDemoInputStatus = null;
@@ -12867,6 +13258,7 @@ let ppgRuntimeStatus = null;
 let ppgBundleStatus = null;
 let ppgProfileStatus = null;
 let ppgArduinoInputStatus = null;
+let ppgCsvPanelOpen = false;
 let ppgArduinoPanelOpen = false;
 const PPG_ZONE_ORDER = ['low', 'elevated', 'hyper'];
 const PPG_ZONE_COLORS = {
@@ -12887,6 +13279,53 @@ const PPG_ZONE_COLORS = {
     border: 'rgba(148,163,184,0.65)',
   },
 };
+
+function getSelectedPpgCsvSignalFile() {
+  return ppgCsvSignalInput?.files?.[0] || null;
+}
+
+function hasPpgCsvSelection() {
+  return Boolean(getSelectedPpgCsvSignalFile());
+}
+
+function describePpgCsvFiles() {
+  const parts = [];
+  const signalFile = getSelectedPpgCsvSignalFile();
+  const hrFile = ppgCsvHeartRateInput?.files?.[0] || null;
+  const rrFile = ppgCsvRrInput?.files?.[0] || null;
+
+  if (signalFile) parts.push(`Signal: ${signalFile.name}`);
+  if (hrFile) parts.push(`HR: ${hrFile.name}`);
+  if (rrFile) parts.push(`RR: ${rrFile.name}`);
+
+  return parts.join(' | ');
+}
+
+function updatePpgCsvSelectionStatus() {
+  if (!ppgCsvStatus) return;
+  if (!hasPpgCsvSelection()) {
+    ppgCsvStatus.textContent = 'Select a PPG signal CSV to enable imported inference.';
+    ppgCsvStatus.className = 'ppg-csv-status';
+    return;
+  }
+
+  ppgCsvStatus.textContent = `${describePpgCsvFiles()} ready for upload.`;
+  ppgCsvStatus.className = 'ppg-csv-status';
+}
+
+function readLocalFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve('');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsText(file);
+  });
+}
 
 function capitalizePpgLabel(value) {
   if (typeof value !== 'string' || !value.trim()) return '—';
@@ -12960,6 +13399,7 @@ function setPpgButtonsDisabled(disabled, status = {}) {
   const demoReady = baseReady && ppgDemoInputStatus?.ready !== false;
   const liveReady =
     baseReady && ppgProfileStatus?.ready === true && ppgLiveInputStatus?.ready === true;
+  const csvReady = baseReady && ppgProfileStatus?.ready === true && hasPpgCsvSelection();
 
   if (ppgRunDemoBtn) {
     ppgRunDemoBtn.disabled = disabled || !demoReady;
@@ -12981,6 +13421,18 @@ function setPpgButtonsDisabled(disabled, status = {}) {
         'Latest PPG window inference is unavailable.';
     } else {
       ppgRunFullBtn.title = disabled ? 'BGL inference running.' : '';
+    }
+  }
+
+  if (ppgRunCsvBtn) {
+    ppgRunCsvBtn.disabled = disabled || !csvReady;
+    if (!csvReady && ppgCsvPanelOpen) {
+      ppgRunCsvBtn.title =
+        blockingMessage ||
+        ppgProfileStatus?.message ||
+        'Select a PPG signal CSV above before starting inference.';
+    } else {
+      ppgRunCsvBtn.title = disabled ? 'BGL inference running.' : '';
     }
   }
 
@@ -13014,11 +13466,11 @@ function getPpgIdleText() {
     return ppgProfileStatus.message;
   }
   if (ppgLiveInputStatus?.ready === true) {
-    return 'No inference run yet. Run the latest PPG window or the bundled demo.';
+    return 'No inference run yet. Run the latest PPG window, upload a CSV, or use the bundled demo.';
   }
   return (
     ppgLiveInputStatus?.message ||
-    'No inference run yet. Stream a 15-minute ppg.raw window or run the bundled demo.'
+    'No inference run yet. Stream a 15-minute ppg.raw window, upload a CSV, or run the bundled demo.'
   );
 }
 
@@ -13087,6 +13539,76 @@ async function triggerPpg(isDemo) {
     }
     setPpgStatus(
       `BGL inference running (${isDemo ? 'bundled demo' : 'latest PPG window'}, this can take 1–3 minutes)…`,
+      'ppg-running'
+    );
+    startPpgPoll();
+  } catch (err) {
+    setPpgStatus(`Error: ${err.message}`, 'ppg-error');
+    setPpgButtonsDisabled(false);
+  }
+}
+
+function formatPpgTimeLabel(seconds) {
+  const numeric = Number(seconds);
+  if (!Number.isFinite(numeric) || numeric < 0) return '';
+  const mins = Math.floor(numeric / 60);
+  const secs = Math.floor(numeric % 60)
+    .toString()
+    .padStart(2, '0');
+  if (mins >= 60) {
+    return formatDurationFromSeconds(numeric);
+  }
+  return `${mins}:${secs}`;
+}
+
+async function triggerPpgCsv() {
+  const signalFile = getSelectedPpgCsvSignalFile();
+  if (!signalFile) {
+    setPpgStatus('Select a PPG signal CSV first.', 'ppg-error');
+    updatePpgCsvSelectionStatus();
+    return;
+  }
+  if (!state.token) return;
+
+  setPpgButtonsDisabled(true);
+  setPpgStatus(`Reading ${signalFile.name} and preparing imported inference...`, 'ppg-running');
+
+  try {
+    const [signalText, heartRateText, rrText] = await Promise.all([
+      readLocalFileAsText(signalFile),
+      readLocalFileAsText(ppgCsvHeartRateInput?.files?.[0] || null),
+      readLocalFileAsText(ppgCsvRrInput?.files?.[0] || null),
+    ]);
+
+    const targetId = state.viewing?.id ?? state.user?.id;
+    const res = await apiFetch('/api/ppg/run', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
+        csvSignalText: signalText,
+        csvSignalName: signalFile.name,
+        csvHeartRateText: heartRateText || undefined,
+        csvHeartRateName: ppgCsvHeartRateInput?.files?.[0]?.name || undefined,
+        csvRrText: rrText || undefined,
+        csvRrName: ppgCsvRrInput?.files?.[0]?.name || undefined,
+      }),
+    });
+
+    if (res.status === 409) {
+      setPpgStatus('BGL inference already running...', 'ppg-running');
+      startPpgPoll();
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setPpgStatus(`Failed to start: ${err.message || res.statusText}`, 'ppg-error');
+      setPpgButtonsDisabled(false);
+      return;
+    }
+
+    setPpgStatus(
+      `Imported CSV inference running (${signalFile.name}, this can take 1-3 minutes)...`,
       'ppg-running'
     );
     startPpgPoll();
@@ -13170,6 +13692,137 @@ async function triggerPpgArduino() {
     setPpgStatus(`Error: ${err.message}`, 'ppg-error');
     setPpgButtonsDisabled(false);
   }
+}
+
+function renderPpgSourceChart(prediction) {
+  const canvas = document.getElementById('ppgSourceChart');
+  const preview = prediction?.input_preview || prediction?.inputPreview || null;
+  const signalSeries = preview?.signal || null;
+  const signalTimes = Array.isArray(signalSeries?.timesSec) ? signalSeries.timesSec : [];
+  const signalValues = Array.isArray(signalSeries?.values) ? signalSeries.values : [];
+
+  if (!canvas || !signalTimes.length || signalTimes.length !== signalValues.length) {
+    state.charts.ppgSource?.destroy();
+    state.charts.ppgSource = null;
+    if (ppgSourceMeta) {
+      ppgSourceMeta.textContent = 'Signal preview unavailable for this inference run.';
+    }
+    return;
+  }
+
+  const heartRateSeries = preview?.heartRate || null;
+  const heartRateTimes = Array.isArray(heartRateSeries?.timesSec) ? heartRateSeries.timesSec : [];
+  const heartRateValues = Array.isArray(heartRateSeries?.values) ? heartRateSeries.values : [];
+  const windowStartSec = Number(preview?.window?.startSec);
+  const windowEndSec = Number(preview?.window?.endSec);
+  const highlightedValues = signalTimes.map((timeSec, index) =>
+    Number.isFinite(windowStartSec) && Number.isFinite(windowEndSec)
+      && timeSec >= windowStartSec && timeSec <= windowEndSec
+      ? signalValues[index]
+      : null
+  );
+
+  if (ppgSourceMeta) {
+    const durationCopy = Number.isFinite(Number(preview?.durationSeconds))
+      ? formatDurationFromSeconds(Number(preview.durationSeconds))
+      : '--';
+    const rateCopy = Number.isFinite(Number(preview?.sampleRateHz))
+      ? `${Math.round(Number(preview.sampleRateHz))} Hz`
+      : 'unknown Hz';
+    const sourceName = preview?.signalFileName || 'Uploaded signal';
+    const windowCopy =
+      Number.isFinite(windowStartSec) && Number.isFinite(windowEndSec)
+        ? `Analyzed ${formatPpgTimeLabel(windowStartSec)}-${formatPpgTimeLabel(windowEndSec)}`
+        : 'Analyzed full signal';
+    ppgSourceMeta.textContent = `${sourceName} | ${durationCopy} total | ${rateCopy} | ${windowCopy}`;
+  }
+
+  state.charts.ppgSource?.destroy();
+  const ctx = canvas.getContext('2d');
+  state.charts.ppgSource = createChart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'PPG signal',
+          data: signalTimes.map((timeSec, index) => ({
+            x: Number(timeSec),
+            y: Number(signalValues[index]),
+          })),
+          borderColor: 'rgba(148,163,184,0.55)',
+          backgroundColor: 'rgba(148,163,184,0.08)',
+          borderWidth: 1,
+          tension: 0.18,
+          pointRadius: 0,
+        },
+        {
+          label: 'Analyzed window',
+          data: signalTimes
+            .map((timeSec, index) => (
+              highlightedValues[index] == null
+                ? null
+                : { x: Number(timeSec), y: Number(highlightedValues[index]) }
+            ))
+            .filter(Boolean),
+          borderColor: '#43d9c9',
+          backgroundColor: 'rgba(67,217,201,0.14)',
+          borderWidth: 2,
+          tension: 0.18,
+          pointRadius: 0,
+        },
+        ...(heartRateTimes.length && heartRateTimes.length === heartRateValues.length
+          ? [{
+              label: 'Heart rate',
+              data: heartRateTimes.map((timeSec, index) => ({
+                x: Number(timeSec),
+                y: Number(heartRateValues[index]),
+              })),
+              yAxisID: 'hr',
+              borderColor: '#f59e0b',
+              backgroundColor: 'rgba(245,158,11,0.12)',
+              borderWidth: 2,
+              tension: 0.22,
+              pointRadius: 0,
+            }]
+          : []),
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: {
+            color: '#9bb0d6',
+            maxTicksLimit: 8,
+            callback(value) {
+              return formatPpgTimeLabel(value);
+            },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: { color: '#9bb0d6' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        hr: {
+          position: 'right',
+          ticks: {
+            color: '#f59e0b',
+            callback(value) {
+              return `${value} bpm`;
+            },
+          },
+          grid: { display: false },
+        },
+      },
+    },
+  });
 }
 
 function renderPpgModelChart(prediction) {
@@ -13301,10 +13954,16 @@ async function loadPpgResults() {
     if (!data.run || !data.prediction) {
       if (ppgResultsDiv) ppgResultsDiv.classList.add('hidden');
       state.charts.ppgModel?.destroy();
+      state.charts.ppgSource?.destroy();
+      state.charts.ppgSource = null;
+      if (ppgSourceMeta) {
+        ppgSourceMeta.textContent = 'Signal preview will appear after inference.';
+      }
       return;
     }
 
     const prediction = data.prediction;
+    const preview = prediction?.input_preview || prediction?.inputPreview || null;
     const runSummary = data.run.resultSummary || {};
     const probabilities = prediction.prediction?.probabilities || {};
     const orderedEntries = getPpgChartEntries(prediction);
@@ -13327,7 +13986,13 @@ async function loadPpgResults() {
       ppgPredictionLabel.textContent = capitalizePpgLabel(prediction.prediction?.label);
     }
     if (ppgPredictionSub) {
-      ppgPredictionSub.textContent = `Model ${prediction.model_name || '—'}`;
+      const windowStartSec = Number(preview?.window?.startSec);
+      const windowEndSec = Number(preview?.window?.endSec);
+      const windowCopy =
+        Number.isFinite(windowStartSec) && Number.isFinite(windowEndSec)
+          ? ` | ${formatPpgTimeLabel(windowStartSec)}-${formatPpgTimeLabel(windowEndSec)}`
+          : '';
+      ppgPredictionSub.textContent = `Model ${prediction.model_name || 'n/a'}${windowCopy}`;
     }
     if (ppgConfidenceValue) {
       ppgConfidenceValue.textContent = formatPpgPercent(topProbability);
@@ -13335,13 +14000,13 @@ async function loadPpgResults() {
     if (ppgConfidenceSub) {
       ppgConfidenceSub.textContent = orderedEntries
         .map((entry) => `${entry.label} ${formatPpgPercent(entry.value)}`)
-        .join(' • ') || 'Top probability —';
+        .join(' | ') || 'Top probability --';
     }
     if (ppgQualityValue) {
       ppgQualityValue.textContent =
         Number.isFinite(usedSubwindows) && Number.isFinite(attemptedSubwindows)
           ? `${usedSubwindows}/${attemptedSubwindows}`
-          : '—';
+          : '--';
     }
     if (ppgQualitySub) {
       ppgQualitySub.textContent = Number.isFinite(prediction.quality?.mean_sqi)
@@ -13350,6 +14015,7 @@ async function loadPpgResults() {
     }
 
     if (ppgResultsDiv) ppgResultsDiv.classList.remove('hidden');
+    renderPpgSourceChart(prediction);
     renderPpgModelChart(prediction);
 
     if (!ppgStatusText?.textContent || ppgStatusText.textContent.includes('No run yet')) {
@@ -13364,11 +14030,33 @@ async function loadPpgResults() {
 
 if (ppgRunDemoBtn) ppgRunDemoBtn.addEventListener('click', () => triggerPpg(true));
 if (ppgRunFullBtn) ppgRunFullBtn.addEventListener('click', () => triggerPpg(false));
+if (ppgCsvToggleBtn) {
+  ppgCsvToggleBtn.addEventListener('click', () => {
+    ppgCsvPanelOpen = !ppgCsvPanelOpen;
+    ppgCsvPanel?.classList.toggle('hidden', !ppgCsvPanelOpen);
+    ppgCsvToggleBtn.textContent = ppgCsvPanelOpen ? 'CSV Upload ^' : 'CSV Upload v';
+    updatePpgCsvSelectionStatus();
+    setPpgButtonsDisabled(false);
+  });
+}
+if (ppgRunCsvBtn) ppgRunCsvBtn.addEventListener('click', triggerPpgCsv);
+if (ppgCsvSignalInput) {
+  ppgCsvSignalInput.addEventListener('change', () => {
+    updatePpgCsvSelectionStatus();
+    setPpgButtonsDisabled(false);
+  });
+}
+if (ppgCsvHeartRateInput) {
+  ppgCsvHeartRateInput.addEventListener('change', updatePpgCsvSelectionStatus);
+}
+if (ppgCsvRrInput) {
+  ppgCsvRrInput.addEventListener('change', updatePpgCsvSelectionStatus);
+}
 if (ppgArduinoToggleBtn) {
   ppgArduinoToggleBtn.addEventListener('click', () => {
     ppgArduinoPanelOpen = !ppgArduinoPanelOpen;
     ppgArduinoPanel?.classList.toggle('hidden', !ppgArduinoPanelOpen);
-    ppgArduinoToggleBtn.textContent = ppgArduinoPanelOpen ? 'Arduino Signal ▲' : 'Arduino Signal ▾';
+    ppgArduinoToggleBtn.textContent = ppgArduinoPanelOpen ? 'Arduino Signal ^' : 'Arduino Signal v';
     if (ppgArduinoPanelOpen) loadArduinoSignalStatus();
   });
 }
@@ -13380,6 +14068,7 @@ if (ppgArduinoFsHzInput) {
   ppgArduinoFsHzInput.addEventListener('change', loadArduinoSignalStatus);
   ppgArduinoFsHzInput.addEventListener('blur', loadArduinoSignalStatus);
 }
+updatePpgCsvSelectionStatus();
 
 updateNutritionFilterButtons();
 syncActivityWidgetGoalInputs(state.activity.widgetGoals);
