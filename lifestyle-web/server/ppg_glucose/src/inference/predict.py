@@ -37,6 +37,10 @@ DEFAULT_WINDOW_SECONDS = 900
 BANDPASS_LOW = 0.5
 BANDPASS_HIGH = 8.0
 BANDPASS_ORDER = 4
+# Minimum sample rate for the bandpass filter to be valid (must satisfy Nyquist > BANDPASS_HIGH).
+# Signals below this rate are upsampled to RESAMPLE_TARGET_FS before processing.
+MIN_FS_FOR_FILTER = int(BANDPASS_HIGH * 2) + 2   # 18 Hz
+RESAMPLE_TARGET_FS = 75                            # resample low-rate signals to 75 Hz (pyPPG firls needs ≥ 75 Hz)
 CLASS_LABELS = ["low", "elevated", "hyper"]
 FORBIDDEN_DEMOGRAPHIC_KEYS = {
     "demo_preop_gluc",
@@ -317,6 +321,8 @@ def _extract_biomarkers_from_array(signal: np.ndarray, fs: int, name: str) -> di
 
 def extract_features_from_signal(signal: np.ndarray, fs: int) -> tuple[dict, dict]:
     """Extract current-window features and quality metadata fully in memory."""
+    from scipy.signal import resample_poly
+    from math import gcd
     from src.a_preprocessing.preprocess import bandpass_filter, fill_missing_samples
     from src.b_features.emd_imf import extract_emd_features
     from src.b_features.prv_from_tpp import aggregate_segment as aggregate_prv_segment
@@ -334,21 +340,31 @@ def extract_features_from_signal(signal: np.ndarray, fs: int) -> tuple[dict, dic
     if filled is None:
         raise InferenceError("Signal contains no finite samples.")
 
+    # Upsample low-rate signals so the bandpass filter's Nyquist constraint is met.
+    # Arduino streams at ≥10 Hz; the filter needs fs > 2 * BANDPASS_HIGH (18 Hz min).
+    effective_fs = int(fs)
+    if effective_fs < MIN_FS_FOR_FILTER:
+        target = RESAMPLE_TARGET_FS
+        g = gcd(effective_fs, target)
+        filled = resample_poly(filled, target // g, effective_fs // g).astype(np.float32)
+        print(f"  [resample] {effective_fs} Hz → {target} Hz ({len(signal)} → {len(filled)} samples)")
+        effective_fs = target
+
     filtered = bandpass_filter(
         filled,
         BANDPASS_LOW,
         BANDPASS_HIGH,
-        int(fs),
+        effective_fs,
         BANDPASS_ORDER,
     )
 
     starts = subwindow_starts(
         len(filtered),
-        int(fs),
+        effective_fs,
         DEFAULT_SUBWINDOW_SEC,
         DEFAULT_OVERLAP_SEC,
     )
-    subwindows = extract_subwindows_from_segment(filtered, int(fs))
+    subwindows = extract_subwindows_from_segment(filtered, effective_fs)
     sqi_values = [float(row["sqi"]) for row in subwindows if np.isfinite(row.get("sqi", np.nan))]
     quality = {
         "n_subwindows_attempted": int(starts.size),
@@ -360,8 +376,8 @@ def extract_features_from_signal(signal: np.ndarray, fs: int) -> tuple[dict, dic
         raise InferenceError("No clean SQI-gated subwindows survived feature extraction.")
 
     features: dict[str, Any] = {}
-    features.update(extract_summary_features(filtered, int(fs), "w15m"))
-    features.update(extract_emd_features(filtered, int(fs), "w15m", max_imfs=7))
+    features.update(extract_summary_features(filtered, effective_fs, "w15m"))
+    features.update(extract_emd_features(filtered, effective_fs, "w15m", max_imfs=7))
 
     biomarker_rows: list[dict[str, Any]] = []
     prv_rows: list[dict[str, Any]] = []
@@ -379,7 +395,7 @@ def extract_features_from_signal(signal: np.ndarray, fs: int) -> tuple[dict, dic
 
         biomarkers = _extract_biomarkers_from_array(
             np.asarray(subwindow["signal"], dtype=float),
-            int(fs),
+            effective_fs,
             f"inference_current_{subwindow['subwin_idx']}",
         )
         if biomarkers is None:
@@ -390,7 +406,7 @@ def extract_features_from_signal(signal: np.ndarray, fs: int) -> tuple[dict, dic
             biomarker_rows.append(row)
 
         prv_row = dict(base)
-        prv_row.update(compute_prv_features(np.asarray(subwindow["tpp"], dtype=float), int(fs)))
+        prv_row.update(compute_prv_features(np.asarray(subwindow["tpp"], dtype=float), effective_fs))
         prv_rows.append(prv_row)
 
     quality["n_biomarker_subwindows_used"] = int(len(biomarker_rows))

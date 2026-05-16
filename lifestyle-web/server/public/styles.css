@@ -3882,3 +3882,157 @@ li.pending-delete { opacity: 0.38; pointer-events: none; transition: opacity 0.2
   font-size: 11px;
   color: #9bb0d6;
 }
+
+/* ── PPG Arduino panel ──────────────────────────────────────────── */
+.ppg-arduino-panel {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 10px 0 4px;
+}
+
+.ppg-arduino-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ppg-arduino-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: #9bb0d6;
+}
+
+.ppg-arduino-field select,
+.ppg-arduino-field input {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 13px;
+  padding: 6px 10px;
+  min-width: 160px;
+}
+
+.ppg-arduino-signal-status {
+  font-size: 12px;
+  color: #9bb0d6;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.ppg-arduino-signal-status.ready {
+  color: #43d9c9;
+}
+
+.ppg-arduino-signal-status.error {
+  color: #f87171;
+}
+
+/* ── Sensor Streams (Settings page) ────────────────────────────── */
+.sensor-streams-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.sensor-stream-chart-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.sensor-stream-latest {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+/* ── Heart Rate Stream (Vitals page) ────────────────────────────── */
+.vitals-hr-stat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.vitals-hr-stat {
+  flex: 1;
+  min-width: 100px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.vitals-hr-stat p.muted {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #9bb0d6;
+  margin: 0 0 4px;
+}
+
+.vitals-hr-stat strong {
+  font-size: 20px;
+  font-weight: 800;
+  color: #e2e8f0;
+  display: block;
+}
+
+.vitals-hr-stat .small-text {
+  font-size: 11px;
+  color: #9bb0d6;
+}
+
+.vitals-hr-zones-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 14px;
+}
+
+.vitals-hr-zone-row {
+  display: grid;
+  grid-template-columns: 160px 100px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.vitals-hr-zone-name {
+  font-weight: 600;
+}
+
+.vitals-hr-zone-range {
+  color: #9bb0d6;
+}
+
+.vitals-hr-zone-bar-wrap {
+  background: rgba(255,255,255,0.05);
+  border-radius: 4px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.vitals-hr-zone-bar {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 3px;
+  transition: width .3s ease;
+}
+
+.vitals-hr-zone-pct {
+  text-align: right;
+  color: #9bb0d6;
+  font-variant-numeric: tabular-nums;
+}

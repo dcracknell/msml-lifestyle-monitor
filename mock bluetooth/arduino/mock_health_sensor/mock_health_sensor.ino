@@ -76,7 +76,7 @@ static const char METRIC_TIME_MS[]                = "sensor.time_ms";
 static const char METRIC_HM10_LINK_PROBE[]        = "sensor.hm10_link_probe";
 static const char METRIC_HM10_LINK_ACK[]          = "sensor.hm10_link_ack";
 static const char METRIC_AHT20_TEMPERATURE_C[]    = "sensor.aht20_temperature_c";
-static const char METRIC_AHT20_HUMIDITY_PERCENT[] = "sensor.aht20_humidity_percent";
+static const char METRIC_AHT20_HUMIDITY_PCT[]     = "sensor.aht20_humidity_pct";
 static const char METRIC_TMP117_TEMPERATURE_C[]   = "sensor.tmp117_temperature_c";
 static const char METRIC_SGP40_VOC_RAW[]          = "sensor.voc_raw";
 static const char METRIC_LSM6DSOX_ACCEL_X[]       = "sensor.accel_x";
@@ -87,6 +87,8 @@ static const char METRIC_LSM6DSOX_GYRO_Y[]        = "sensor.gyro_y";
 static const char METRIC_LSM6DSOX_GYRO_Z[]        = "sensor.gyro_z";
 static const char METRIC_MAX30102_RED[]           = "sensor.max_red";
 static const char METRIC_MAX30102_IR[]            = "sensor.max_ir";
+static const char METRIC_PPG_RAW[]               = "ppg.raw";
+static const char METRIC_HEART_RATE[]            = "vitals.heart_rate";
 
 // -----------------------------------------------------------------------
 // Hardware
@@ -156,7 +158,7 @@ struct Hm10BaudPreferenceV1 {
 struct TelemetryFrame {
   uint32_t timeMs;
   float    ahtTemperatureC;
-  float    ahtHumidityPercent;
+  float    ahtHumidityPct;
   float    tmp117TemperatureC;
   uint32_t vocRaw;
   float    accelX;
@@ -167,6 +169,7 @@ struct TelemetryFrame {
   float    gyroZ;
   uint32_t maxRed;
   uint32_t maxIr;
+  float    hrBpm;
 };
 
 static TelemetryFrame buildTelemetryFrame(uint32_t now);
@@ -715,7 +718,7 @@ static TelemetryFrame buildTelemetryFrame(uint32_t now) {
 
   frame.timeMs = now;
   frame.ahtTemperatureC = boundedFloat(ambientTemperature, 18.0f, 30.0f);
-  frame.ahtHumidityPercent = boundedFloat(
+  frame.ahtHumidityPct = boundedFloat(
     randVal(48.0f, 0.45f) +
       humidityDrift -
       (frame.ahtTemperatureC - 22.2f) * 0.8f,
@@ -732,11 +735,12 @@ static TelemetryFrame buildTelemetryFrame(uint32_t now) {
   frame.vocRaw = boundedUint32(
     randVal(23500.0f, 180.0f) +
       triangleWave(now, 240000UL, 1600.0f) +
-      (frame.ahtHumidityPercent - 50.0f) * 95.0f +
+      (frame.ahtHumidityPct - 50.0f) * 95.0f +
       vocEvent,
     5000UL,
     65000UL
   );
+  frame.hrBpm = 60000.0f / static_cast<float>(pulsePeriodMs);
 
   frame.accelX = randVal(0.0f, 0.025f) +
                  triangleWave(now, 560UL, 1.10f * motion);
@@ -787,7 +791,7 @@ static void sendTelemetryFrame(const TelemetryFrame &frame) {
   btSendFloat(METRIC_AHT20_TEMPERATURE_C, frame.ahtTemperatureC, 2);
   paceMetricSend();
 
-  btSendFloat(METRIC_AHT20_HUMIDITY_PERCENT, frame.ahtHumidityPercent, 2);
+  btSendFloat(METRIC_AHT20_HUMIDITY_PCT, frame.ahtHumidityPct, 2);
   paceMetricSend();
 
   btSendFloat(METRIC_TMP117_TEMPERATURE_C, frame.tmp117TemperatureC, 2);
@@ -818,6 +822,12 @@ static void sendTelemetryFrame(const TelemetryFrame &frame) {
   paceMetricSend();
 
   btSendUint32(METRIC_MAX30102_IR, frame.maxIr);
+  paceMetricSend();
+
+  btSendUint32(METRIC_PPG_RAW, frame.maxIr);
+  paceMetricSend();
+
+  btSendFloat(METRIC_HEART_RATE, frame.hrBpm, 1);
 }
 
 // -----------------------------------------------------------------------

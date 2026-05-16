@@ -681,6 +681,138 @@ function prepareDemoRunConfig() {
   };
 }
 
+function normalizeSignalMetric(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return /^[a-z0-9_.-]{2,64}$/i.test(trimmed) ? trimmed : null;
+}
+
+function parseHzParam(value) {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n >= 1 && n <= 5000 ? n : null;
+}
+
+function getArduinoSignalStatus(subjectId, metric, fsHz) {
+  const MIN_SECONDS = 30;          // one full subwindow
+  const minSamples = fsHz * MIN_SECONDS;
+  const maxLoad = fsHz * DEFAULT_WINDOW_SECONDS;
+  const rows = latestSignalSamplesStatement.all(subjectId, metric, maxLoad);
+  const count = rows?.length || 0;
+
+  if (count < minSamples) {
+    return {
+      ready: false,
+      metric,
+      fsHz,
+      sampleCount: count,
+      minSamples,
+      message:
+        `Only ${count} samples of "${metric}" available. ` +
+        `Need at least ${minSamples} (${MIN_SECONDS} s at ${fsHz} Hz). ` +
+        'Stream a PPG signal from your Arduino to this metric first.',
+    };
+  }
+
+  const ascending = [...rows].reverse();
+  const startTs = Number(ascending[0]?.ts);
+  const endTs = Number(ascending[ascending.length - 1]?.ts);
+  const durationSeconds = Number.isFinite(startTs) && Number.isFinite(endTs)
+    ? Math.round((endTs - startTs) / 1000)
+    : null;
+
+  return {
+    ready: true,
+    metric,
+    fsHz,
+    sampleCount: count,
+    minSamples,
+    durationSeconds,
+    message:
+      `${count} samples of "${metric}" ready` +
+      (durationSeconds != null ? ` (~${durationSeconds} s at ${fsHz} Hz)` : '') + '.',
+  };
+}
+
+function prepareArduinoRunConfig(subject, metric, fsHz) {
+  const profileStatus = buildProfileStatus(subject);
+  if (!profileStatus.ready) {
+    return { error: profileStatus.message, statusCode: 400 };
+  }
+
+  const minSamples = fsHz * 30;
+  const maxLoad = fsHz * DEFAULT_WINDOW_SECONDS;
+  const rows = latestSignalSamplesStatement.all(subject.id, metric, maxLoad);
+
+  if (!rows || rows.length < minSamples) {
+    return {
+      error:
+        `Not enough "${metric}" samples for inference. ` +
+        `Need at least ${minSamples} (30 s at ${fsHz} Hz), found ${rows?.length || 0}.`,
+      statusCode: 400,
+    };
+  }
+
+  // rows are DESC (newest first); isolate the most recent continuous segment.
+  // A gap > 5× the expected inter-sample interval marks a session boundary.
+  const maxGapMs = (1000 / fsHz) * 5;
+  let segmentEnd = 0; // index in rows[] where the continuous segment ends (exclusive)
+  for (let i = 0; i < rows.length - 1; i++) {
+    const gap = Number(rows[i].ts) - Number(rows[i + 1].ts);
+    if (gap > maxGapMs) {
+      segmentEnd = i + 1;
+      break;
+    }
+  }
+  // segmentEnd === 0 means no large gap found — use all rows
+  const segmentRows = segmentEnd > 0 ? rows.slice(0, segmentEnd) : rows;
+
+  if (segmentRows.length < minSamples) {
+    const segSec = Math.round(segmentRows.length / fsHz);
+    return {
+      error:
+        `Most recent continuous "${metric}" session has only ${segmentRows.length} samples (~${segSec} s). ` +
+        `Stream at least 30 s of PPG data without interruption, then run inference.`,
+      statusCode: 400,
+    };
+  }
+
+  const ascending = [...segmentRows].reverse();
+  const samples = new Float32Array(ascending.length);
+  for (let i = 0; i < ascending.length; i++) {
+    const num = Number(ascending[i]?.value);
+    if (!Number.isFinite(num)) {
+      return { error: `Signal "${metric}" contains a non-numeric sample.`, statusCode: 400 };
+    }
+    samples[i] = num;
+  }
+
+  const startedAtMs = Number(ascending[0]?.ts);
+  const endedAtMs = Number(ascending[ascending.length - 1]?.ts);
+
+  const runDir = createRunDirectory();
+  const signalPath = path.join(runDir, 'signal.npy');
+  const demographicsPath = path.join(runDir, 'demographics.json');
+  const outputPath = path.join(runDir, 'prediction.json');
+
+  writeFloat32Npy(signalPath, samples);
+  writeJson(demographicsPath, buildDemographicsPayload(subject));
+
+  return {
+    mode: 'arduino',
+    signalPath,
+    demographicsPath,
+    outputPath,
+    runDir,
+    fsHz,
+    strictLength: false,
+    signalMetric: metric,
+    signalSampleCount: ascending.length,
+    signalDurationMs: Math.max(0, endedAtMs - startedAtMs),
+    signalStartedAt: Number.isFinite(startedAtMs) ? new Date(startedAtMs).toISOString() : null,
+    signalEndedAt: Number.isFinite(endedAtMs) ? new Date(endedAtMs).toISOString() : null,
+  };
+}
+
 function prepareLiveRunConfig(subject) {
   const profileStatus = buildProfileStatus(subject);
   if (!profileStatus.ready) {
@@ -891,10 +1023,18 @@ router.post('/run', authenticate, (req, res) => {
     return res.status(409).json({ message: 'BGL inference already running.' });
   }
 
-  const runConfig =
-    req.body?.demo === true
-      ? prepareDemoRunConfig()
-      : prepareLiveRunConfig(requestedSubject.subject);
+  const isDemo = req.body?.demo === true;
+  const customMetric = !isDemo ? normalizeSignalMetric(req.body?.metric) : null;
+  const customFsHz = !isDemo && customMetric ? parseHzParam(req.body?.fsHz) : null;
+
+  let runConfig;
+  if (isDemo) {
+    runConfig = prepareDemoRunConfig();
+  } else if (customMetric && customFsHz) {
+    runConfig = prepareArduinoRunConfig(requestedSubject.subject, customMetric, customFsHz);
+  } else {
+    runConfig = prepareLiveRunConfig(requestedSubject.subject);
+  }
 
   if (runConfig.error) {
     return res.status(runConfig.statusCode || 400).json({ message: runConfig.error });
@@ -928,6 +1068,9 @@ router.get('/status', authenticate, (req, res) => {
   const inMemory =
     activeRunState && activeRunState.userId === subject.id ? activeRunState : null;
 
+  const arduinoMetric = normalizeSignalMetric(req.query.signalMetric);
+  const arduinoFsHz = arduinoMetric ? parseHzParam(req.query.signalFsHz) : null;
+
   return res.json({
     running: Boolean(inMemory && inMemory.status === 'running'),
     inMemory,
@@ -937,6 +1080,9 @@ router.get('/status', authenticate, (req, res) => {
     bundle: getModelBundleStatus(),
     demoInput: getDemoInputStatus(),
     liveInput: getLatestSignalWindowStatus(subject.id),
+    arduinoInput: arduinoMetric && arduinoFsHz
+      ? getArduinoSignalStatus(subject.id, arduinoMetric, arduinoFsHz)
+      : null,
     profile: buildProfileStatus(subject),
     signalMetric: SIGNAL_METRIC,
     subject: {

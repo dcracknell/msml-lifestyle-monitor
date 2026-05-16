@@ -1147,6 +1147,21 @@ const DEMO_VITALS = {
 
 const cloneDemoData = (value) => JSON.parse(JSON.stringify(value));
 
+const SENSOR_STREAM_METRICS = [
+  { metric: 'sensor.aht20_temperature_c', label: 'Temperature', unit: '°C', color: '#f59e0b' },
+  { metric: 'sensor.aht20_humidity_pct', label: 'Humidity', unit: '%', color: '#38bdf8' },
+  { metric: 'vitals.heart_rate', label: 'Heart Rate', unit: 'bpm', color: '#f87171' },
+  { metric: 'exercise.hr', label: 'Exercise HR', unit: 'bpm', color: '#fb923c' },
+  { metric: 'vitals.resting_hr', label: 'Resting HR', unit: 'bpm', color: '#ef4444' },
+  { metric: 'vitals.spo2', label: 'SpO₂', unit: '%', color: '#34d399' },
+  { metric: 'vitals.hrv', label: 'HRV', unit: 'ms', color: '#43d9c9' },
+  { metric: 'vitals.stress_score', label: 'Stress Score', unit: '', color: '#a78bfa' },
+  { metric: 'vitals.systolic_bp', label: 'Systolic BP', unit: 'mmHg', color: '#60a5fa' },
+  { metric: 'vitals.diastolic_bp', label: 'Diastolic BP', unit: 'mmHg', color: '#93c5fd' },
+  { metric: 'vitals.glucose', label: 'Glucose', unit: 'mg/dL', color: '#c084fc' },
+  { metric: 'activity.steps', label: 'Steps', unit: 'steps', color: '#fbbf24' },
+];
+
 const QUICK_SUGGESTIONS = [
   {
     id: 'quick-water',
@@ -3683,6 +3698,14 @@ function resetVitalsState() {
     renderListPlaceholder(vitalsHistoryList, 'Vitals sync required to populate history.');
   }
   renderVitalsChart([]);
+  state.charts.vitalsHrStream?.destroy();
+  state.charts.vitalsHrStream = null;
+  const hrStreamStats = document.getElementById('vitalsHrStreamStats');
+  const hrStreamZones = document.getElementById('vitalsHrStreamZones');
+  const hrStreamChip = document.getElementById('vitalsHrStreamChip');
+  if (hrStreamStats) hrStreamStats.innerHTML = '';
+  if (hrStreamZones) hrStreamZones.innerHTML = '';
+  if (hrStreamChip) { hrStreamChip.textContent = 'Loading…'; hrStreamChip.className = 'status-chip'; }
 }
 
 function renderNutritionGoals(goals = {}, totals = null) {
@@ -7565,6 +7588,9 @@ function setActivePage(targetPage = 'overview') {
       setWeightDateDefault();
     }
   }
+  if (targetPage === 'profile') {
+    loadSensorStreams();
+  }
   queueChartResize();
 }
 
@@ -8981,6 +9007,7 @@ async function loadVitals(subjectOverrideId) {
     }
     loadPpgResults();
     loadPpgStatus();
+    loadHeartRateStream(targetId);
   } catch (error) {
     if (vitalsFeedback) {
       vitalsFeedback.textContent = 'Unable to load vitals right now.';
@@ -10317,6 +10344,307 @@ function renderVitalsChart(timeline = []) {
         },
       },
     },
+  });
+}
+
+async function loadHeartRateStream(subjectOverrideId) {
+  if (!state.user || !state.token) return;
+  const targetId = subjectOverrideId ?? state.viewing?.id ?? state.user.id;
+  const athleteParam = targetId && targetId !== state.user.id
+    ? `&athleteId=${encodeURIComponent(targetId)}` : '';
+  const windowMs = 24 * 60 * 60 * 1000;
+  const to = Date.now();
+  const from = to - windowMs;
+  const baseQuery = `from=${from}&to=${to}&maxPoints=300${athleteParam}`;
+
+  const [exerciseHr, vitalsHr, restingHr] = await Promise.all([
+    apiFetch(`/api/streams?metric=exercise.hr&${baseQuery}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    }).then(r => r.ok ? r.json() : null).catch(() => null),
+    apiFetch(`/api/streams?metric=vitals.heart_rate&${baseQuery}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    }).then(r => r.ok ? r.json() : null).catch(() => null),
+    apiFetch(`/api/streams?metric=vitals.resting_hr&${baseQuery}`, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    }).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+
+  const allPoints = [
+    ...(exerciseHr?.points || []),
+    ...(vitalsHr?.points || []),
+    ...(restingHr?.points || []),
+  ].sort((a, b) => a.ts - b.ts);
+
+  renderHeartRateStreamCard(allPoints);
+}
+
+function renderHeartRateStreamCard(points = []) {
+  const statsEl = document.getElementById('vitalsHrStreamStats');
+  const zonesEl = document.getElementById('vitalsHrStreamZones');
+  const chipEl = document.getElementById('vitalsHrStreamChip');
+  const canvasId = 'vitalsHrStreamChart';
+  const canvas = document.getElementById(canvasId);
+
+  if (!statsEl && !canvas) return;
+
+  if (!points.length) {
+    if (chipEl) { chipEl.textContent = 'No data'; chipEl.className = 'status-chip'; }
+    if (statsEl) statsEl.innerHTML = '<p class="field-hint">No heart rate stream data for the last 24 hours. Connect a BLE heart rate sensor from the Devices page to start streaming.</p>';
+    if (zonesEl) zonesEl.innerHTML = '';
+    state.charts.vitalsHrStream?.destroy();
+    state.charts.vitalsHrStream = null;
+    if (canvas) showChartMessage(canvasId, 'No heart rate stream data found.');
+    return;
+  }
+
+  const values = points.map(p => p.value);
+  const current = Math.round(values[values.length - 1]);
+  const avg = Math.round(values.reduce((s, v) => s + v, 0) / values.length);
+  const min = Math.round(Math.min(...values));
+  const max = Math.round(Math.max(...values));
+
+  if (chipEl) { chipEl.textContent = `${points.length} samples`; chipEl.className = 'status-chip teal'; }
+
+  const userAge = Number(state.user?.age);
+  const maxHr = Number.isFinite(userAge) && userAge > 0 ? 220 - userAge : 190;
+  const zones = [
+    { name: 'Zone 1 · Easy',      pctMin: 0,    pctMax: 0.60, color: '#34d399' },
+    { name: 'Zone 2 · Fat Burn',  pctMin: 0.60, pctMax: 0.70, color: '#fbbf24' },
+    { name: 'Zone 3 · Aerobic',   pctMin: 0.70, pctMax: 0.80, color: '#fb923c' },
+    { name: 'Zone 4 · Threshold', pctMin: 0.80, pctMax: 0.90, color: '#f87171' },
+    { name: 'Zone 5 · Peak',      pctMin: 0.90, pctMax: 1.10, color: '#ef4444' },
+  ].map(z => ({
+    ...z,
+    bpmMin: Math.round(maxHr * z.pctMin),
+    bpmMax: z.pctMax >= 1 ? 999 : Math.round(maxHr * z.pctMax),
+  }));
+
+  const currentZone = zones.find(z => current >= z.bpmMin && current < z.bpmMax) || zones[0];
+
+  const classifyBpm = (bpm) => {
+    if (bpm < 60) return 'Below normal (bradycardia)';
+    if (bpm <= 100) return 'Normal range';
+    if (bpm <= 120) return 'Mildly elevated';
+    return 'Elevated (tachycardia)';
+  };
+
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <div class="vitals-hr-stat-grid">
+        <div class="vitals-hr-stat">
+          <p class="muted">Current</p>
+          <strong>${current} <span class="small-text">bpm</span></strong>
+          <p class="small-text">${classifyBpm(current)}</p>
+        </div>
+        <div class="vitals-hr-stat">
+          <p class="muted">Average</p>
+          <strong>${avg} <span class="small-text">bpm</span></strong>
+          <p class="small-text">${classifyBpm(avg)}</p>
+        </div>
+        <div class="vitals-hr-stat">
+          <p class="muted">Min</p>
+          <strong>${min} <span class="small-text">bpm</span></strong>
+        </div>
+        <div class="vitals-hr-stat">
+          <p class="muted">Max</p>
+          <strong>${max} <span class="small-text">bpm</span></strong>
+        </div>
+        <div class="vitals-hr-stat">
+          <p class="muted">Active Zone</p>
+          <strong style="color:${currentZone.color}">${currentZone.name.split(' · ')[1]}</strong>
+          <p class="small-text">Max HR ${maxHr} bpm estimated</p>
+        </div>
+      </div>
+    `;
+  }
+
+  if (zonesEl) {
+    const zoneItems = zones.map(z => {
+      const count = values.filter(v => v >= z.bpmMin && v < z.bpmMax).length;
+      const pct = points.length > 0 ? Math.round((count / points.length) * 100) : 0;
+      const rangeText = z.bpmMax < 999 ? `${z.bpmMin}–${z.bpmMax} bpm` : `>${z.bpmMin} bpm`;
+      return `
+        <div class="vitals-hr-zone-row">
+          <span class="vitals-hr-zone-name" style="color:${z.color}">${z.name}</span>
+          <span class="vitals-hr-zone-range">${rangeText}</span>
+          <div class="vitals-hr-zone-bar-wrap">
+            <div class="vitals-hr-zone-bar" style="width:${pct}%;background:${z.color}33;border-left:3px solid ${z.color}"></div>
+          </div>
+          <span class="vitals-hr-zone-pct">${pct}%</span>
+        </div>
+      `;
+    }).join('');
+    zonesEl.innerHTML = `<div class="vitals-hr-zones-list">${zoneItems}</div>`;
+  }
+
+  if (!canvas) return;
+  const { canvas: activeCanvas } = hideChartMessage(canvasId) || {};
+  const ctx = (activeCanvas || canvas).getContext('2d');
+  state.charts.vitalsHrStream?.destroy();
+
+  state.charts.vitalsHrStream = createChart(ctx, {
+    type: 'line',
+    data: {
+      labels: points.map(p => new Date(p.ts).toLocaleTimeString()),
+      datasets: [{
+        label: 'Heart Rate',
+        data: points.map(p => p.value),
+        borderColor: '#f87171',
+        backgroundColor: 'rgba(248,113,113,0.12)',
+        borderWidth: 2,
+        tension: 0.3,
+        fill: true,
+        pointRadius: points.length > 60 ? 0 : 3,
+        pointBackgroundColor: '#f87171',
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { intersect: false, mode: 'index' },
+      plugins: {
+        legend: { display: false },
+        smartViewport: getSmartViewportOptions({ maxVisiblePoints: 120 }),
+        tooltip: {
+          callbacks: {
+            label(context) { return `HR: ${context.parsed.y} bpm`; },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: '#9bb0d6', maxTicksLimit: 8 },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: {
+          ticks: {
+            color: '#9bb0d6',
+            callback(value) { return `${value} bpm`; },
+          },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+      },
+    },
+  });
+}
+
+async function loadSensorStreams() {
+  if (!state.user || !state.token) return;
+  const container = document.getElementById('sensorStreamsContainer');
+  const statusEl = document.getElementById('sensorStreamsStatus');
+  const hintEl = document.getElementById('sensorStreamsHint');
+  if (!container) return;
+
+  if (statusEl) { statusEl.textContent = 'Loading…'; statusEl.className = 'status-chip'; }
+
+  const windowMs = 24 * 60 * 60 * 1000;
+  const to = Date.now();
+  const from = to - windowMs;
+
+  const results = await Promise.allSettled(
+    SENSOR_STREAM_METRICS.map(({ metric }) =>
+      apiFetch(
+        `/api/streams?metric=${encodeURIComponent(metric)}&from=${from}&to=${to}&maxPoints=300`,
+        { headers: { Authorization: `Bearer ${state.token}` } }
+      ).then(r => r.ok ? r.json() : null).catch(() => null)
+    )
+  );
+
+  const withData = [];
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled' && result.value?.points?.length > 0) {
+      withData.push({ def: SENSOR_STREAM_METRICS[i], data: result.value });
+    }
+  });
+
+  if (!withData.length) {
+    if (statusEl) { statusEl.textContent = 'No data'; statusEl.className = 'status-chip'; }
+    if (hintEl) hintEl.textContent = 'No sensor stream data found for the last 24 hours. Connect a device from the Devices page to start streaming.';
+    container.innerHTML = '';
+    return;
+  }
+
+  if (statusEl) {
+    statusEl.textContent = `${withData.length} stream${withData.length > 1 ? 's' : ''}`;
+    statusEl.className = 'status-chip teal';
+  }
+  if (hintEl) hintEl.textContent = '';
+
+  Object.values(state.charts.sensorStream || {}).forEach(c => c?.destroy());
+  state.charts.sensorStream = {};
+  container.innerHTML = '';
+
+  withData.forEach(({ def, data }) => {
+    const canvasId = `sensorStream_${def.metric.replace(/\./g, '_').replace(/[^a-z0-9_]/gi, '')}`;
+    const pts = data.points;
+    const latest = pts[pts.length - 1];
+    const latestVal = latest ? `${Number(latest.value).toFixed(1)}${def.unit ? ' ' + def.unit : ''}` : '—';
+
+    const article = document.createElement('article');
+    article.className = 'sensor-stream-chart-card';
+    article.innerHTML = `
+      <div class="act-chart-header">
+        <p class="section-eyebrow">${def.label}</p>
+        <span class="sensor-stream-latest">${latestVal}</span>
+      </div>
+      <div class="chart-canvas-frame chart-canvas-frame-180">
+        <canvas id="${canvasId}"></canvas>
+      </div>
+    `;
+    container.appendChild(article);
+
+    requestAnimationFrame(() => {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      state.charts.sensorStream[canvasId] = createChart(ctx, {
+        type: 'line',
+        data: {
+          labels: pts.map(p => new Date(p.ts).toLocaleTimeString()),
+          datasets: [{
+            label: def.label,
+            data: pts.map(p => p.value),
+            borderColor: def.color,
+            backgroundColor: `${def.color}22`,
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true,
+            pointRadius: pts.length > 60 ? 0 : 2,
+            pointBackgroundColor: def.color,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label(context) {
+                  return `${def.label}: ${context.parsed.y}${def.unit ? ' ' + def.unit : ''}`;
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              ticks: { color: '#9bb0d6', maxTicksLimit: 6 },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+            y: {
+              ticks: {
+                color: '#9bb0d6',
+                callback(value) {
+                  return `${value}${def.unit ? ' ' + def.unit : ''}`;
+                },
+              },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+          },
+        },
+      });
+    });
   });
 }
 
@@ -12518,6 +12846,12 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 
 const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
 const ppgRunFullBtn = document.getElementById('ppgRunFull');
+const ppgArduinoToggleBtn = document.getElementById('ppgArduinoToggle');
+const ppgArduinoPanel = document.getElementById('ppgArduinoPanel');
+const ppgArduinoMetricSelect = document.getElementById('ppgArduinoMetric');
+const ppgArduinoFsHzInput = document.getElementById('ppgArduinoFsHz');
+const ppgArduinoSignalStatus = document.getElementById('ppgArduinoSignalStatus');
+const ppgRunArduinoBtn = document.getElementById('ppgRunArduino');
 const ppgStatusText = document.getElementById('ppgStatusText');
 const ppgResultsDiv = document.getElementById('ppgResults');
 const ppgPredictionLabel = document.getElementById('ppgPredictionLabel');
@@ -12532,6 +12866,8 @@ let ppgDemoInputStatus = null;
 let ppgRuntimeStatus = null;
 let ppgBundleStatus = null;
 let ppgProfileStatus = null;
+let ppgArduinoInputStatus = null;
+let ppgArduinoPanelOpen = false;
 const PPG_ZONE_ORDER = ['low', 'elevated', 'hyper'];
 const PPG_ZONE_COLORS = {
   low: {
@@ -12647,6 +12983,21 @@ function setPpgButtonsDisabled(disabled, status = {}) {
       ppgRunFullBtn.title = disabled ? 'BGL inference running.' : '';
     }
   }
+
+  const arduinoReady =
+    baseReady && ppgProfileStatus?.ready === true && ppgArduinoInputStatus?.ready === true;
+  if (ppgRunArduinoBtn) {
+    ppgRunArduinoBtn.disabled = disabled || !arduinoReady;
+    if (!arduinoReady && ppgArduinoPanelOpen) {
+      ppgRunArduinoBtn.title =
+        blockingMessage ||
+        ppgProfileStatus?.message ||
+        ppgArduinoInputStatus?.message ||
+        'Configure the metric and Hz above, then check signal availability.';
+    } else {
+      ppgRunArduinoBtn.title = disabled ? 'BGL inference running.' : '';
+    }
+  }
 }
 
 function setPpgStatus(text, cls) {
@@ -12745,6 +13096,82 @@ async function triggerPpg(isDemo) {
   }
 }
 
+async function loadArduinoSignalStatus() {
+  const metric = ppgArduinoMetricSelect?.value?.trim();
+  const fsHz = Number(ppgArduinoFsHzInput?.value);
+  if (!metric || !Number.isFinite(fsHz) || fsHz < 1) return;
+  if (!state.token) return;
+
+  if (ppgArduinoSignalStatus) {
+    ppgArduinoSignalStatus.textContent = 'Checking signal…';
+    ppgArduinoSignalStatus.className = 'ppg-arduino-signal-status';
+  }
+
+  try {
+    const targetId = state.viewing?.id ?? state.user?.id;
+    const athleteParam = targetId && targetId !== state.user?.id
+      ? `&athleteId=${encodeURIComponent(targetId)}` : '';
+    const res = await apiFetch(
+      `/api/ppg/status?signalMetric=${encodeURIComponent(metric)}&signalFsHz=${fsHz}${athleteParam}`,
+      { headers: { Authorization: `Bearer ${state.token}` } }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    ppgArduinoInputStatus = data.arduinoInput ?? null;
+    const s = ppgArduinoInputStatus;
+    if (ppgArduinoSignalStatus) {
+      ppgArduinoSignalStatus.textContent = s?.message || 'Unknown signal status.';
+      ppgArduinoSignalStatus.className =
+        'ppg-arduino-signal-status ' + (s?.ready ? 'ready' : 'error');
+    }
+    setPpgButtonsDisabled(false, data);
+  } catch { /* ignore */ }
+}
+
+async function triggerPpgArduino() {
+  const metric = ppgArduinoMetricSelect?.value?.trim();
+  const fsHz = Number(ppgArduinoFsHzInput?.value);
+  if (!metric || !Number.isFinite(fsHz) || fsHz < 1) {
+    setPpgStatus('Select a valid metric and sample rate first.', 'ppg-error');
+    return;
+  }
+  if (!state.token) return;
+
+  setPpgButtonsDisabled(true);
+  setPpgStatus(`Starting Arduino inference on "${metric}" at ${fsHz} Hz…`, 'ppg-running');
+  try {
+    const targetId = state.viewing?.id ?? state.user?.id;
+    const res = await apiFetch('/api/ppg/run', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        metric,
+        fsHz,
+        athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
+      }),
+    });
+    if (res.status === 409) {
+      setPpgStatus('BGL inference already running…', 'ppg-running');
+      startPpgPoll();
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setPpgStatus(`Failed to start: ${err.message || res.statusText}`, 'ppg-error');
+      setPpgButtonsDisabled(false);
+      return;
+    }
+    setPpgStatus(
+      `Arduino BGL inference running ("${metric}" at ${fsHz} Hz) — this can take 1–3 minutes…`,
+      'ppg-running'
+    );
+    startPpgPoll();
+  } catch (err) {
+    setPpgStatus(`Error: ${err.message}`, 'ppg-error');
+    setPpgButtonsDisabled(false);
+  }
+}
+
 function renderPpgModelChart(prediction) {
   const canvas = document.getElementById('ppgModelChart');
   if (!canvas) return;
@@ -12805,11 +13232,25 @@ function renderPpgModelChart(prediction) {
 async function loadPpgStatus() {
   if (!state.token) return;
   try {
-    const res = await apiFetch(`/api/ppg/status${getCurrentPpgSubjectQuery()}`, {
+    const metric = ppgArduinoPanelOpen ? ppgArduinoMetricSelect?.value?.trim() : null;
+    const fsHz = ppgArduinoPanelOpen ? Number(ppgArduinoFsHzInput?.value) : NaN;
+    const arduinoQuery = metric && Number.isFinite(fsHz) && fsHz >= 1
+      ? `&signalMetric=${encodeURIComponent(metric)}&signalFsHz=${fsHz}` : '';
+    const baseQuery = getCurrentPpgSubjectQuery();
+    const queryStr = baseQuery ? `${baseQuery}${arduinoQuery}` : (arduinoQuery ? `?${arduinoQuery.slice(1)}` : '');
+    const res = await apiFetch(`/api/ppg/status${queryStr}`, {
       headers: { Authorization: `Bearer ${state.token}` },
     });
     if (!res.ok) return;
     const data = await res.json();
+    if (arduinoQuery && data.arduinoInput) {
+      ppgArduinoInputStatus = data.arduinoInput;
+      if (ppgArduinoSignalStatus) {
+        ppgArduinoSignalStatus.textContent = data.arduinoInput.message || '';
+        ppgArduinoSignalStatus.className =
+          'ppg-arduino-signal-status ' + (data.arduinoInput.ready ? 'ready' : 'error');
+      }
+    }
 
     if (data.running) {
       const mode = data.inMemory?.mode || (data.inMemory?.isDemo ? 'demo' : 'latest');
@@ -12923,6 +13364,22 @@ async function loadPpgResults() {
 
 if (ppgRunDemoBtn) ppgRunDemoBtn.addEventListener('click', () => triggerPpg(true));
 if (ppgRunFullBtn) ppgRunFullBtn.addEventListener('click', () => triggerPpg(false));
+if (ppgArduinoToggleBtn) {
+  ppgArduinoToggleBtn.addEventListener('click', () => {
+    ppgArduinoPanelOpen = !ppgArduinoPanelOpen;
+    ppgArduinoPanel?.classList.toggle('hidden', !ppgArduinoPanelOpen);
+    ppgArduinoToggleBtn.textContent = ppgArduinoPanelOpen ? 'Arduino Signal ▲' : 'Arduino Signal ▾';
+    if (ppgArduinoPanelOpen) loadArduinoSignalStatus();
+  });
+}
+if (ppgRunArduinoBtn) ppgRunArduinoBtn.addEventListener('click', triggerPpgArduino);
+if (ppgArduinoMetricSelect) {
+  ppgArduinoMetricSelect.addEventListener('change', loadArduinoSignalStatus);
+}
+if (ppgArduinoFsHzInput) {
+  ppgArduinoFsHzInput.addEventListener('change', loadArduinoSignalStatus);
+  ppgArduinoFsHzInput.addEventListener('blur', loadArduinoSignalStatus);
+}
 
 updateNutritionFilterButtons();
 syncActivityWidgetGoalInputs(state.activity.widgetGoals);

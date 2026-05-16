@@ -10,7 +10,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=20" />
+  <link rel="stylesheet" href="/styles.css?v=22" />
   <script src="/auth-guard.js?v=1"></script>
   <script src="/vendor/chart.umd.js" defer></script>
   <style>
@@ -926,7 +926,23 @@
             </article>
           </div>
 
-          <!-- 4 · Vitals Log -->
+          <!-- 4 · Heart Rate Stream Analysis -->
+          <article class="card" id="vitalsHrStreamCard">
+            <div class="card-header split">
+              <div>
+                <p class="section-eyebrow">Heart Rate Stream · Last 24 h</p>
+                <h3 class="card-title">BPM analysis from device streams</h3>
+              </div>
+              <span class="status-chip" id="vitalsHrStreamChip">Loading…</span>
+            </div>
+            <div id="vitalsHrStreamStats"></div>
+            <div id="vitalsHrStreamZones"></div>
+            <div class="chart-canvas-frame chart-canvas-frame-240">
+              <canvas id="vitalsHrStreamChart"></canvas>
+            </div>
+          </article>
+
+          <!-- 5 · Vitals Log -->
           <article class="card vitals-log-card">
             <p class="section-eyebrow">Vitals Log</p>
             <ul class="vitals-log-list" id="vitalsHistory">
@@ -942,14 +958,39 @@
           <!-- 5 · BGL Inference -->
           <article class="card ppg-model-card">
             <div class="ppg-card-header">
-              <p class="section-eyebrow">BGL Inference</p>
+              <p class="section-eyebrow">BGL Inference · Prototype</p>
               <div class="ppg-actions">
-                <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm">Run Demo</button>
-                <button id="ppgRunFull" type="button" class="btn-primary btn-sm">Run Latest PPG Window</button>
+                <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm" title="Run with the bundled demo PPG signal — no live stream required">Run Demo Signal</button>
+                <button id="ppgRunFull" type="button" class="btn-primary btn-sm" title="Run using the latest ppg.raw stream (500 Hz, 15 min window)">Run ppg.raw Window</button>
+                <button id="ppgArduinoToggle" type="button" class="btn-secondary btn-sm" title="Configure and run inference from an Arduino or custom BLE signal">Arduino Signal ▾</button>
               </div>
             </div>
+
+            <!-- Arduino / custom signal panel -->
+            <div id="ppgArduinoPanel" class="ppg-arduino-panel hidden">
+              <p class="section-eyebrow" style="margin-bottom:8px">Arduino / Custom BLE Signal</p>
+              <p class="field-hint">Select the metric your Arduino is streaming PPG data to and enter its sample rate. Any signal with at least 10 seconds of data works.</p>
+              <div class="ppg-arduino-controls">
+                <label class="ppg-arduino-field">
+                  Signal metric
+                  <select id="ppgArduinoMetric">
+                    <option value="ppg.raw">ppg.raw</option>
+                    <option value="sensor.ppg">sensor.ppg</option>
+                    <option value="sensor.ppg_raw">sensor.ppg_raw</option>
+                    <option value="vitals.ppg">vitals.ppg</option>
+                  </select>
+                </label>
+                <label class="ppg-arduino-field">
+                  Sample rate (Hz)
+                  <input type="number" id="ppgArduinoFsHz" value="10" min="1" max="2000" step="1" inputmode="numeric" />
+                </label>
+              </div>
+              <p class="ppg-arduino-signal-status" id="ppgArduinoSignalStatus">Checking signal…</p>
+              <button type="button" id="ppgRunArduino" class="btn-primary btn-sm">Run Inference on Arduino Signal</button>
+            </div>
+
             <p id="ppgStatusText" class="ppg-status-text">No inference run yet.</p>
-            <p class="field-hint">Live mode expects the latest 15-minute `ppg.raw` stream at 500 Hz plus the BGL profile above. Prototype estimate only, not clinically validated.</p>
+            <p class="field-hint" id="ppgHintText">Demo uses a bundled test signal. MSML_BLE_Sensor sketch streams ppg.raw at 10 Hz — connect for 30+ seconds then run. Arduino mode works with any metric ≥ 30 s. Prototype only — not clinically validated.</p>
             <div id="ppgResults" class="hidden">
               <div class="ppg-metrics-row">
                 <div class="ppg-metric-block">
@@ -1487,6 +1528,18 @@
               </div>
             </form>
           </article>
+          <!-- Sensor Stream Graphs -->
+          <article class="card" id="sensorStreamsCard">
+            <div class="card-header split">
+              <div>
+                <p class="section-eyebrow">Device Streams</p>
+                <h3 class="card-title">Arduino &amp; BLE sensor data · Last 24 h</h3>
+              </div>
+              <span class="status-chip" id="sensorStreamsStatus">Loading…</span>
+            </div>
+            <p class="field-hint" id="sensorStreamsHint">Checking for sensor stream data from connected devices…</p>
+            <div id="sensorStreamsContainer" class="sensor-streams-grid"></div>
+          </article>
         </div><!-- /profile subpage -->
 
         <!-- ── Sharing subpage ────────────────────────────────────────── -->
@@ -1516,6 +1569,6 @@
     </main>
   </div>
 
-  <script src="/app.js?v=23" defer></script>
+  <script src="/app.js?v=25" defer></script>
 </body>
 </html>
