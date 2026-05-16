@@ -168,7 +168,12 @@ async function connectDevice(options?: {
   await act(async () => { await ctx!.confirmSystemDevice(); });
 
   const monitorCallback = monitorCharacteristicForService.mock.calls[0]?.[2];
-  return { ctx: ctx!, monitorCallback, monitorCharacteristicForService };
+  return {
+    ctx: ctx!,
+    getCtx: () => ctx!,
+    monitorCallback,
+    monitorCharacteristicForService,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1228,7 +1233,8 @@ describe('BluetoothProvider sendCommand', () => {
 
 describe('BluetoothProvider applyHm10BaudRate', () => {
   it('sends the HM-10 baud command with a trailing newline and stores the selected baud', async () => {
-    const { ctx } = await connectDevice({ profile: 'arduino_hm10' });
+    const connection = await connectDevice({ profile: 'arduino_hm10' });
+    const { ctx } = connection;
 
     await act(async () => { ctx.updateConfig({ hm10BaudRate: 19200 as any }); });
 
@@ -1238,7 +1244,7 @@ describe('BluetoothProvider applyHm10BaudRate', () => {
     });
 
     expect(appliedBaud).toBe(19200);
-    expect(ctx.config.hm10BaudRate).toBe(19200);
+    expect(connection.getCtx().config.hm10BaudRate).toBe(19200);
     expect(mockWriteWithResponse).toHaveBeenCalledWith(
       expect.any(String),
       full('FFE0'),
