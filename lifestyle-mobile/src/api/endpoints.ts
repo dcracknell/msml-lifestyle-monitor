@@ -17,6 +17,9 @@ import {
   StravaExportResponse,
   StravaSyncResponse,
   NutritionLogResponse,
+  PpgResultsResponse,
+  PpgRunStartResponse,
+  PpgStatusResponse,
   VitalsResponse,
   WorkoutPublishResponse,
   WeightResponse,
@@ -64,6 +67,15 @@ export const updateActivitySessionRequest = (
 
 export const vitalsRequest = (params?: { athleteId?: number }) =>
   apiClient.get<VitalsResponse>(`/api/vitals${buildQuery({ athleteId: params?.athleteId })}`);
+
+export const ppgStatusRequest = (params?: { athleteId?: number }) =>
+  apiClient.get<PpgStatusResponse>(`/api/ppg/status${buildQuery({ athleteId: params?.athleteId })}`);
+
+export const ppgResultsRequest = (params?: { athleteId?: number }) =>
+  apiClient.get<PpgResultsResponse>(`/api/ppg/results${buildQuery({ athleteId: params?.athleteId })}`);
+
+export const runPpgInferenceRequest = (payload?: { athleteId?: number; demo?: boolean }) =>
+  apiClient.post<PpgRunStartResponse>('/api/ppg/run', payload || {});
 
 export const weightRequest = (params?: { athleteId?: number }) =>
   apiClient.get<WeightResponse>(`/api/weight${buildQuery({ athleteId: params?.athleteId })}`);

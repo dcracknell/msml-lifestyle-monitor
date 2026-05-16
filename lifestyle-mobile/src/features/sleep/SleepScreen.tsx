@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { metricsRequest, streamHistoryRequest, updateProfileRequest } from '../../api/endpoints';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
+import { useBluetooth } from '../../providers/BluetoothProvider';
 import {
   AppButton,
   AppInput,
@@ -18,12 +19,17 @@ import {
 } from '../../components';
 import { colors, spacing } from '../../theme';
 import { formatDate } from '../../utils/format';
+import {
+  buildBluetoothTrendSeries,
+  formatBluetoothMetricLabel,
+} from '../devices/bluetoothMetricUtils';
 
 const SLEEP_STREAM_WINDOW_MS = 45 * 24 * 60 * 60 * 1000;
 
 export function SleepScreen() {
   const { subjectId } = useSubject();
   const { user, setSessionFromPayload } = useAuth();
+  const { connectedDevice, sampleHistory } = useBluetooth();
   const requestSubject = subjectId && subjectId !== user?.id ? subjectId : undefined;
   const viewingOwnData = !requestSubject;
 
@@ -75,6 +81,21 @@ export function SleepScreen() {
       }))
       .filter(hasFiniteTrendValue);
   }, [data?.timeline, sleepStreamData?.points]);
+  const liveSleepSeries = useMemo(
+    () =>
+      buildBluetoothTrendSeries(
+        sampleHistory,
+        [
+          { key: 'sleep.total_hours', label: 'Total sleep', yLabel: 'h' },
+          { key: 'sleep.deep_hours', label: 'Deep sleep', yLabel: 'h' },
+          { key: 'sleep.rem_hours', label: 'REM sleep', yLabel: 'h' },
+          { key: 'sleep.light_hours', label: 'Light sleep', yLabel: 'h' },
+          { key: 'sleep.awake_hours', label: 'Awake time', yLabel: 'h' },
+        ],
+        { limit: 14, labelFormat: 'MMM D' }
+      ),
+    [sampleHistory]
+  );
 
   if (isError) {
     return <ErrorView message="Unable to load sleep data" onRetry={refetch} />;
@@ -166,6 +187,53 @@ export function SleepScreen() {
         <SleepMetric label="NIGHTS MET" value={`${nightsMeetingGoal}`} />
         <SleepMetric label="STREAK" value={`${currentStreak} nights`} />
       </View>
+
+      {viewingOwnData ? (
+        <View style={styles.card}>
+          <AppText style={styles.eyebrow}>LIVE DEVICE FEED</AppText>
+          <AppText style={styles.cardTitle}>Bluetooth sleep data</AppText>
+          <AppText style={styles.cardSubtitle}>
+            {liveSleepSeries.length
+              ? `${connectedDevice?.name || 'Bluetooth device'} · ${formatDate(
+                  new Date(liveSleepSeries[0].latestTs).toISOString(),
+                  'MMM D, HH:mm:ss'
+                )}`
+              : connectedDevice
+              ? 'Connected and waiting for sleep samples.'
+              : 'Connect a wearable in Settings to see imported sleep stages and totals here.'}
+          </AppText>
+          {liveSleepSeries.length ? (
+            <>
+              <View style={styles.liveMetricGrid}>
+                {liveSleepSeries.map((series) => (
+                  <View key={series.key} style={styles.liveMetricCard}>
+                    <AppText style={styles.liveMetricLabel}>{formatBluetoothMetricLabel(series.key)}</AppText>
+                    <AppText style={styles.liveMetricValue}>{series.latestValueLabel}</AppText>
+                  </View>
+                ))}
+              </View>
+              {liveSleepSeries.map((series) => (
+                <View key={`${series.key}-chart`} style={styles.liveChartPanel}>
+                  <View style={styles.liveChartHeader}>
+                    <AppText style={styles.liveChartTitle}>{series.label}</AppText>
+                    <AppText style={styles.liveChartValue}>{series.latestValueLabel}</AppText>
+                  </View>
+                  {series.points.length > 1 ? (
+                    <TrendChart
+                      data={series.points}
+                      yLabel={series.yLabel}
+                      height={150}
+                      chartPadding={{ top: 20, bottom: 40, left: 52, right: 16 }}
+                    />
+                  ) : (
+                    <AppText style={styles.cardSubtitle}>Waiting for a few more samples to draw the chart.</AppText>
+                  )}
+                </View>
+              ))}
+            </>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* Trend chart */}
       <View style={styles.card}>
@@ -534,6 +602,57 @@ const styles = StyleSheet.create({
   cardSubtitle: {
     fontSize: 13,
     color: colors.muted,
+  },
+  liveMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 6,
+  },
+  liveMetricCard: {
+    width: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+    gap: 4,
+  },
+  liveMetricLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  liveMetricValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  liveChartPanel: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: spacing.sm,
+  },
+  liveChartHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  liveChartTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  liveChartValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.accent,
   },
   // Goal form
   goalRow: {

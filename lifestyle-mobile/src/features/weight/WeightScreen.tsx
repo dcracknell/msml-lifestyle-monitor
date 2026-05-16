@@ -5,6 +5,7 @@ import { weightRequest, deleteWeightEntryRequest } from '../../api/endpoints';
 import { WeightEntry, WeightStats } from '../../api/types';
 import { useSubject } from '../../providers/SubjectProvider';
 import { useAuth } from '../../providers/AuthProvider';
+import { useBluetooth } from '../../providers/BluetoothProvider';
 import {
   AppButton,
   AppInput,
@@ -19,12 +20,17 @@ import {
 import { colors, spacing } from '../../theme';
 import { formatDate, formatNumber } from '../../utils/format';
 import { useSyncQueue } from '../../providers/SyncProvider';
+import {
+  buildBluetoothTrendSeries,
+  formatBluetoothMetricLabel,
+} from '../devices/bluetoothMetricUtils';
 import { useBodyMetrics } from './useBodyMetrics';
 
 export function WeightScreen() {
   const { subjectId } = useSubject();
   const { user } = useAuth();
   const { runOrQueue } = useSyncQueue();
+  const { connectedDevice, sampleHistory } = useBluetooth();
   const [unit, setUnit] = useState<'kg' | 'lb'>('kg');
   const [value, setValue] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -44,6 +50,31 @@ export function WeightScreen() {
   const trend = useMemo(
     () => buildWeightTrend(timeline, unit),
     [timeline, unit]
+  );
+  const liveBodySeries = useMemo(
+    () =>
+      buildBluetoothTrendSeries(
+        sampleHistory,
+        [
+          {
+            key: 'body.weight_kg',
+            label: 'Weight',
+            yLabel: unit,
+            normalize: (measurement) => (unit === 'lb' ? measurement * 2.20462 : measurement),
+            formatValue: (measurement) =>
+              measurement != null ? `${measurement.toFixed(1)} ${unit}` : '--',
+          },
+          {
+            key: 'body.body_fat_pct',
+            label: 'Body fat',
+            yLabel: '%',
+            formatValue: (measurement) =>
+              measurement != null ? `${measurement.toFixed(1)} %` : '--',
+          },
+        ],
+        { limit: 14, labelFormat: 'MMM D' }
+      ),
+    [sampleHistory, unit]
   );
 
   if (isError) {
@@ -146,6 +177,53 @@ export function WeightScreen() {
           <WeightMetric label={`AVG ${unit.toUpperCase()}`} value={formatNumber(unit === 'kg' ? data.stats.avgWeightKg : data.stats.avgWeightLbs, { suffix: ` ${unit}` })} />
           <WeightMetric label="WEEKLY CHANGE" value={weeklyChangeLabel} />
           <WeightMetric label="CALORIE AVG" value={formatNumber(data.stats.caloriesAvg, { suffix: ' kcal' })} />
+        </View>
+      ) : null}
+
+      {viewingOwnData ? (
+        <View style={styles.card}>
+          <AppText style={styles.eyebrow}>LIVE DEVICE FEED</AppText>
+          <AppText style={styles.cardTitle}>Bluetooth body data</AppText>
+          <AppText style={styles.cardSubtitle}>
+            {liveBodySeries.length
+              ? `${connectedDevice?.name || 'Bluetooth device'} · ${formatDate(
+                  new Date(liveBodySeries[0].latestTs).toISOString(),
+                  'MMM D, HH:mm:ss'
+                )}`
+              : connectedDevice
+              ? 'Connected and waiting for weight or body-composition samples.'
+              : 'Connect a wearable in Settings to see incoming weight and body-fat charts here.'}
+          </AppText>
+          {liveBodySeries.length ? (
+            <>
+              <View style={styles.liveMetricGrid}>
+                {liveBodySeries.map((series) => (
+                  <View key={series.key} style={styles.liveMetricCard}>
+                    <AppText style={styles.liveMetricLabel}>{formatBluetoothMetricLabel(series.key)}</AppText>
+                    <AppText style={styles.liveMetricValue}>{series.latestValueLabel}</AppText>
+                  </View>
+                ))}
+              </View>
+              {liveBodySeries.map((series) => (
+                <View key={`${series.key}-chart`} style={styles.liveChartPanel}>
+                  <View style={styles.liveChartHeader}>
+                    <AppText style={styles.liveChartTitle}>{series.label}</AppText>
+                    <AppText style={styles.liveChartValue}>{series.latestValueLabel}</AppText>
+                  </View>
+                  {series.points.length > 1 ? (
+                    <TrendChart
+                      data={series.points}
+                      yLabel={series.yLabel}
+                      height={150}
+                      chartPadding={{ top: 20, bottom: 40, left: 52, right: 16 }}
+                    />
+                  ) : (
+                    <AppText style={styles.cardSubtitle}>Waiting for a few more samples to draw the chart.</AppText>
+                  )}
+                </View>
+              ))}
+            </>
+          ) : null}
         </View>
       ) : null}
 
@@ -333,6 +411,57 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.muted,
     marginBottom: 4,
+  },
+  liveMetricGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 6,
+  },
+  liveMetricCard: {
+    width: '47%',
+    flexGrow: 1,
+    backgroundColor: colors.glass,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+    gap: 4,
+  },
+  liveMetricLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.1,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  liveMetricValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  liveChartPanel: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: spacing.sm,
+  },
+  liveChartHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  liveChartTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  liveChartValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.accent,
   },
   // BMI card (BodyMetricsCard uses Card component which has its own styles)
   bmiRow: {
