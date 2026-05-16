@@ -61,9 +61,9 @@ describe('Static asset delivery', () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain('/auth-guard.js?v=1');
-    expect(response.text).toContain('/app.js?v=23');
+    expect(response.text).toContain('/app.js?v=25');
     expect(response.text.indexOf('/auth-guard.js?v=1')).toBeLessThan(
-      response.text.indexOf('/app.js?v=23')
+      response.text.indexOf('/app.js?v=25')
     );
   });
 
