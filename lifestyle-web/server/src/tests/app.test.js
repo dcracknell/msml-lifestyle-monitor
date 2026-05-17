@@ -375,6 +375,42 @@ describe('Sensor stream ingestion', () => {
     expect(day.steps).toBe(syncSteps);
   });
 
+  it('returns recent stream metric summaries for the requested window', async () => {
+    const { token } = await loginAsCoach();
+    const now = Date.now();
+    const samples = [
+      { metric: 'sensor.body_temperature_c', value: 36.8, ts: now - 8_000 },
+      { metric: 'sensor.ambient_temperature_c', value: 22.4, ts: now - 6_000 },
+      { metric: 'sensor.humidity_pct', value: 47.2, ts: now - 4_000 },
+      { metric: 'sensor.co2_ppm', value: 812, ts: now - 2_000 },
+    ];
+
+    for (const sample of samples) {
+      // eslint-disable-next-line no-await-in-loop
+      const ingest = await request(app)
+        .post('/api/streams')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          metric: sample.metric,
+          samples: [{ ts: sample.ts, value: sample.value }],
+        });
+      expect(ingest.status).toBe(202);
+    }
+
+    const summary = await request(app)
+      .get(`/api/streams/summary?from=${now - 60_000}&to=${now + 1_000}`)
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(summary.status).toBe(200);
+    expect(summary.body.totalMetrics).toBeGreaterThanOrEqual(4);
+    expect(Array.isArray(summary.body.metrics)).toBe(true);
+
+    const co2 = summary.body.metrics.find((entry) => entry.metric === 'sensor.co2_ppm');
+    expect(co2).toBeTruthy();
+    expect(co2.sampleCount).toBe(1);
+    expect(co2.latest).toMatchObject({ value: 812 });
+  });
+
   it('can skip workout session mirroring for raw exercise stream uploads', async () => {
     const { token } = await loginAsCoach();
     const syncTs = Date.now();

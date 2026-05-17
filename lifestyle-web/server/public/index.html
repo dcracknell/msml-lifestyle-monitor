@@ -838,7 +838,108 @@
         <!-- ── Vitals subpage ─────────────────────────────────────────── -->
         <div class="subpage hidden" data-subpage="vitals">
 
-          <!-- 1 · 6 metric cards -->
+          <!-- 1 · PPG Sensor / BGL Inference -->
+          <article class="card ppg-model-card ppg-hero-card">
+            <div class="ppg-hero-grid">
+              <div class="ppg-hero-copy">
+                <p class="section-eyebrow">PPG Sensor · Glucose Inference</p>
+                <h3 class="ppg-hero-title">Keep the photoplethysmography stream front and center.</h3>
+                <p class="ppg-hero-text">
+                  Run a live watch-driven <code>ppg.raw</code> window or choose one of the three bundled demo recordings you provided.
+                  Every inference surfaces the waveform preview and the model’s BGL confidence below.
+                </p>
+
+                <div class="ppg-actions ppg-action-strip">
+                  <button id="ppgRunFull" type="button" class="btn-primary btn-sm" title="Run using the latest watch/ppg.raw stream (500 Hz, 15 min window)">Run Live Watch Stream</button>
+                  <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm" title="Choose one of the bundled demo PPG datasets and run it">Run Demo Data</button>
+                </div>
+
+                <div class="ppg-status-stack">
+                  <div class="ppg-status-card">
+                    <span class="ppg-status-label">Model Runtime</span>
+                    <p id="ppgStatusText" class="ppg-status-text">No inference run yet.</p>
+                  </div>
+                  <div class="ppg-status-card">
+                    <span class="ppg-status-label">Demo Library</span>
+                    <p id="ppgDemoDatasetStatus" class="ppg-demo-status">Loading demo datasets…</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ppg-spotlight">
+                <div class="ppg-spotlight-panel">
+                  <span class="ppg-kicker">Sensor Focus</span>
+                  <h4>PPG waveform window</h4>
+                  <p>
+                    Live mode expects the latest watch/BLE stream on <code>ppg.raw</code> with a full 15-minute capture.
+                    Demo mode lets you pick from three bundled activity recordings and graphs the exact analyzed segment.
+                  </p>
+                  <div class="ppg-spotlight-wave" aria-hidden="true">
+                    <span></span><span></span><span></span><span></span><span></span><span></span>
+                  </div>
+                  <div class="ppg-quick-grid">
+                    <div class="ppg-quick-card">
+                      <strong>Live stream</strong>
+                      <span>Watch/BLE sensor → <code>ppg.raw</code></span>
+                    </div>
+                    <div class="ppg-quick-card">
+                      <strong>Demo library</strong>
+                      <span>3 bundled recordings</span>
+                    </div>
+                    <div class="ppg-quick-card">
+                      <strong>Output</strong>
+                      <span>Waveform preview + zone confidence</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p class="field-hint" id="ppgHintText">
+              Use the live watch stream after your watch/BLE bridge has uploaded a full <code>ppg.raw</code> window,
+              or click demo and choose one of the three bundled recordings you gave me. The selected run is graphed below after inference.
+              Prototype only; not clinically validated.
+            </p>
+
+            <div id="ppgResults" class="hidden ppg-results-shell">
+              <div class="ppg-metrics-row">
+                <div class="ppg-metric-block">
+                  <span class="ppg-metric-label">Estimated BGL Zone</span>
+                  <span id="ppgPredictionLabel" class="ppg-metric-value">—</span>
+                  <span id="ppgPredictionSub" class="ppg-metric-sub">Model —</span>
+                </div>
+                <div class="ppg-metric-block">
+                  <span class="ppg-metric-label">Confidence</span>
+                  <span id="ppgConfidenceValue" class="ppg-metric-value">—</span>
+                  <span id="ppgConfidenceSub" class="ppg-metric-sub">Top probability —</span>
+                </div>
+                <div class="ppg-metric-block">
+                  <span class="ppg-metric-label">Signal Quality</span>
+                  <span id="ppgQualityValue" class="ppg-metric-value">—</span>
+                  <span id="ppgQualitySub" class="ppg-metric-sub">SQI summary —</span>
+                </div>
+              </div>
+
+              <div class="ppg-chart-grid">
+                <article class="ppg-chart-panel">
+                  <p class="ppg-panel-label">Source Waveform</p>
+                  <p id="ppgSourceMeta" class="ppg-source-meta">Signal preview will appear after inference.</p>
+                  <div class="chart-canvas-frame chart-canvas-frame-240">
+                    <canvas id="ppgSourceChart"></canvas>
+                  </div>
+                </article>
+                <article class="ppg-chart-panel">
+                  <p class="ppg-panel-label">Model Confidence</p>
+                  <p class="ppg-source-meta">Zone probabilities from the selected PPG run.</p>
+                  <div class="chart-canvas-frame chart-canvas-frame-240">
+                    <canvas id="ppgModelChart"></canvas>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </article>
+
+          <!-- 2 · 6 metric cards -->
           <div class="signals-row vitals-signals-row">
             <article class="metric-card metric-teal">
               <p class="metric-label">Resting HR</p>
@@ -884,8 +985,24 @@
             </article>
           </div>
 
-          <!-- 2 · HRV Trend + Signal Summary -->
-          <div class="vitals-mid-row">
+          <!-- 3 · Device Telemetry -->
+          <article class="card vitals-device-card" id="vitalsDeviceStreamsCard">
+            <div class="card-header split">
+              <div>
+                <p class="section-eyebrow">Device Telemetry</p>
+                <h3 class="card-title">Body + ambient sensor streams from your connected device</h3>
+              </div>
+              <span class="status-chip" id="vitalsDeviceStreamsStatus">Loading…</span>
+            </div>
+            <p class="field-hint" id="vitalsDeviceStreamsHint">
+              Checking for body temperature, outside temperature, humidity, CO2, and related device streams…
+            </p>
+            <div id="vitalsDeviceSummary" class="vitals-device-summary"></div>
+            <div id="vitalsDeviceStreamsContainer" class="sensor-streams-grid vitals-device-streams-grid"></div>
+          </article>
+
+          <!-- 4 · Vitals Analytics -->
+          <div class="vitals-analytics-grid">
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">HRV Trend · 14 Days</p>
@@ -901,10 +1018,6 @@
                 <tbody id="vitalsSummaryBody"></tbody>
               </table>
             </article>
-          </div>
-
-          <!-- 3 · HR Trend + Glucose Trend -->
-          <div class="act-charts-row">
             <article class="card chart-card">
               <div class="act-chart-header">
                 <p class="section-eyebrow">Resting HR · 14 Days</p>
@@ -925,7 +1038,7 @@
             </article>
           </div>
 
-          <!-- 4 · Heart Rate Stream Analysis -->
+          <!-- 5 · Heart Rate Stream Analysis -->
           <article class="card" id="vitalsHrStreamCard">
             <div class="card-header split">
               <div>
@@ -941,7 +1054,7 @@
             </div>
           </article>
 
-          <!-- 5 · Vitals Log -->
+          <!-- 6 · Vitals Log -->
           <article class="card vitals-log-card">
             <p class="section-eyebrow">Vitals Log</p>
             <ul class="vitals-log-list" id="vitalsHistory">
@@ -952,92 +1065,6 @@
               <li><span class="vl-date">Mar 1</span><span class="vl-summary">52 bpm · 120/73 mmHg · 94 mg/dL</span><span class="vl-stat">HRV 101 ms</span><span class="vl-stat">SpO₂ 97%</span><span class="vitals-tag blue">Monitor</span></li>
             </ul>
             <p class="form-feedback" id="vitalsFeedback"></p>
-          </article>
-
-          <!-- 5 · BGL Inference -->
-          <article class="card ppg-model-card">
-            <div class="ppg-card-header">
-              <p class="section-eyebrow">BGL Inference · Prototype</p>
-              <div class="ppg-actions">
-                <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm" title="Run with the bundled demo PPG signal — no live stream required">Run Demo Signal</button>
-                <button id="ppgRunFull" type="button" class="btn-primary btn-sm" title="Run using the latest ppg.raw stream (500 Hz, 15 min window)">Run ppg.raw Window</button>
-                <button id="ppgCsvToggle" type="button" class="btn-secondary btn-sm" title="Upload a PPG CSV source and run inference on that recording">CSV Upload v</button>
-                <button id="ppgArduinoToggle" type="button" class="btn-secondary btn-sm" title="Configure and run inference from an Arduino or custom BLE signal">Arduino Signal v</button>
-              </div>
-            </div>
-
-            <div id="ppgCsvPanel" class="ppg-csv-panel hidden">
-              <p class="section-eyebrow" style="margin-bottom:8px">CSV Signal Source</p>
-              <p class="field-hint">Upload a PPG CSV each time you want to analyze a different recording. The signal file is required. Heart-rate and RR files are optional and only improve the preview graph.</p>
-              <div class="ppg-csv-controls">
-                <label class="ppg-csv-field">
-                  PPG signal CSV
-                  <input type="file" id="ppgCsvSignalInput" accept=".csv,text/csv" />
-                </label>
-                <label class="ppg-csv-field">
-                  Heart-rate CSV
-                  <input type="file" id="ppgCsvHeartRateInput" accept=".csv,text/csv" />
-                </label>
-                <label class="ppg-csv-field">
-                  RR-interval CSV
-                  <input type="file" id="ppgCsvRrInput" accept=".csv,text/csv" />
-                </label>
-              </div>
-              <p class="ppg-csv-status" id="ppgCsvStatus">Select a PPG signal CSV to enable imported inference.</p>
-              <button type="button" id="ppgRunCsv" class="btn-primary btn-sm">Run Inference on Uploaded CSV</button>
-            </div>
-
-            <!-- Arduino / custom signal panel -->
-            <div id="ppgArduinoPanel" class="ppg-arduino-panel hidden">
-              <p class="section-eyebrow" style="margin-bottom:8px">Arduino / Custom BLE Signal</p>
-              <p class="field-hint">Select the metric your Arduino is streaming PPG data to and enter its sample rate. Any signal with at least 10 seconds of data works.</p>
-              <div class="ppg-arduino-controls">
-                <label class="ppg-arduino-field">
-                  Signal metric
-                  <select id="ppgArduinoMetric">
-                    <option value="ppg.raw">ppg.raw</option>
-                    <option value="sensor.ppg">sensor.ppg</option>
-                    <option value="sensor.ppg_raw">sensor.ppg_raw</option>
-                    <option value="vitals.ppg">vitals.ppg</option>
-                  </select>
-                </label>
-                <label class="ppg-arduino-field">
-                  Sample rate (Hz)
-                  <input type="number" id="ppgArduinoFsHz" value="10" min="1" max="2000" step="1" inputmode="numeric" />
-                </label>
-              </div>
-              <p class="ppg-arduino-signal-status" id="ppgArduinoSignalStatus">Checking signal…</p>
-              <button type="button" id="ppgRunArduino" class="btn-primary btn-sm">Run Inference on Arduino Signal</button>
-            </div>
-
-            <p id="ppgStatusText" class="ppg-status-text">No inference run yet.</p>
-            <p class="field-hint" id="ppgHintText">Demo uses a bundled test signal. MSML_BLE_Sensor sketch streams ppg.raw at 10 Hz — connect for 30+ seconds then run. Arduino mode works with any metric ≥ 30 s. Prototype only — not clinically validated.</p>
-            <div id="ppgResults" class="hidden">
-              <div class="ppg-metrics-row">
-                <div class="ppg-metric-block">
-                  <span class="ppg-metric-label">Estimated BGL Zone</span>
-                  <span id="ppgPredictionLabel" class="ppg-metric-value">—</span>
-                  <span id="ppgPredictionSub" class="ppg-metric-sub">Model —</span>
-                </div>
-                <div class="ppg-metric-block">
-                  <span class="ppg-metric-label">Confidence</span>
-                  <span id="ppgConfidenceValue" class="ppg-metric-value">—</span>
-                  <span id="ppgConfidenceSub" class="ppg-metric-sub">Top probability —</span>
-                </div>
-                <div class="ppg-metric-block">
-                  <span class="ppg-metric-label">Signal Quality</span>
-                  <span id="ppgQualityValue" class="ppg-metric-value">—</span>
-                  <span id="ppgQualitySub" class="ppg-metric-sub">SQI summary —</span>
-                </div>
-              </div>
-              <p id="ppgSourceMeta" class="ppg-source-meta">Signal preview will appear after inference.</p>
-              <div class="chart-canvas-frame chart-canvas-frame-240">
-                <canvas id="ppgSourceChart"></canvas>
-              </div>
-              <div class="chart-canvas-frame chart-canvas-frame-240">
-                <canvas id="ppgModelChart"></canvas>
-              </div>
-            </div>
           </article>
 
           <!-- Hidden for app.js compat -->

@@ -476,6 +476,38 @@ describe('BluetoothProvider confirmSystemDevice', () => {
       'sleep.total_hours',
     ]);
   });
+
+  it('normalizes Apple Watch environmental and body telemetry fields into stream metrics', async () => {
+    const { monitorCallback } = await connectDevice({ profile: 'apple_watch_companion' });
+
+    await act(async () => {
+      monitorCallback(null, {
+        value: encode(JSON.stringify({
+          timestamp: 1700003000000,
+          bodyTemperature: 36.7,
+          ambientTemperature: 21.4,
+          humidityPct: 48.2,
+          co2ppm: 612,
+          vocPpb: 184,
+          pressureHpa: 1009.6,
+          pm25Ugm3: 9.4,
+        })),
+      });
+      await Promise.resolve();
+    });
+
+    const metrics = mockRunOrQueue.mock.calls.map((c) => c[0]?.payload?.metric).sort();
+    expect(mockRunOrQueue).toHaveBeenCalledTimes(7);
+    expect(metrics).toEqual([
+      'sensor.ambient_temperature_c',
+      'sensor.body_temperature_c',
+      'sensor.co2_ppm',
+      'sensor.humidity_pct',
+      'sensor.pm25_ugm3',
+      'sensor.pressure_hpa',
+      'sensor.voc_ppb',
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

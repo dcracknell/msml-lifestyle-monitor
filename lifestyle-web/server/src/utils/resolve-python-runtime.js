@@ -35,8 +35,10 @@ function resolvePythonRuntime({
   commandExistsFn = commandExists,
 } = {}) {
   const trimmedOverride = typeof envOverride === 'string' ? envOverride.trim() : '';
+  const overrideIsPathLike = /[\\/]/.test(trimmedOverride);
   if (
     trimmedOverride &&
+    overrideIsPathLike &&
     isConfiguredRuntimeAvailable(trimmedOverride, { existsSync, commandExistsFn })
   ) {
     return trimmedOverride;
@@ -48,6 +50,14 @@ function resolvePythonRuntime({
 
   if (localVenvWindowsPython && existsSync(localVenvWindowsPython)) {
     return localVenvWindowsPython;
+  }
+
+  if (
+    trimmedOverride &&
+    !overrideIsPathLike &&
+    isConfiguredRuntimeAvailable(trimmedOverride, { existsSync, commandExistsFn })
+  ) {
+    return trimmedOverride;
   }
 
   if (commandExistsFn('python3')) {

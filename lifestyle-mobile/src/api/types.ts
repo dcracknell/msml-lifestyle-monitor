@@ -206,18 +206,25 @@ export interface VitalsEntry {
   systolic: number | null;
   diastolic: number | null;
   glucose: number | null;
+  fieldDates?: Partial<Record<'restingHr' | 'hrvScore' | 'spo2' | 'stressScore' | 'systolic' | 'diastolic' | 'glucose', string | null>>;
 }
 
 export interface VitalsStats {
   window: number;
+  restingHrCount?: number | null;
   restingHrAvg: number | null;
   restingHrDelta: number | null;
+  glucoseCount?: number | null;
   glucoseAvg: number | null;
   glucoseDelta: number | null;
+  bloodPressureCount?: number | null;
   systolicAvg: number | null;
   diastolicAvg: number | null;
+  hrvCount?: number | null;
   hrvAvg: number | null;
+  spo2Count?: number | null;
   spo2Avg: number | null;
+  stressCount?: number | null;
   stressAvg: number | null;
 }
 
@@ -420,6 +427,25 @@ export interface StreamHistoryResponse {
   points: StreamSample[];
 }
 
+export interface StreamSummaryMetric {
+  metric: string;
+  sampleCount: number;
+  firstTs: number | null;
+  lastTs: number | null;
+  latest: {
+    ts: number | null;
+    value: number | null;
+  } | null;
+}
+
+export interface StreamSummaryResponse {
+  subjectId: number;
+  from: number;
+  to: number;
+  totalMetrics: number;
+  metrics: StreamSummaryMetric[];
+}
+
 export interface StreamPublishResponse {
   metric: string;
   accepted: number;
@@ -446,7 +472,39 @@ export interface PpgPredictionPayload {
     mean_sqi?: number | null;
     min_sqi?: number | null;
   };
+  input_preview?: PpgInputPreview | null;
+  inputPreview?: PpgInputPreview | null;
   warnings?: string[];
+}
+
+export interface PpgInputPreviewSeries {
+  timesSec?: number[];
+  values?: number[];
+}
+
+export interface PpgInputPreviewWindow {
+  startSec?: number | null;
+  endSec?: number | null;
+  durationSeconds?: number | null;
+  usedLatestWindow?: boolean | null;
+  label?: string | null;
+}
+
+export interface PpgInputPreview {
+  sourceType?: string | null;
+  demoDatasetId?: string | null;
+  demoDatasetLabel?: string | null;
+  signalFileName?: string | null;
+  heartRateFileName?: string | null;
+  rrFileName?: string | null;
+  signalMetric?: string | null;
+  sampleRateHz?: number | null;
+  sampleCount?: number | null;
+  durationSeconds?: number | null;
+  signal?: PpgInputPreviewSeries | null;
+  heartRate?: Record<string, unknown> | null;
+  rr?: Record<string, unknown> | null;
+  window?: PpgInputPreviewWindow | null;
 }
 
 export interface PpgRunRequestMeta {
@@ -502,6 +560,21 @@ export interface PpgStatusInfo {
   demographicsPath?: string;
 }
 
+export interface PpgDemoDatasetStatus {
+  id: string;
+  label: string;
+  description: string;
+  durationSeconds: number;
+  window?: {
+    label?: string | null;
+    startSec?: number | null;
+    durationSec?: number | null;
+  } | null;
+  ready: boolean;
+  sourceName?: string | null;
+  message: string;
+}
+
 export interface PpgStatusResponse {
   running: boolean;
   inMemory: PpgRunSummary | null;
@@ -510,6 +583,7 @@ export interface PpgStatusResponse {
   runtime: PpgStatusInfo;
   bundle: PpgStatusInfo;
   demoInput: PpgStatusInfo;
+  demoDatasets: PpgDemoDatasetStatus[];
   liveInput: PpgStatusInfo;
   profile: PpgStatusInfo;
   signalMetric: string;

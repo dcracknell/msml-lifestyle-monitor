@@ -41,6 +41,28 @@ const samplesInRangeStatement = db.prepare(
     ORDER BY ts ASC`
 );
 
+const metricSummariesInRangeStatement = db.prepare(
+  `SELECT metric,
+          COUNT(*) AS sampleCount,
+          MIN(ts) AS firstTs,
+          MAX(ts) AS lastTs
+     FROM sensor_stream_samples
+    WHERE user_id = ?
+      AND ts BETWEEN ? AND ?
+    GROUP BY metric
+    ORDER BY lastTs DESC, metric ASC`
+);
+
+const latestMetricSampleInRangeStatement = db.prepare(
+  `SELECT ts, value
+     FROM sensor_stream_samples
+    WHERE user_id = ?
+      AND metric = ?
+      AND ts BETWEEN ? AND ?
+    ORDER BY ts DESC
+    LIMIT 1`
+);
+
 const DAILY_STEP_MIRROR_METRICS = new Set(['phone.steps', 'activity.steps']);
 const DAILY_CALORIE_MIRROR_METRICS = new Set(['activity.active_calories', 'exercise.calories']);
 const DAILY_SLEEP_MIRROR_METRICS = new Set(['sleep.total_hours']);
@@ -319,6 +341,47 @@ function ensureAccess(viewer, subjectId) {
   }
   const link = accessStatement.get(viewer.id, subjectId);
   return Boolean(link);
+}
+
+function resolveSubjectId(req, res) {
+  const viewer = { id: req.user.id, role: coerceRole(req.user.role) };
+  const requestedId = Number.parseInt(req.query.athleteId, 10);
+  const subjectId = Number.isNaN(requestedId) ? viewer.id : requestedId;
+
+  const subjectExists = subjectExistsStatement.get(subjectId);
+  if (!subjectExists) {
+    res.status(404).json({ message: 'Athlete not found.' });
+    return null;
+  }
+
+  if (!ensureAccess(viewer, subjectId)) {
+    res.status(403).json({ message: 'Not authorized to view that athlete.' });
+    return null;
+  }
+
+  return subjectId;
+}
+
+function resolveRequestedRange(req, res) {
+  const now = Date.now();
+  const toTs = parseTimestamp(req.query.to, now);
+  if (toTs === null) {
+    res.status(400).json({ message: 'Unable to parse `to` timestamp.' });
+    return null;
+  }
+
+  let fromTs = parseTimestamp(req.query.from, null);
+  if (fromTs === null) {
+    const windowMs = parseWindow(req.query.windowMs) || DEFAULT_WINDOW_MS;
+    fromTs = toTs - windowMs;
+  }
+
+  if (!Number.isFinite(fromTs) || fromTs >= toTs) {
+    res.status(400).json({ message: '`from` must be earlier than `to`.' });
+    return null;
+  }
+
+  return { fromTs, toTs };
 }
 
 function toUtcDateString(ts) {
@@ -1228,38 +1291,61 @@ router.post('/workouts', authenticate, (req, res) => {
   });
 });
 
+router.get('/summary', authenticate, (req, res) => {
+  const subjectId = resolveSubjectId(req, res);
+  if (!subjectId) {
+    return;
+  }
+
+  const range = resolveRequestedRange(req, res);
+  if (!range) {
+    return;
+  }
+
+  const { fromTs, toTs } = range;
+  const metrics = metricSummariesInRangeStatement
+    .all(subjectId, fromTs, toTs)
+    .map((entry) => {
+      const latest = latestMetricSampleInRangeStatement.get(subjectId, entry.metric, fromTs, toTs);
+      return {
+        metric: entry.metric,
+        sampleCount: Number(entry.sampleCount) || 0,
+        firstTs: Number(entry.firstTs) || null,
+        lastTs: Number(entry.lastTs) || null,
+        latest: latest
+          ? {
+              ts: Number(latest.ts) || null,
+              value: typeof latest.value === 'number' ? latest.value : null,
+            }
+          : null,
+      };
+    });
+
+  return res.json({
+    subjectId,
+    from: fromTs,
+    to: toTs,
+    totalMetrics: metrics.length,
+    metrics,
+  });
+});
+
 router.get('/', authenticate, (req, res) => {
   const metric = normalizeMetric(req.query.metric);
   if (!metric) {
     return res.status(400).json({ message: 'Metric query parameter is required.' });
   }
 
-  const viewer = { id: req.user.id, role: coerceRole(req.user.role) };
-  const requestedId = Number.parseInt(req.query.athleteId, 10);
-  const subjectId = Number.isNaN(requestedId) ? viewer.id : requestedId;
-
-  const subjectExists = subjectExistsStatement.get(subjectId);
-  if (!subjectExists) {
-    return res.status(404).json({ message: 'Athlete not found.' });
+  const subjectId = resolveSubjectId(req, res);
+  if (!subjectId) {
+    return;
   }
 
-  if (!ensureAccess(viewer, subjectId)) {
-    return res.status(403).json({ message: 'Not authorized to view that athlete.' });
+  const range = resolveRequestedRange(req, res);
+  if (!range) {
+    return;
   }
-
-  const now = Date.now();
-  let toTs = parseTimestamp(req.query.to, now);
-  if (toTs === null) {
-    return res.status(400).json({ message: 'Unable to parse `to` timestamp.' });
-  }
-  let fromTs = parseTimestamp(req.query.from, null);
-  if (fromTs === null) {
-    const windowMs = parseWindow(req.query.windowMs) || DEFAULT_WINDOW_MS;
-    fromTs = toTs - windowMs;
-  }
-  if (!Number.isFinite(fromTs) || fromTs >= toTs) {
-    return res.status(400).json({ message: '`from` must be earlier than `to`.' });
-  }
+  const { fromTs, toTs } = range;
 
   const rawSamples = samplesInRangeStatement
     .all(subjectId, metric, fromTs, toTs)

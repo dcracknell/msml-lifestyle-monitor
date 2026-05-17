@@ -1162,6 +1162,203 @@ const SENSOR_STREAM_METRICS = [
   { metric: 'activity.steps', label: 'Steps', unit: 'steps', color: '#fbbf24' },
 ];
 
+const DEVICE_TELEMETRY_METRICS = [
+  {
+    key: 'body_temperature',
+    label: 'Body Temp',
+    unit: '°C',
+    color: '#fb7185',
+    matchers: [
+      /^sensor\.body_temp(?:erature)?_c$/,
+      /^body\.temp(?:erature)?_c$/,
+      /^vitals\.body_temp(?:erature)?_c$/,
+      /body.*temp/,
+      /skin.*temp/,
+    ],
+  },
+  {
+    key: 'ambient_temperature',
+    label: 'Outside Temp',
+    unit: '°C',
+    color: '#f59e0b',
+    matchers: [
+      /^sensor\.aht20_temperature_c$/,
+      /^sensor\.(?:ambient|outside|outdoor|room)_temp(?:erature)?_c$/,
+      /^environment\.(?:ambient|outside|outdoor|room)_temp(?:erature)?_c$/,
+      /ambient.*temp/,
+      /outside.*temp/,
+      /outdoor.*temp/,
+      /room.*temp/,
+      /aht20.*temperature/,
+    ],
+  },
+  {
+    key: 'humidity',
+    label: 'Humidity',
+    unit: '%',
+    color: '#38bdf8',
+    matchers: [
+      /^sensor\.aht20_humidity_pct$/,
+      /^sensor\.humidity(?:_pct)?$/,
+      /^environment\.humidity(?:_pct)?$/,
+      /humidity/,
+      /humid/,
+    ],
+  },
+  {
+    key: 'co2',
+    label: 'CO2',
+    unit: 'ppm',
+    color: '#a78bfa',
+    matchers: [
+      /^sensor\.co2(?:_ppm)?$/,
+      /^environment\.co2(?:_ppm)?$/,
+      /^air\.co2(?:_ppm)?$/,
+      /\bco2\b/,
+      /carbon.*dioxide/,
+    ],
+  },
+  {
+    key: 'voc',
+    label: 'VOC',
+    unit: 'ppb',
+    color: '#c084fc',
+    matchers: [
+      /^sensor\.voc(?:_ppb)?$/,
+      /^air\.voc(?:_ppb)?$/,
+      /\bvoc\b/,
+      /volatile.*organic/,
+    ],
+  },
+  {
+    key: 'pressure',
+    label: 'Pressure',
+    unit: 'hPa',
+    color: '#60a5fa',
+    matchers: [
+      /^sensor\.pressure(?:_hpa)?$/,
+      /^environment\.pressure(?:_hpa)?$/,
+      /pressure/,
+      /barometer/,
+    ],
+  },
+  {
+    key: 'pm25',
+    label: 'PM2.5',
+    unit: 'ug/m3',
+    color: '#f97316',
+    matchers: [
+      /^sensor\.pm2?5(?:_ugm3)?$/,
+      /^air\.pm2?5(?:_ugm3)?$/,
+      /pm2\.?5/,
+      /particulate/,
+    ],
+  },
+];
+
+const DEVICE_TELEMETRY_PRIORITY = new Map(
+  DEVICE_TELEMETRY_METRICS.map((entry, index) => [entry.key, index])
+);
+
+function normalizeMetricName(metric) {
+  return typeof metric === 'string' ? metric.trim().toLowerCase() : '';
+}
+
+function resolveDeviceTelemetryDefinition(metric) {
+  const normalized = normalizeMetricName(metric);
+  if (!normalized) return null;
+  return (
+    DEVICE_TELEMETRY_METRICS.find((entry) => entry.matchers.some((matcher) => matcher.test(normalized)))
+    || null
+  );
+}
+
+function inferDeviceMetricUnit(metric) {
+  if (/(?:body|skin|ambient|outside|outdoor|room).*(?:temp|temperature)|(?:temp|temperature).*(?:body|skin|ambient|outside|outdoor|room)/i.test(metric)) {
+    return '°C';
+  }
+  if (/humidity|humid/i.test(metric)) return '%';
+  if (/\bco2\b|carbon.*dioxide/i.test(metric)) return 'ppm';
+  if (/\bvoc\b|volatile.*organic/i.test(metric)) return 'ppb';
+  if (/pressure|barometer/i.test(metric)) return 'hPa';
+  if (/pm2\.?5|particulate/i.test(metric)) return 'ug/m3';
+  return '';
+}
+
+function formatMetricLabel(metric) {
+  const normalized = normalizeMetricName(metric);
+  if (!normalized) return 'Sensor Metric';
+  const tail = normalized.split('.').pop() || normalized;
+  return tail
+    .replace(/[_-]+/g, ' ')
+    .replace(/\bco2\b/gi, 'CO2')
+    .replace(/\bpm25\b/gi, 'PM2.5')
+    .replace(/\bspo2\b/gi, 'SpO2')
+    .replace(/\bhrv\b/gi, 'HRV')
+    .replace(/\bhr\b/gi, 'HR')
+    .replace(/\b[a-z]/g, (match) => match.toUpperCase());
+}
+
+function resolveVitalsDeviceMetric(metric) {
+  const normalized = normalizeMetricName(metric);
+  const known = resolveDeviceTelemetryDefinition(normalized);
+  if (known) {
+    return {
+      metric: normalized,
+      key: known.key,
+      label: known.label,
+      unit: known.unit,
+      color: known.color,
+      recognized: true,
+    };
+  }
+  if (!normalized) {
+    return null;
+  }
+  if (
+    normalized.startsWith('sensor.')
+    || normalized.startsWith('environment.')
+    || normalized.startsWith('air.')
+    || normalized.includes('temp')
+    || normalized.includes('temperature')
+    || normalized.includes('humidity')
+    || normalized.includes('co2')
+    || normalized.includes('pressure')
+    || normalized.includes('voc')
+    || normalized.includes('pm2')
+  ) {
+    return {
+      metric: normalized,
+      key: normalized,
+      label: formatMetricLabel(normalized),
+      unit: inferDeviceMetricUnit(normalized),
+      color: '#60a5fa',
+      recognized: false,
+    };
+  }
+  return null;
+}
+
+function formatDeviceMetricValue(value, unit = '') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  const roundedUnits = new Set(['ppm', 'ppb', 'ug/m3', 'steps', 'bpm', 'ms', 'mg/dL', 'mmHg']);
+  const formatted = roundedUnits.has(unit)
+    ? `${Math.round(numeric)}`
+    : `${Math.round(numeric * 10) / 10}`;
+  return unit ? `${formatted} ${unit}` : formatted;
+}
+
+function formatDeviceMetricTimestamp(ts) {
+  const numeric = Number(ts);
+  if (!Number.isFinite(numeric)) return 'No recent sample';
+  return `Updated ${new Date(numeric).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function sanitizeMetricForId(metric) {
+  return normalizeMetricName(metric).replace(/\./g, '_').replace(/[^a-z0-9_]/gi, '');
+}
+
 const QUICK_SUGGESTIONS = [
   {
     id: 'quick-water',
@@ -1377,6 +1574,10 @@ const vitalsGlucoseNote = document.getElementById('vitalsGlucoseNote');
 const vitalsSummaryBody = document.getElementById('vitalsSummaryBody');
 const vitalsHistoryList = document.getElementById('vitalsHistory');
 const vitalsFeedback = document.getElementById('vitalsFeedback');
+const vitalsDeviceStreamsStatus = document.getElementById('vitalsDeviceStreamsStatus');
+const vitalsDeviceStreamsHint = document.getElementById('vitalsDeviceStreamsHint');
+const vitalsDeviceSummary = document.getElementById('vitalsDeviceSummary');
+const vitalsDeviceStreamsContainer = document.getElementById('vitalsDeviceStreamsContainer');
 const nutritionGoalList = document.getElementById('nutritionGoalList');
 const nutritionEntriesList = document.getElementById('nutritionEntriesList');
 const nutritionMonthList = document.getElementById('nutritionMonthList');
@@ -3729,6 +3930,18 @@ function resetVitalsState() {
   if (hrStreamStats) hrStreamStats.innerHTML = '';
   if (hrStreamZones) hrStreamZones.innerHTML = '';
   if (hrStreamChip) { hrStreamChip.textContent = 'Loading…'; hrStreamChip.className = 'status-chip'; }
+  Object.values(state.charts.vitalsDeviceStream || {}).forEach((chart) => chart?.destroy());
+  state.charts.vitalsDeviceStream = {};
+  if (vitalsDeviceStreamsStatus) {
+    vitalsDeviceStreamsStatus.textContent = 'Loading…';
+    vitalsDeviceStreamsStatus.className = 'status-chip';
+  }
+  if (vitalsDeviceStreamsHint) {
+    vitalsDeviceStreamsHint.textContent =
+      'Checking for body temperature, outside temperature, humidity, CO2, and related device streams…';
+  }
+  if (vitalsDeviceSummary) vitalsDeviceSummary.innerHTML = '';
+  if (vitalsDeviceStreamsContainer) vitalsDeviceStreamsContainer.innerHTML = '';
 }
 
 function renderNutritionGoals(goals = {}, totals = null) {
@@ -9017,6 +9230,7 @@ async function loadVitals(subjectOverrideId) {
       } else if (vitalsFeedback) {
         vitalsFeedback.textContent = 'Unable to load vitals right now.';
       }
+      resetVitalsDeviceTelemetry('Unable to load device telemetry right now.');
       return;
     }
 
@@ -9030,11 +9244,13 @@ async function loadVitals(subjectOverrideId) {
     }
     loadPpgResults();
     loadPpgStatus();
+    loadVitalsDeviceStreams(targetId);
     loadHeartRateStream(targetId);
   } catch (error) {
     if (vitalsFeedback) {
       vitalsFeedback.textContent = 'Unable to load vitals right now.';
     }
+    resetVitalsDeviceTelemetry('Unable to load device telemetry right now.');
   }
 }
 
@@ -10923,6 +11139,222 @@ function renderHeartRateStreamCard(points = []) {
       },
     },
   });
+}
+
+function resetVitalsDeviceTelemetry(message, statusText = 'No data', statusClass = 'status-chip') {
+  Object.values(state.charts.vitalsDeviceStream || {}).forEach((chart) => chart?.destroy());
+  state.charts.vitalsDeviceStream = {};
+  if (vitalsDeviceStreamsStatus) {
+    vitalsDeviceStreamsStatus.textContent = statusText;
+    vitalsDeviceStreamsStatus.className = statusClass;
+  }
+  if (vitalsDeviceStreamsHint) {
+    vitalsDeviceStreamsHint.textContent = message;
+  }
+  if (vitalsDeviceSummary) vitalsDeviceSummary.innerHTML = '';
+  if (vitalsDeviceStreamsContainer) vitalsDeviceStreamsContainer.innerHTML = '';
+}
+
+function sortVitalsDeviceMetrics(entries = []) {
+  return [...entries].sort((a, b) => {
+    const aRank = DEVICE_TELEMETRY_PRIORITY.has(a.def?.key) ? DEVICE_TELEMETRY_PRIORITY.get(a.def.key) : 999;
+    const bRank = DEVICE_TELEMETRY_PRIORITY.has(b.def?.key) ? DEVICE_TELEMETRY_PRIORITY.get(b.def.key) : 999;
+    if (aRank !== bRank) {
+      return aRank - bRank;
+    }
+    return (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0);
+  });
+}
+
+function renderVitalsDeviceSummaryTiles(entries = []) {
+  if (!vitalsDeviceSummary) return;
+  if (!entries.length) {
+    vitalsDeviceSummary.innerHTML = '';
+    return;
+  }
+
+  vitalsDeviceSummary.innerHTML = entries
+    .map((entry) => {
+      const latestValue = formatDeviceMetricValue(entry.latest?.value, entry.def?.unit || '');
+      const recency = formatDeviceMetricTimestamp(entry.latest?.ts || entry.lastTs);
+      const sampleCount = Number(entry.sampleCount) || 0;
+      return `
+        <article class="vitals-device-tile">
+          <p class="metric-label">${entry.def?.label || formatMetricLabel(entry.metric)}</p>
+          <strong class="vitals-device-value">${latestValue}</strong>
+          <span class="vitals-device-copy">${recency} · ${sampleCount} sample${sampleCount === 1 ? '' : 's'}</span>
+        </article>
+      `;
+    })
+    .join('');
+}
+
+function renderVitalsDeviceStreamCharts(entries = []) {
+  if (!vitalsDeviceStreamsContainer) return;
+  Object.values(state.charts.vitalsDeviceStream || {}).forEach((chart) => chart?.destroy());
+  state.charts.vitalsDeviceStream = {};
+  vitalsDeviceStreamsContainer.innerHTML = '';
+
+  entries.forEach(({ metric, def, data, sampleCount, latest }) => {
+    const canvasId = `vitalsDeviceStream_${sanitizeMetricForId(metric)}`;
+    const pts = Array.isArray(data?.points) ? data.points : [];
+    const latestVal = latest ? formatDeviceMetricValue(latest.value, def?.unit || '') : '—';
+    const card = document.createElement('article');
+    card.className = 'sensor-stream-chart-card';
+    card.innerHTML = `
+      <div class="act-chart-header">
+        <p class="section-eyebrow">${def?.label || formatMetricLabel(metric)}</p>
+        <span class="sensor-stream-latest">${latestVal}</span>
+      </div>
+      <p class="field-hint">${formatDeviceMetricTimestamp(latest?.ts)} · ${sampleCount} sample${sampleCount === 1 ? '' : 's'}</p>
+      <div class="chart-canvas-frame chart-canvas-frame-180">
+        <canvas id="${canvasId}"></canvas>
+      </div>
+    `;
+    vitalsDeviceStreamsContainer.appendChild(card);
+
+    requestAnimationFrame(() => {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      state.charts.vitalsDeviceStream[canvasId] = createChart(ctx, {
+        type: 'line',
+        data: {
+          labels: pts.map((point) => new Date(point.ts).toLocaleTimeString()),
+          datasets: [{
+            label: def?.label || formatMetricLabel(metric),
+            data: pts.map((point) => point.value),
+            borderColor: def?.color || '#60a5fa',
+            backgroundColor: `${def?.color || '#60a5fa'}22`,
+            borderWidth: 2,
+            tension: 0.3,
+            fill: true,
+            pointRadius: pts.length > 60 ? 0 : 2,
+            pointBackgroundColor: def?.color || '#60a5fa',
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label(context) {
+                  return `${def?.label || formatMetricLabel(metric)}: ${formatDeviceMetricValue(context.parsed.y, def?.unit || '')}`;
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              ticks: { color: '#9bb0d6', maxTicksLimit: 6 },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+            y: {
+              ticks: {
+                color: '#9bb0d6',
+                callback(value) {
+                  return formatDeviceMetricValue(value, def?.unit || '');
+                },
+              },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+          },
+        },
+      });
+    });
+  });
+}
+
+async function loadVitalsDeviceStreams(subjectOverrideId) {
+  if (!state.user || !state.token || !vitalsDeviceStreamsContainer) return;
+
+  const targetId = subjectOverrideId ?? state.viewing?.id ?? state.user.id;
+  const athleteParam = targetId && targetId !== state.user.id
+    ? `&athleteId=${encodeURIComponent(targetId)}`
+    : '';
+  const windowMs = 24 * 60 * 60 * 1000;
+  const to = Date.now();
+  const from = to - windowMs;
+
+  if (vitalsDeviceStreamsStatus) {
+    vitalsDeviceStreamsStatus.textContent = 'Loading…';
+    vitalsDeviceStreamsStatus.className = 'status-chip';
+  }
+
+  try {
+    const summaryResponse = await apiFetch(
+      `/api/streams/summary?from=${from}&to=${to}${athleteParam}`,
+      { headers: { Authorization: `Bearer ${state.token}` } }
+    );
+
+    if (!summaryResponse.ok) {
+      resetVitalsDeviceTelemetry('Unable to load device telemetry right now.');
+      return;
+    }
+
+    const summaryPayload = await summaryResponse.json();
+    const discovered = sortVitalsDeviceMetrics(
+      (Array.isArray(summaryPayload?.metrics) ? summaryPayload.metrics : [])
+        .map((entry) => ({
+          ...entry,
+          def: resolveVitalsDeviceMetric(entry.metric),
+        }))
+        .filter((entry) => entry.def && Number(entry.sampleCount) > 0 && entry.latest)
+    );
+
+    if (!discovered.length) {
+      resetVitalsDeviceTelemetry(
+        'No device telemetry found for the last 24 hours. Stream body temperature, outside temperature, humidity, CO2, or similar metrics from the device page to surface them here.'
+      );
+      return;
+    }
+
+    renderVitalsDeviceSummaryTiles(discovered.slice(0, 4));
+
+    const chartTargets = discovered.slice(0, 6);
+    const seriesResponses = await Promise.allSettled(
+      chartTargets.map((entry) =>
+        apiFetch(
+          `/api/streams?metric=${encodeURIComponent(entry.metric)}&from=${from}&to=${to}&maxPoints=240${athleteParam}`,
+          { headers: { Authorization: `Bearer ${state.token}` } }
+        ).then((response) => (response.ok ? response.json() : null)).catch(() => null)
+      )
+    );
+
+    const withData = [];
+    seriesResponses.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value?.points?.length > 0) {
+        withData.push({
+          ...chartTargets[index],
+          data: result.value,
+        });
+      }
+    });
+
+    if (!withData.length) {
+      resetVitalsDeviceTelemetry(
+        'Device telemetry was detected, but no chartable samples were returned for the last 24 hours.',
+        'No charts'
+      );
+      return;
+    }
+
+    if (vitalsDeviceStreamsStatus) {
+      vitalsDeviceStreamsStatus.textContent = `${withData.length} metric${withData.length === 1 ? '' : 's'}`;
+      vitalsDeviceStreamsStatus.className = 'status-chip teal';
+    }
+    if (vitalsDeviceStreamsHint) {
+      vitalsDeviceStreamsHint.textContent =
+        'Live telemetry from connected devices. Body and ambient signals update here automatically when the device uploads new samples.';
+    }
+
+    renderVitalsDeviceStreamCharts(withData);
+  } catch (error) {
+    resetVitalsDeviceTelemetry('Unable to load device telemetry right now.');
+  }
 }
 
 async function loadSensorStreams() {
@@ -13242,20 +13674,8 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 // ─── PPG Glucose Model ────────────────────────────────────────────────────
 
 const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
+const ppgDemoDatasetStatus = document.getElementById('ppgDemoDatasetStatus');
 const ppgRunFullBtn = document.getElementById('ppgRunFull');
-const ppgCsvToggleBtn = document.getElementById('ppgCsvToggle');
-const ppgCsvPanel = document.getElementById('ppgCsvPanel');
-const ppgCsvSignalInput = document.getElementById('ppgCsvSignalInput');
-const ppgCsvHeartRateInput = document.getElementById('ppgCsvHeartRateInput');
-const ppgCsvRrInput = document.getElementById('ppgCsvRrInput');
-const ppgCsvStatus = document.getElementById('ppgCsvStatus');
-const ppgRunCsvBtn = document.getElementById('ppgRunCsv');
-const ppgArduinoToggleBtn = document.getElementById('ppgArduinoToggle');
-const ppgArduinoPanel = document.getElementById('ppgArduinoPanel');
-const ppgArduinoMetricSelect = document.getElementById('ppgArduinoMetric');
-const ppgArduinoFsHzInput = document.getElementById('ppgArduinoFsHz');
-const ppgArduinoSignalStatus = document.getElementById('ppgArduinoSignalStatus');
-const ppgRunArduinoBtn = document.getElementById('ppgRunArduino');
 const ppgStatusText = document.getElementById('ppgStatusText');
 const ppgResultsDiv = document.getElementById('ppgResults');
 const ppgPredictionLabel = document.getElementById('ppgPredictionLabel');
@@ -13271,9 +13691,8 @@ let ppgDemoInputStatus = null;
 let ppgRuntimeStatus = null;
 let ppgBundleStatus = null;
 let ppgProfileStatus = null;
-let ppgArduinoInputStatus = null;
-let ppgCsvPanelOpen = false;
-let ppgArduinoPanelOpen = false;
+let ppgDemoDatasets = [];
+let ppgSelectedDemoDatasetId = '';
 const PPG_ZONE_ORDER = ['low', 'elevated', 'hyper'];
 const PPG_ZONE_COLORS = {
   low: {
@@ -13293,53 +13712,6 @@ const PPG_ZONE_COLORS = {
     border: 'rgba(148,163,184,0.65)',
   },
 };
-
-function getSelectedPpgCsvSignalFile() {
-  return ppgCsvSignalInput?.files?.[0] || null;
-}
-
-function hasPpgCsvSelection() {
-  return Boolean(getSelectedPpgCsvSignalFile());
-}
-
-function describePpgCsvFiles() {
-  const parts = [];
-  const signalFile = getSelectedPpgCsvSignalFile();
-  const hrFile = ppgCsvHeartRateInput?.files?.[0] || null;
-  const rrFile = ppgCsvRrInput?.files?.[0] || null;
-
-  if (signalFile) parts.push(`Signal: ${signalFile.name}`);
-  if (hrFile) parts.push(`HR: ${hrFile.name}`);
-  if (rrFile) parts.push(`RR: ${rrFile.name}`);
-
-  return parts.join(' | ');
-}
-
-function updatePpgCsvSelectionStatus() {
-  if (!ppgCsvStatus) return;
-  if (!hasPpgCsvSelection()) {
-    ppgCsvStatus.textContent = 'Select a PPG signal CSV to enable imported inference.';
-    ppgCsvStatus.className = 'ppg-csv-status';
-    return;
-  }
-
-  ppgCsvStatus.textContent = `${describePpgCsvFiles()} ready for upload.`;
-  ppgCsvStatus.className = 'ppg-csv-status';
-}
-
-function readLocalFileAsText(file) {
-  return new Promise((resolve, reject) => {
-    if (!file) {
-      resolve('');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.readAsText(file);
-  });
-}
 
 function capitalizePpgLabel(value) {
   if (typeof value !== 'string' || !value.trim()) return '—';
@@ -13401,25 +13773,144 @@ function getCurrentPpgSubjectQuery() {
   return `?athleteId=${encodeURIComponent(targetId)}`;
 }
 
+function getSelectedPpgDemoDatasetId() {
+  return ppgSelectedDemoDatasetId;
+}
+
+function getReadyPpgDemoDatasets() {
+  return ppgDemoDatasets.filter((dataset) => dataset?.ready !== false);
+}
+
+function getSelectedPpgDemoDatasetStatus() {
+  const selectedId = getSelectedPpgDemoDatasetId();
+  if (!selectedId) {
+    return null;
+  }
+  return ppgDemoDatasets.find((dataset) => dataset.id === selectedId) || null;
+}
+
+function updatePpgDemoDatasetStatus() {
+  if (!ppgDemoDatasetStatus) return;
+  if (!ppgDemoDatasets.length) {
+    ppgDemoDatasetStatus.textContent = 'Loading demo datasets…';
+    ppgDemoDatasetStatus.className = 'ppg-demo-status';
+    return;
+  }
+
+  const readyDatasets = getReadyPpgDemoDatasets();
+  if (!readyDatasets.length) {
+    ppgDemoDatasetStatus.textContent =
+      ppgDemoDatasets.map((dataset) => dataset.message).filter(Boolean).join(' ') ||
+      'No demo datasets are ready right now.';
+    ppgDemoDatasetStatus.className = 'ppg-demo-status error';
+    return;
+  }
+
+  const selected = getSelectedPpgDemoDatasetStatus() || readyDatasets[0];
+  const durationCopy = Number.isFinite(Number(selected?.durationSeconds))
+    ? formatDurationFromSeconds(Number(selected.durationSeconds))
+    : 'unknown duration';
+  const availableCopy = readyDatasets
+    .map((dataset, index) => `${index + 1}) ${dataset.label}`)
+    .join('  ');
+  ppgDemoDatasetStatus.textContent =
+    `Selected demo: ${selected?.label || 'none'} (${durationCopy}). ` +
+    `Click "Run Demo Data" to choose from ${availableCopy}.`;
+  ppgDemoDatasetStatus.className = 'ppg-demo-status ready';
+}
+
+function syncPpgDemoDatasets(datasets = []) {
+  if (!Array.isArray(datasets) || !datasets.length) {
+    if (Array.isArray(datasets) && !datasets.length) {
+      ppgDemoDatasets = [];
+      ppgSelectedDemoDatasetId = '';
+      updatePpgDemoDatasetStatus();
+    }
+    return;
+  }
+
+  ppgDemoDatasets = datasets.filter((dataset) => dataset && typeof dataset.id === 'string');
+  const readyDatasets = getReadyPpgDemoDatasets();
+  const hasExistingSelection = readyDatasets.some(
+    (dataset) => dataset.id === ppgSelectedDemoDatasetId
+  );
+  if (!hasExistingSelection) {
+    ppgSelectedDemoDatasetId = readyDatasets[0]?.id || ppgDemoDatasets[0]?.id || '';
+  }
+  updatePpgDemoDatasetStatus();
+}
+
+function resolvePpgRunModeLabel(run = {}) {
+  const metric = String(run?.request?.signalMetric || run?.signalMetric || '').trim().toLowerCase();
+  if (metric.startsWith('demo.dataset.')) return 'demo dataset';
+  if (metric === 'csv.upload') return 'CSV upload';
+  if (run?.mode === 'arduino') return 'Arduino signal';
+  if (run?.mode === 'latest') return 'live watch stream';
+  if (run?.mode === 'demo') return 'bundled demo';
+  return run?.mode || 'PPG run';
+}
+
+function promptForPpgDemoDataset() {
+  const readyDatasets = getReadyPpgDemoDatasets();
+  if (!readyDatasets.length) {
+    return null;
+  }
+  if (readyDatasets.length === 1) {
+    return readyDatasets[0];
+  }
+
+  const defaultIndex = Math.max(
+    1,
+    readyDatasets.findIndex((dataset) => dataset.id === ppgSelectedDemoDatasetId) + 1 || 1
+  );
+  const promptText = [
+    'Choose a demo dataset:',
+    ...readyDatasets.map((dataset, index) => `${index + 1}. ${dataset.label}`),
+    '',
+    `Enter 1-${readyDatasets.length} or the dataset id.`,
+  ].join('\n');
+  const response = window.prompt(promptText, String(defaultIndex));
+  if (response == null) {
+    return undefined;
+  }
+
+  const trimmed = response.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+
+  const numericChoice = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(numericChoice) && numericChoice >= 1 && numericChoice <= readyDatasets.length) {
+    return readyDatasets[numericChoice - 1];
+  }
+
+  return readyDatasets.find((dataset) => dataset.id === trimmed) || null;
+}
+
 function setPpgButtonsDisabled(disabled, status = {}) {
   ppgLiveInputStatus = status.liveInput ?? ppgLiveInputStatus;
-  ppgDemoInputStatus = status.demoInput ?? ppgDemoInputStatus;
   ppgRuntimeStatus = status.runtime ?? ppgRuntimeStatus;
   ppgBundleStatus = status.bundle ?? ppgBundleStatus;
   ppgProfileStatus = status.profile ?? ppgProfileStatus;
+  if (Array.isArray(status.demoDatasets)) {
+    syncPpgDemoDatasets(status.demoDatasets);
+  }
+  ppgDemoInputStatus = getSelectedPpgDemoDatasetStatus();
+  updatePpgDemoDatasetStatus();
 
   const blockingMessage = getPpgBlockingMessage();
   const baseReady = !blockingMessage;
-  const demoReady = baseReady && ppgDemoInputStatus?.ready !== false;
+  const demoReady = baseReady && getReadyPpgDemoDatasets().length > 0;
   const liveReady =
     baseReady && ppgProfileStatus?.ready === true && ppgLiveInputStatus?.ready === true;
-  const csvReady = baseReady && ppgProfileStatus?.ready === true && hasPpgCsvSelection();
 
   if (ppgRunDemoBtn) {
     ppgRunDemoBtn.disabled = disabled || !demoReady;
     if (!demoReady) {
       ppgRunDemoBtn.title =
-        blockingMessage || ppgDemoInputStatus?.message || 'Bundled demo inference is unavailable.';
+        blockingMessage ||
+        ppgDemoInputStatus?.message ||
+        'No demo datasets are ready right now.';
     } else {
       ppgRunDemoBtn.title = disabled ? 'BGL inference running.' : '';
     }
@@ -13432,36 +13923,9 @@ function setPpgButtonsDisabled(disabled, status = {}) {
         blockingMessage ||
         ppgProfileStatus?.message ||
         ppgLiveInputStatus?.message ||
-        'Latest PPG window inference is unavailable.';
+        'Live watch stream inference is unavailable.';
     } else {
       ppgRunFullBtn.title = disabled ? 'BGL inference running.' : '';
-    }
-  }
-
-  if (ppgRunCsvBtn) {
-    ppgRunCsvBtn.disabled = disabled || !csvReady;
-    if (!csvReady && ppgCsvPanelOpen) {
-      ppgRunCsvBtn.title =
-        blockingMessage ||
-        ppgProfileStatus?.message ||
-        'Select a PPG signal CSV above before starting inference.';
-    } else {
-      ppgRunCsvBtn.title = disabled ? 'BGL inference running.' : '';
-    }
-  }
-
-  const arduinoReady =
-    baseReady && ppgProfileStatus?.ready === true && ppgArduinoInputStatus?.ready === true;
-  if (ppgRunArduinoBtn) {
-    ppgRunArduinoBtn.disabled = disabled || !arduinoReady;
-    if (!arduinoReady && ppgArduinoPanelOpen) {
-      ppgRunArduinoBtn.title =
-        blockingMessage ||
-        ppgProfileStatus?.message ||
-        ppgArduinoInputStatus?.message ||
-        'Configure the metric and Hz above, then check signal availability.';
-    } else {
-      ppgRunArduinoBtn.title = disabled ? 'BGL inference running.' : '';
     }
   }
 }
@@ -13476,15 +13940,18 @@ function getPpgIdleText() {
   if (getPpgBlockingMessage()) {
     return getPpgBlockingMessage();
   }
+  if (ppgProfileStatus?.ready === false && getReadyPpgDemoDatasets().length > 0) {
+    return `${ppgProfileStatus.message} Demo datasets are still available.`;
+  }
   if (ppgProfileStatus?.ready === false) {
     return ppgProfileStatus.message;
   }
   if (ppgLiveInputStatus?.ready === true) {
-    return 'No inference run yet. Run the latest PPG window, upload a CSV, or use the bundled demo.';
+    return 'No inference run yet. Run the live watch stream or choose one of the bundled demo datasets.';
   }
   return (
     ppgLiveInputStatus?.message ||
-    'No inference run yet. Stream a 15-minute ppg.raw window, upload a CSV, or run the bundled demo.'
+    'No inference run yet. Stream a 15-minute watch/ppg.raw window or choose one of the bundled demo datasets.'
   );
 }
 
@@ -13508,7 +13975,7 @@ function startPpgPoll() {
         stopPpgPoll();
         setPpgButtonsDisabled(false, data);
         if (data.latestRun?.status === 'completed') {
-          const mode = data.latestRun.mode || (data.latestRun.isDemo ? 'demo' : 'latest');
+          const mode = resolvePpgRunModeLabel(data.latestRun);
           const secs = Number.isFinite(data.latestRun.elapsedSeconds)
             ? `${data.latestRun.elapsedSeconds.toFixed(1)} s`
             : '';
@@ -13526,17 +13993,29 @@ function startPpgPoll() {
   }, 5000);
 }
 
-async function triggerPpg(isDemo) {
+async function triggerPpgDemoDataset() {
+  const selectedDataset = promptForPpgDemoDataset();
+  if (selectedDataset === undefined) {
+    return;
+  }
+  if (!selectedDataset) {
+    setPpgStatus('No valid demo dataset was selected.', 'ppg-error');
+    updatePpgDemoDatasetStatus();
+    return;
+  }
+  ppgSelectedDemoDatasetId = selectedDataset.id;
+  updatePpgDemoDatasetStatus();
   if (!state.token) return;
+
   setPpgButtonsDisabled(true);
-  setPpgStatus(`Starting ${isDemo ? 'demo' : 'live'} BGL inference…`, 'ppg-running');
+  setPpgStatus(`Starting ${selectedDataset.label} inference…`, 'ppg-running');
   try {
     const targetId = state.viewing?.id ?? state.user?.id;
     const res = await apiFetch('/api/ppg/run', {
       method: 'POST',
       headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        demo: isDemo,
+        demoDatasetId: selectedDataset.id,
         athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
       }),
     });
@@ -13552,7 +14031,42 @@ async function triggerPpg(isDemo) {
       return;
     }
     setPpgStatus(
-      `BGL inference running (${isDemo ? 'bundled demo' : 'latest PPG window'}, this can take 1–3 minutes)…`,
+      `BGL inference running (${selectedDataset.label}, this can take 1–3 minutes)…`,
+      'ppg-running'
+    );
+    startPpgPoll();
+  } catch (err) {
+    setPpgStatus(`Error: ${err.message}`, 'ppg-error');
+    setPpgButtonsDisabled(false);
+  }
+}
+
+async function triggerPpgLive() {
+  if (!state.token) return;
+  setPpgButtonsDisabled(true);
+  setPpgStatus('Starting live BGL inference…', 'ppg-running');
+  try {
+    const targetId = state.viewing?.id ?? state.user?.id;
+    const res = await apiFetch('/api/ppg/run', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
+      }),
+    });
+    if (res.status === 409) {
+      setPpgStatus('BGL inference already running…', 'ppg-running');
+      startPpgPoll();
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setPpgStatus(`Failed to start: ${err.message || res.statusText}`, 'ppg-error');
+      setPpgButtonsDisabled(false);
+      return;
+    }
+    setPpgStatus(
+      'BGL inference running (live watch stream, this can take 1–3 minutes)…',
       'ppg-running'
     );
     startPpgPoll();
@@ -13573,139 +14087,6 @@ function formatPpgTimeLabel(seconds) {
     return formatDurationFromSeconds(numeric);
   }
   return `${mins}:${secs}`;
-}
-
-async function triggerPpgCsv() {
-  const signalFile = getSelectedPpgCsvSignalFile();
-  if (!signalFile) {
-    setPpgStatus('Select a PPG signal CSV first.', 'ppg-error');
-    updatePpgCsvSelectionStatus();
-    return;
-  }
-  if (!state.token) return;
-
-  setPpgButtonsDisabled(true);
-  setPpgStatus(`Reading ${signalFile.name} and preparing imported inference...`, 'ppg-running');
-
-  try {
-    const [signalText, heartRateText, rrText] = await Promise.all([
-      readLocalFileAsText(signalFile),
-      readLocalFileAsText(ppgCsvHeartRateInput?.files?.[0] || null),
-      readLocalFileAsText(ppgCsvRrInput?.files?.[0] || null),
-    ]);
-
-    const targetId = state.viewing?.id ?? state.user?.id;
-    const res = await apiFetch('/api/ppg/run', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
-        csvSignalText: signalText,
-        csvSignalName: signalFile.name,
-        csvHeartRateText: heartRateText || undefined,
-        csvHeartRateName: ppgCsvHeartRateInput?.files?.[0]?.name || undefined,
-        csvRrText: rrText || undefined,
-        csvRrName: ppgCsvRrInput?.files?.[0]?.name || undefined,
-      }),
-    });
-
-    if (res.status === 409) {
-      setPpgStatus('BGL inference already running...', 'ppg-running');
-      startPpgPoll();
-      return;
-    }
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      setPpgStatus(`Failed to start: ${err.message || res.statusText}`, 'ppg-error');
-      setPpgButtonsDisabled(false);
-      return;
-    }
-
-    setPpgStatus(
-      `Imported CSV inference running (${signalFile.name}, this can take 1-3 minutes)...`,
-      'ppg-running'
-    );
-    startPpgPoll();
-  } catch (err) {
-    setPpgStatus(`Error: ${err.message}`, 'ppg-error');
-    setPpgButtonsDisabled(false);
-  }
-}
-
-async function loadArduinoSignalStatus() {
-  const metric = ppgArduinoMetricSelect?.value?.trim();
-  const fsHz = Number(ppgArduinoFsHzInput?.value);
-  if (!metric || !Number.isFinite(fsHz) || fsHz < 1) return;
-  if (!state.token) return;
-
-  if (ppgArduinoSignalStatus) {
-    ppgArduinoSignalStatus.textContent = 'Checking signal…';
-    ppgArduinoSignalStatus.className = 'ppg-arduino-signal-status';
-  }
-
-  try {
-    const targetId = state.viewing?.id ?? state.user?.id;
-    const athleteParam = targetId && targetId !== state.user?.id
-      ? `&athleteId=${encodeURIComponent(targetId)}` : '';
-    const res = await apiFetch(
-      `/api/ppg/status?signalMetric=${encodeURIComponent(metric)}&signalFsHz=${fsHz}${athleteParam}`,
-      { headers: { Authorization: `Bearer ${state.token}` } }
-    );
-    if (!res.ok) return;
-    const data = await res.json();
-    ppgArduinoInputStatus = data.arduinoInput ?? null;
-    const s = ppgArduinoInputStatus;
-    if (ppgArduinoSignalStatus) {
-      ppgArduinoSignalStatus.textContent = s?.message || 'Unknown signal status.';
-      ppgArduinoSignalStatus.className =
-        'ppg-arduino-signal-status ' + (s?.ready ? 'ready' : 'error');
-    }
-    setPpgButtonsDisabled(false, data);
-  } catch { /* ignore */ }
-}
-
-async function triggerPpgArduino() {
-  const metric = ppgArduinoMetricSelect?.value?.trim();
-  const fsHz = Number(ppgArduinoFsHzInput?.value);
-  if (!metric || !Number.isFinite(fsHz) || fsHz < 1) {
-    setPpgStatus('Select a valid metric and sample rate first.', 'ppg-error');
-    return;
-  }
-  if (!state.token) return;
-
-  setPpgButtonsDisabled(true);
-  setPpgStatus(`Starting Arduino inference on "${metric}" at ${fsHz} Hz…`, 'ppg-running');
-  try {
-    const targetId = state.viewing?.id ?? state.user?.id;
-    const res = await apiFetch('/api/ppg/run', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        metric,
-        fsHz,
-        athleteId: targetId && targetId !== state.user?.id ? targetId : undefined,
-      }),
-    });
-    if (res.status === 409) {
-      setPpgStatus('BGL inference already running…', 'ppg-running');
-      startPpgPoll();
-      return;
-    }
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      setPpgStatus(`Failed to start: ${err.message || res.statusText}`, 'ppg-error');
-      setPpgButtonsDisabled(false);
-      return;
-    }
-    setPpgStatus(
-      `Arduino BGL inference running ("${metric}" at ${fsHz} Hz) — this can take 1–3 minutes…`,
-      'ppg-running'
-    );
-    startPpgPoll();
-  } catch (err) {
-    setPpgStatus(`Error: ${err.message}`, 'ppg-error');
-    setPpgButtonsDisabled(false);
-  }
 }
 
 function renderPpgSourceChart(prediction) {
@@ -13899,28 +14280,17 @@ function renderPpgModelChart(prediction) {
 async function loadPpgStatus() {
   if (!state.token) return;
   try {
-    const metric = ppgArduinoPanelOpen ? ppgArduinoMetricSelect?.value?.trim() : null;
-    const fsHz = ppgArduinoPanelOpen ? Number(ppgArduinoFsHzInput?.value) : NaN;
-    const arduinoQuery = metric && Number.isFinite(fsHz) && fsHz >= 1
-      ? `&signalMetric=${encodeURIComponent(metric)}&signalFsHz=${fsHz}` : '';
-    const baseQuery = getCurrentPpgSubjectQuery();
-    const queryStr = baseQuery ? `${baseQuery}${arduinoQuery}` : (arduinoQuery ? `?${arduinoQuery.slice(1)}` : '');
-    const res = await apiFetch(`/api/ppg/status${queryStr}`, {
+    const res = await apiFetch(`/api/ppg/status${getCurrentPpgSubjectQuery()}`, {
       headers: { Authorization: `Bearer ${state.token}` },
     });
     if (!res.ok) return;
     const data = await res.json();
-    if (arduinoQuery && data.arduinoInput) {
-      ppgArduinoInputStatus = data.arduinoInput;
-      if (ppgArduinoSignalStatus) {
-        ppgArduinoSignalStatus.textContent = data.arduinoInput.message || '';
-        ppgArduinoSignalStatus.className =
-          'ppg-arduino-signal-status ' + (data.arduinoInput.ready ? 'ready' : 'error');
-      }
+    if (Array.isArray(data.demoDatasets)) {
+      syncPpgDemoDatasets(data.demoDatasets);
     }
 
     if (data.running) {
-      const mode = data.inMemory?.mode || (data.inMemory?.isDemo ? 'demo' : 'latest');
+      const mode = resolvePpgRunModeLabel(data.inMemory || data.latestRun || {});
       setPpgButtonsDisabled(true, data);
       setPpgStatus(`BGL inference running (${mode} mode)…`, 'ppg-running');
       startPpgPoll();
@@ -13942,7 +14312,7 @@ async function loadPpgStatus() {
     }
 
     if (data.latestRun?.status === 'completed') {
-      const mode = data.latestRun.mode || (data.latestRun.isDemo ? 'demo' : 'latest');
+      const mode = resolvePpgRunModeLabel(data.latestRun);
       const secs = Number.isFinite(data.latestRun.elapsedSeconds)
         ? `${data.latestRun.elapsedSeconds.toFixed(1)} s`
         : '';
@@ -14033,7 +14403,7 @@ async function loadPpgResults() {
     renderPpgModelChart(prediction);
 
     if (!ppgStatusText?.textContent || ppgStatusText.textContent.includes('No run yet')) {
-      const mode = data.run.mode || (data.run.isDemo ? 'demo' : 'latest');
+      const mode = resolvePpgRunModeLabel(data.run);
       const secs = Number.isFinite(data.run.elapsedSeconds)
         ? `${data.run.elapsedSeconds.toFixed(1)} s`
         : '';
@@ -14042,47 +14412,8 @@ async function loadPpgResults() {
   } catch { /* ignore */ }
 }
 
-if (ppgRunDemoBtn) ppgRunDemoBtn.addEventListener('click', () => triggerPpg(true));
-if (ppgRunFullBtn) ppgRunFullBtn.addEventListener('click', () => triggerPpg(false));
-if (ppgCsvToggleBtn) {
-  ppgCsvToggleBtn.addEventListener('click', () => {
-    ppgCsvPanelOpen = !ppgCsvPanelOpen;
-    ppgCsvPanel?.classList.toggle('hidden', !ppgCsvPanelOpen);
-    ppgCsvToggleBtn.textContent = ppgCsvPanelOpen ? 'CSV Upload ^' : 'CSV Upload v';
-    updatePpgCsvSelectionStatus();
-    setPpgButtonsDisabled(false);
-  });
-}
-if (ppgRunCsvBtn) ppgRunCsvBtn.addEventListener('click', triggerPpgCsv);
-if (ppgCsvSignalInput) {
-  ppgCsvSignalInput.addEventListener('change', () => {
-    updatePpgCsvSelectionStatus();
-    setPpgButtonsDisabled(false);
-  });
-}
-if (ppgCsvHeartRateInput) {
-  ppgCsvHeartRateInput.addEventListener('change', updatePpgCsvSelectionStatus);
-}
-if (ppgCsvRrInput) {
-  ppgCsvRrInput.addEventListener('change', updatePpgCsvSelectionStatus);
-}
-if (ppgArduinoToggleBtn) {
-  ppgArduinoToggleBtn.addEventListener('click', () => {
-    ppgArduinoPanelOpen = !ppgArduinoPanelOpen;
-    ppgArduinoPanel?.classList.toggle('hidden', !ppgArduinoPanelOpen);
-    ppgArduinoToggleBtn.textContent = ppgArduinoPanelOpen ? 'Arduino Signal ^' : 'Arduino Signal v';
-    if (ppgArduinoPanelOpen) loadArduinoSignalStatus();
-  });
-}
-if (ppgRunArduinoBtn) ppgRunArduinoBtn.addEventListener('click', triggerPpgArduino);
-if (ppgArduinoMetricSelect) {
-  ppgArduinoMetricSelect.addEventListener('change', loadArduinoSignalStatus);
-}
-if (ppgArduinoFsHzInput) {
-  ppgArduinoFsHzInput.addEventListener('change', loadArduinoSignalStatus);
-  ppgArduinoFsHzInput.addEventListener('blur', loadArduinoSignalStatus);
-}
-updatePpgCsvSelectionStatus();
+if (ppgRunDemoBtn) ppgRunDemoBtn.addEventListener('click', triggerPpgDemoDataset);
+if (ppgRunFullBtn) ppgRunFullBtn.addEventListener('click', triggerPpgLive);
 
 updateNutritionFilterButtons();
 syncActivityWidgetGoalInputs(state.activity.widgetGoals);

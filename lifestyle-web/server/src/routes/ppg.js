@@ -14,6 +14,10 @@ const PPG_DIR = path.resolve(__dirname, '..', '..', 'ppg_glucose');
 const MODEL_DIR = path.join(PPG_DIR, 'models', 'bgl_catboost_current_ppg_demo_no_preop');
 const DEMO_SIGNAL_PATH = path.join(PPG_DIR, 'examples', 'bgl', 'demo.signal.npy');
 const DEMO_DEMOGRAPHICS_PATH = path.join(PPG_DIR, 'examples', 'bgl', 'demo.example.json');
+const CSV_DEMO_DIR = path.join(PPG_DIR, 'examples', 'bgl_csv', '21031807035');
+const CSV_DEMO_SIGNAL_PATH = path.join(CSV_DEMO_DIR, '21031807035_ACTIVITY_recorded_ppg.csv');
+const CSV_DEMO_HEART_RATE_PATH = path.join(CSV_DEMO_DIR, '21031807035_ACTIVITY_heart_rate.csv');
+const CSV_DEMO_RR_PATH = path.join(CSV_DEMO_DIR, '21031807035_ACTIVITY_rr_intervals.csv');
 const LOCAL_VENV_PYTHON = path.join(PPG_DIR, '.venv', 'bin', 'python');
 const LOCAL_VENV_WINDOWS_PYTHON = path.join(PPG_DIR, '.venv', 'Scripts', 'python.exe');
 const SIGNAL_METRIC = (process.env.PPG_BGL_SIGNAL_METRIC || 'ppg.raw').trim() || 'ppg.raw';
@@ -49,6 +53,47 @@ const REQUIRED_PYTHON_MODULES = [
 ];
 const CSV_PREVIEW_MAX_POINTS = 900;
 const MIN_CSV_SIGNAL_SECONDS = 30;
+const CSV_DEMO_DATASETS = [
+  {
+    id: 'activity-start',
+    label: 'Demo 1 · First 15 min',
+    description: 'First 15 minutes of the provided activity recording.',
+    signalPath: CSV_DEMO_SIGNAL_PATH,
+    heartRatePath: CSV_DEMO_HEART_RATE_PATH,
+    rrPath: CSV_DEMO_RR_PATH,
+    window: {
+      label: 'First 15 min',
+      startSec: 0,
+      durationSec: 900,
+    },
+  },
+  {
+    id: 'activity-middle',
+    label: 'Demo 2 · Middle 15 min',
+    description: 'Middle 15 minutes of the provided activity recording.',
+    signalPath: CSV_DEMO_SIGNAL_PATH,
+    heartRatePath: CSV_DEMO_HEART_RATE_PATH,
+    rrPath: CSV_DEMO_RR_PATH,
+    window: {
+      label: 'Middle 15 min',
+      startSec: 1603,
+      durationSec: 900,
+    },
+  },
+  {
+    id: 'activity-finish',
+    label: 'Demo 3 · Final 15 min',
+    description: 'Final 15 minutes of the provided activity recording.',
+    signalPath: CSV_DEMO_SIGNAL_PATH,
+    heartRatePath: CSV_DEMO_HEART_RATE_PATH,
+    rrPath: CSV_DEMO_RR_PATH,
+    window: {
+      label: 'Final 15 min',
+      startSec: 3206,
+      durationSec: 900,
+    },
+  },
+];
 
 const subjectStatement = db.prepare(
   `SELECT id,
@@ -240,6 +285,14 @@ function readJsonFile(filePath) {
   }
 }
 
+function readTextFile(filePath) {
+  try {
+    return fsSync.readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 function writeJson(filePath, value) {
   fsSync.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
@@ -386,6 +439,52 @@ function getDemoInputStatus() {
     demographicsPath: DEMO_DEMOGRAPHICS_PATH,
     message: 'Bundled demo input is ready.',
   };
+}
+
+function normalizeDemoDatasetId(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized || null;
+}
+
+function findDemoDataset(datasetId) {
+  const normalizedId = normalizeDemoDatasetId(datasetId);
+  if (!normalizedId) {
+    return null;
+  }
+  return CSV_DEMO_DATASETS.find((dataset) => dataset.id === normalizedId) || null;
+}
+
+function getDemoDatasetStatuses() {
+  return CSV_DEMO_DATASETS.map((dataset) => {
+    const missingRequired = [];
+    if (!fsSync.existsSync(dataset.signalPath)) {
+      missingRequired.push(path.basename(dataset.signalPath));
+    }
+
+    const hasHeartRate = fsSync.existsSync(dataset.heartRatePath);
+    const hasRr = fsSync.existsSync(dataset.rrPath);
+    const ready = missingRequired.length === 0;
+    const optionalNotes = [];
+    if (hasHeartRate) {
+      optionalNotes.push('heart-rate companion included');
+    }
+    if (hasRr) {
+      optionalNotes.push('RR companion included');
+    }
+
+    return {
+      id: dataset.id,
+      label: dataset.label,
+      description: dataset.description,
+      durationSeconds: dataset.window.durationSec,
+      window: dataset.window,
+      ready,
+      sourceName: path.basename(dataset.signalPath),
+      message: ready
+        ? `${dataset.label} ready${optionalNotes.length ? ` (${optionalNotes.join(', ')})` : ''}.`
+        : `Missing required demo file(s): ${missingRequired.join(', ')}.`,
+    };
+  });
 }
 
 function parseRequestedSubjectId(rawValue) {
@@ -545,6 +644,7 @@ function loadLatestSignalWindow(subjectId) {
   }
 
   const ascending = [...rows].reverse();
+  const signalValues = [];
   const samples = new Float32Array(WINDOW_SAMPLE_COUNT);
 
   for (let index = 0; index < ascending.length; index += 1) {
@@ -556,10 +656,14 @@ function loadLatestSignalWindow(subjectId) {
       };
     }
     samples[index] = numeric;
+    signalValues.push(numeric);
   }
 
   const startedAtMs = Number(ascending[0]?.ts);
   const endedAtMs = Number(ascending[ascending.length - 1]?.ts);
+  const durationSeconds = Number.isFinite(startedAtMs) && Number.isFinite(endedAtMs)
+    ? Math.max(0, (endedAtMs - startedAtMs) / 1000)
+    : 0;
 
   return {
     samples,
@@ -568,6 +672,21 @@ function loadLatestSignalWindow(subjectId) {
     signalDurationMs: Math.max(0, endedAtMs - startedAtMs),
     signalStartedAt: Number.isFinite(startedAtMs) ? new Date(startedAtMs).toISOString() : null,
     signalEndedAt: Number.isFinite(endedAtMs) ? new Date(endedAtMs).toISOString() : null,
+    inputPreview: buildSignalPreview({
+      sourceType: 'stream',
+      signalFileName: SIGNAL_METRIC,
+      signalMetric: SIGNAL_METRIC,
+      sampleRateHz: DEFAULT_FS_HZ,
+      signalValues,
+      timestampsMs: ascending.map((row) => Number(row.ts)),
+      window: {
+        startSec: 0,
+        endSec: Math.round(durationSeconds * 1000) / 1000,
+        durationSeconds: Math.round(durationSeconds * 1000) / 1000,
+        usedLatestWindow: true,
+        label: 'Latest streamed window',
+      },
+    }),
   };
 }
 
@@ -781,6 +900,116 @@ function downsampleSeries(timesSec = [], values = [], limit = CSV_PREVIEW_MAX_PO
   };
 }
 
+function buildSignalPreview({
+  sourceType,
+  signalFileName,
+  signalMetric = null,
+  sampleRateHz,
+  signalValues = [],
+  timestampsMs = null,
+  heartRate = null,
+  rr = null,
+  window = null,
+}) {
+  if (!Array.isArray(signalValues) || !signalValues.length || !Number.isFinite(Number(sampleRateHz))) {
+    return null;
+  }
+
+  const hasMatchingTimestamps =
+    Array.isArray(timestampsMs) && timestampsMs.length === signalValues.length;
+  const baseTs = hasMatchingTimestamps ? Number(timestampsMs[0]) : NaN;
+  const timesSec = signalValues.map((_, index) => {
+    if (hasMatchingTimestamps) {
+      const ts = Number(timestampsMs[index]);
+      if (Number.isFinite(baseTs) && Number.isFinite(ts)) {
+        return Math.max(0, (ts - baseTs) / 1000);
+      }
+    }
+    return index / Number(sampleRateHz);
+  });
+
+  const endSec = Number(timesSec[timesSec.length - 1] || 0);
+  const signal = downsampleSeries(timesSec, signalValues);
+  if (!signal) {
+    return null;
+  }
+
+  return {
+    sourceType,
+    signalFileName,
+    signalMetric,
+    sampleRateHz: Number(sampleRateHz),
+    sampleCount: signalValues.length,
+    durationSeconds: Math.round(endSec * 1000) / 1000,
+    signal,
+    heartRate,
+    rr,
+    window: window || {
+      startSec: 0,
+      endSec: Math.round(endSec * 1000) / 1000,
+      durationSeconds: Math.round(endSec * 1000) / 1000,
+      usedLatestWindow: false,
+      label: null,
+    },
+  };
+}
+
+function sliceSignalSourceWindow(signalSource, requestedWindow = null) {
+  if (!requestedWindow) {
+    return {
+      timesSec: signalSource.timesSec,
+      signalValues: signalSource.signalValues,
+      requestedWindow: null,
+    };
+  }
+
+  const rawStartSec = Number(requestedWindow.startSec);
+  const rawDurationSec = Number(requestedWindow.durationSec);
+  if (!Number.isFinite(rawStartSec) || !Number.isFinite(rawDurationSec) || rawDurationSec <= 0) {
+    throw new Error('Demo dataset window is invalid.');
+  }
+
+  const lastTimeSec = Number(signalSource.timesSec[signalSource.timesSec.length - 1] || 0);
+  const startSec = Math.max(0, rawStartSec);
+  const endSec = Math.min(lastTimeSec, startSec + rawDurationSec);
+
+  let startIndex = -1;
+  for (let index = 0; index < signalSource.timesSec.length; index += 1) {
+    if (Number(signalSource.timesSec[index]) >= startSec) {
+      startIndex = index;
+      break;
+    }
+  }
+
+  if (startIndex < 0) {
+    throw new Error('Demo dataset window starts after the available signal.');
+  }
+
+  let endIndex = startIndex;
+  for (let index = startIndex; index < signalSource.timesSec.length; index += 1) {
+    if (Number(signalSource.timesSec[index]) <= endSec) {
+      endIndex = index;
+    } else {
+      break;
+    }
+  }
+
+  if (endIndex < startIndex) {
+    throw new Error('Demo dataset window did not include any PPG samples.');
+  }
+
+  return {
+    timesSec: signalSource.timesSec.slice(startIndex, endIndex + 1),
+    signalValues: signalSource.signalValues.slice(startIndex, endIndex + 1),
+    requestedWindow: {
+      label: requestedWindow.label || null,
+      startSec: Math.round(startSec * 1000) / 1000,
+      endSec: Math.round(endSec * 1000) / 1000,
+      durationSeconds: Math.round((endSec - startSec) * 1000) / 1000,
+    },
+  };
+}
+
 function parseSignalCsvSource(csvSignalText, csvSignalName) {
   const fileName = normalizeUploadName(csvSignalName, 'signal.csv');
   const { headers, rows } = parseCsvTable(csvSignalText, `${fileName} (signal CSV)`);
@@ -903,8 +1132,10 @@ function parseOptionalRrSummary(csvRrText, csvRrName) {
   };
 }
 
-function prepareCsvRunConfig(subject, input = {}) {
-  const profileStatus = buildProfileStatus(subject);
+function prepareCsvRunConfig(subject, input = {}, options = {}) {
+  const profileStatus = options.skipProfileCheck
+    ? { ready: true, missingFields: [], message: 'Skipped profile validation.' }
+    : buildProfileStatus(subject);
   if (!profileStatus.ready) {
     return { error: profileStatus.message, statusCode: 400 };
   }
@@ -916,9 +1147,16 @@ function prepareCsvRunConfig(subject, input = {}) {
     return { error: error.message || 'Unable to parse the PPG signal CSV.', statusCode: 400 };
   }
 
+  let selectedSignal;
+  try {
+    selectedSignal = sliceSignalSourceWindow(signalSource, options.window || null);
+  } catch (error) {
+    return { error: error.message || 'Unable to select the requested demo window.', statusCode: 400 };
+  }
+
   const minRequiredSamples = Math.max(1, Math.ceil(signalSource.fsHz * MIN_CSV_SIGNAL_SECONDS));
   const fullDurationSeconds = signalSource.signalValues.length / signalSource.fsHz;
-  if (signalSource.signalValues.length < minRequiredSamples) {
+  if (selectedSignal.signalValues.length < minRequiredSamples) {
     return {
       error: `${signalSource.fileName} must contain at least ${MIN_CSV_SIGNAL_SECONDS} seconds of PPG data.`,
       statusCode: 400,
@@ -930,13 +1168,15 @@ function prepareCsvRunConfig(subject, input = {}) {
     minRequiredSamples,
     Math.round(signalSource.fsHz * targetWindowSeconds)
   );
-  const useStrictLength = signalSource.signalValues.length >= desiredSampleCount;
+  const useStrictLength = selectedSignal.signalValues.length >= desiredSampleCount;
   const startIndex = useStrictLength
-    ? Math.max(0, signalSource.signalValues.length - desiredSampleCount)
+    ? Math.max(0, selectedSignal.signalValues.length - desiredSampleCount)
     : 0;
-  const analysisSignal = signalSource.signalValues.slice(startIndex);
-  const analysisStartSec = Number(signalSource.timesSec[startIndex] || 0);
-  const analysisEndSec = Number(signalSource.timesSec[signalSource.timesSec.length - 1] || analysisStartSec);
+  const analysisSignal = selectedSignal.signalValues.slice(startIndex);
+  const analysisStartSec = Number(selectedSignal.timesSec[startIndex] || 0);
+  const analysisEndSec = Number(
+    selectedSignal.timesSec[selectedSignal.timesSec.length - 1] || analysisStartSec
+  );
   const analysisDurationSeconds = analysisSignal.length / signalSource.fsHz;
 
   if (analysisSignal.length < minRequiredSamples || analysisDurationSeconds < MIN_CSV_SIGNAL_SECONDS) {
@@ -956,9 +1196,10 @@ function prepareCsvRunConfig(subject, input = {}) {
   const signalPath = path.join(runDir, 'signal.npy');
   const demographicsPath = path.join(runDir, 'demographics.json');
   const outputPath = path.join(runDir, 'prediction.json');
+  const demographicsPayload = options.demographicsPayload || buildDemographicsPayload(subject);
 
   writeFloat32Npy(signalPath, new Float32Array(analysisSignal));
-  writeJson(demographicsPath, buildDemographicsPayload(subject));
+  writeJson(demographicsPath, demographicsPayload);
 
   return {
     mode: 'csv',
@@ -968,14 +1209,16 @@ function prepareCsvRunConfig(subject, input = {}) {
     runDir,
     fsHz: signalSource.fsHz,
     strictLength: useStrictLength,
-    signalMetric: 'csv.upload',
+    signalMetric: options.signalMetric || 'csv.upload',
     signalSampleCount: analysisSignal.length,
     signalDurationMs: Math.max(0, Math.round(analysisDurationSeconds * 1000)),
     signalStartedAt: null,
     signalEndedAt: null,
     inputPreview: {
-      sourceType: 'csv',
-      signalFileName: signalSource.fileName,
+      sourceType: options.sourceType || 'csv',
+      demoDatasetId: options.demoDatasetId || null,
+      demoDatasetLabel: options.demoDatasetLabel || null,
+      signalFileName: options.signalFileName || signalSource.fileName,
       heartRateFileName: heartRatePreview?.fileName || null,
       rrFileName: rrSummary.fileName || null,
       sampleRateHz: signalSource.fsHz,
@@ -988,7 +1231,8 @@ function prepareCsvRunConfig(subject, input = {}) {
         startSec: Math.round(analysisStartSec * 1000) / 1000,
         endSec: Math.round(analysisEndSec * 1000) / 1000,
         durationSeconds: Math.round(analysisDurationSeconds * 1000) / 1000,
-        usedLatestWindow: useStrictLength,
+        usedLatestWindow: !selectedSignal.requestedWindow && useStrictLength,
+        label: selectedSignal.requestedWindow?.label || null,
       },
     },
   };
@@ -1090,6 +1334,7 @@ function prepareArduinoRunConfig(subject, metric, fsHz) {
   }
 
   const ascending = [...segmentRows].reverse();
+  const signalValues = [];
   const samples = new Float32Array(ascending.length);
   for (let i = 0; i < ascending.length; i++) {
     const num = Number(ascending[i]?.value);
@@ -1097,6 +1342,7 @@ function prepareArduinoRunConfig(subject, metric, fsHz) {
       return { error: `Signal "${metric}" contains a non-numeric sample.`, statusCode: 400 };
     }
     samples[i] = num;
+    signalValues.push(num);
   }
 
   const startedAtMs = Number(ascending[0]?.ts);
@@ -1123,6 +1369,21 @@ function prepareArduinoRunConfig(subject, metric, fsHz) {
     signalDurationMs: Math.max(0, endedAtMs - startedAtMs),
     signalStartedAt: Number.isFinite(startedAtMs) ? new Date(startedAtMs).toISOString() : null,
     signalEndedAt: Number.isFinite(endedAtMs) ? new Date(endedAtMs).toISOString() : null,
+    inputPreview: buildSignalPreview({
+      sourceType: 'arduino',
+      signalFileName: metric,
+      signalMetric: metric,
+      sampleRateHz: fsHz,
+      signalValues,
+      timestampsMs: ascending.map((row) => Number(row.ts)),
+      window: {
+        startSec: 0,
+        endSec: Math.max(0, Math.round(((endedAtMs - startedAtMs) / 1000) * 1000) / 1000),
+        durationSeconds: Math.max(0, Math.round(((endedAtMs - startedAtMs) / 1000) * 1000) / 1000),
+        usedLatestWindow: false,
+        label: 'Most recent continuous Arduino session',
+      },
+    }),
   };
 }
 
@@ -1158,7 +1419,52 @@ function prepareLiveRunConfig(subject) {
     signalDurationMs: latestWindow.signalDurationMs,
     signalStartedAt: latestWindow.signalStartedAt,
     signalEndedAt: latestWindow.signalEndedAt,
+    inputPreview: latestWindow.inputPreview || null,
   };
+}
+
+function prepareDemoDatasetRunConfig(subject, demoDatasetId) {
+  const dataset = findDemoDataset(demoDatasetId);
+  if (!dataset) {
+    return { error: 'Unknown PPG demo dataset.', statusCode: 400 };
+  }
+
+  if (!fsSync.existsSync(dataset.signalPath)) {
+    return {
+      error: `Demo dataset "${dataset.label}" is missing ${path.basename(dataset.signalPath)}.`,
+      statusCode: 500,
+    };
+  }
+
+  const demoDemographics = readJsonFile(DEMO_DEMOGRAPHICS_PATH);
+  if (!demoDemographics) {
+    return {
+      error: `Demo dataset "${dataset.label}" could not load bundled demo demographics.`,
+      statusCode: 500,
+    };
+  }
+
+  return prepareCsvRunConfig(
+    subject,
+    {
+      csvSignalText: readTextFile(dataset.signalPath),
+      csvSignalName: path.basename(dataset.signalPath),
+      csvHeartRateText: readTextFile(dataset.heartRatePath),
+      csvHeartRateName: path.basename(dataset.heartRatePath),
+      csvRrText: readTextFile(dataset.rrPath),
+      csvRrName: path.basename(dataset.rrPath),
+    },
+    {
+      sourceType: 'demo-dataset',
+      signalMetric: `demo.dataset.${dataset.id}`,
+      signalFileName: dataset.label,
+      demoDatasetId: dataset.id,
+      demoDatasetLabel: dataset.label,
+      skipProfileCheck: true,
+      demographicsPayload: demoDemographics,
+      window: dataset.window,
+    }
+  );
 }
 
 function spawnInference(runConfig, subject, requestedByUserId) {
@@ -1340,6 +1646,7 @@ router.post('/run', authenticate, (req, res) => {
   }
 
   const isDemo = req.body?.demo === true;
+  const demoDatasetId = !isDemo ? normalizeDemoDatasetId(req.body?.demoDatasetId) : null;
   const hasCsvSignal = typeof req.body?.csvSignalText === 'string' && req.body.csvSignalText.trim();
   const customMetric = !isDemo ? normalizeSignalMetric(req.body?.metric) : null;
   const customFsHz = !isDemo && customMetric ? parseHzParam(req.body?.fsHz) : null;
@@ -1347,6 +1654,8 @@ router.post('/run', authenticate, (req, res) => {
   let runConfig;
   if (isDemo) {
     runConfig = prepareDemoRunConfig();
+  } else if (demoDatasetId) {
+    runConfig = prepareDemoDatasetRunConfig(requestedSubject.subject, demoDatasetId);
   } else if (hasCsvSignal) {
     runConfig = prepareCsvRunConfig(requestedSubject.subject, req.body || {});
   } else if (customMetric && customFsHz) {
@@ -1398,6 +1707,7 @@ router.get('/status', authenticate, (req, res) => {
     runtime: getPpgRuntimeStatus(),
     bundle: getModelBundleStatus(),
     demoInput: getDemoInputStatus(),
+    demoDatasets: getDemoDatasetStatuses(),
     liveInput: getLatestSignalWindowStatus(subject.id),
     arduinoInput: arduinoMetric && arduinoFsHz
       ? getArduinoSignalStatus(subject.id, arduinoMetric, arduinoFsHz)

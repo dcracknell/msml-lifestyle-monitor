@@ -634,6 +634,30 @@ function parseWatchFields(obj, now) {
   extract(['power','watts'], 'exercise.power');
   extract(['weightKg','weight_kg','bodyWeight','body_weight'], 'body.weight_kg');
   extract(['glucose','bloodGlucose','blood_glucose'], 'vitals.glucose');
+  extract(['bodyTemperature','body_temperature','bodyTemp','body_temp','skinTemperature','skin_temperature'], 'sensor.body_temperature_c');
+  extract(
+    [
+      'ambientTemperature',
+      'ambient_temperature',
+      'outsideTemperature',
+      'outside_temperature',
+      'outsideTemp',
+      'outside_temp',
+      'outdoorTemperature',
+      'outdoor_temperature',
+      'roomTemperature',
+      'room_temperature',
+      'aht20Temperature',
+      'aht20_temperature',
+      'temperatureC',
+      'temperature_c',
+    ],
+    'sensor.ambient_temperature_c'
+  );
+  extract(['humidity','humidityPct','humidity_pct','relativeHumidity','relative_humidity'], 'sensor.humidity_pct');
+  extract(['co2','co2ppm','co2_ppm','carbonDioxide','carbon_dioxide'], 'sensor.co2_ppm');
+  extract(['voc','vocPpb','voc_ppb','tvoc'], 'sensor.voc_ppb');
+  extract(['pressure','pressureHpa','pressure_hpa','barometer'], 'sensor.pressure_hpa');
   extract(['systolic','systolicBp','systolic_bp'], 'vitals.systolic_bp');
   extract(['diastolic','diastolicBp','diastolic_bp'], 'vitals.diastolic_bp');
   extract(['readiness','readinessScore','readiness_score','recoveryScore','recovery_score'], 'vitals.readiness');

@@ -12,6 +12,7 @@ import {
   SessionPayload,
   ShareCoachesResponse,
   StreamHistoryResponse,
+  StreamSummaryResponse,
   StreamPublishResponse,
   StravaConnectResponse,
   StravaExportResponse,
@@ -74,7 +75,11 @@ export const ppgStatusRequest = (params?: { athleteId?: number }) =>
 export const ppgResultsRequest = (params?: { athleteId?: number }) =>
   apiClient.get<PpgResultsResponse>(`/api/ppg/results${buildQuery({ athleteId: params?.athleteId })}`);
 
-export const runPpgInferenceRequest = (payload?: { athleteId?: number; demo?: boolean }) =>
+export const runPpgInferenceRequest = (payload?: {
+  athleteId?: number;
+  demo?: boolean;
+  demoDatasetId?: string;
+}) =>
   apiClient.post<PpgRunStartResponse>('/api/ppg/run', payload || {});
 
 export const weightRequest = (params?: { athleteId?: number }) =>
@@ -239,6 +244,27 @@ export const publishStreamSamplesRequest = (payload: {
   metric: string;
   samples: { ts: number; value: number | null }[];
 }) => apiClient.post<StreamPublishResponse>('/api/streams', payload);
+
+export const streamSummaryRequest = (params?: {
+  athleteId?: number;
+  from?: number;
+  to?: number;
+  windowMs?: number;
+}) => {
+  const to = Number.isFinite(params?.to) ? Math.round(params!.to as number) : Date.now();
+  const from = Number.isFinite(params?.from)
+    ? Math.round(params!.from as number)
+    : Number.isFinite(params?.windowMs)
+    ? Math.max(0, to - Math.round(params!.windowMs as number))
+    : undefined;
+  return apiClient.get<StreamSummaryResponse>(
+    `/api/streams/summary${buildQuery({
+      athleteId: params?.athleteId,
+      from,
+      to,
+    })}`
+  );
+};
 
 export const publishWorkoutSessionsRequest = (payload: {
   workouts: Array<{

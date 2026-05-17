@@ -791,6 +791,163 @@ function parseKnownWatchPayload(rawText: string): ParsedBatch[] {
       batches.push({ metric: 'exercise.calories', samples: [{ ts: timestamp, value: calories }] });
     }
 
+    const restingHeartRate = getMetricFromRecords(records, [
+      'restingHeartRate',
+      'resting_hr',
+      'restingHr',
+      'resting_heart_rate',
+    ]);
+    if (restingHeartRate !== undefined) {
+      batches.push({ metric: 'vitals.resting_hr', samples: [{ ts: timestamp, value: restingHeartRate }] });
+    }
+
+    const hrv = getMetricFromRecords(records, [
+      'hrv',
+      'heartRateVariability',
+      'heart_rate_variability',
+    ]);
+    if (hrv !== undefined) {
+      batches.push({ metric: 'vitals.hrv', samples: [{ ts: timestamp, value: hrv }] });
+    }
+
+    const spo2 = getMetricFromRecords(records, ['spo2', 'spO2', 'bloodOxygen', 'blood_oxygen']);
+    if (spo2 !== undefined) {
+      batches.push({ metric: 'vitals.spo2', samples: [{ ts: timestamp, value: spo2 }] });
+    }
+
+    const steps = getMetricFromRecords(records, ['steps', 'stepCount', 'step_count']);
+    if (steps !== undefined) {
+      batches.push({ metric: 'activity.steps', samples: [{ ts: timestamp, value: steps }] });
+    }
+
+    const cadence = getMetricFromRecords(records, ['cadence', 'stepsPerMinute', 'steps_per_minute']);
+    if (cadence !== undefined) {
+      batches.push({ metric: 'exercise.cadence', samples: [{ ts: timestamp, value: cadence }] });
+    }
+
+    const power = getMetricFromRecords(records, ['power', 'watts']);
+    if (power !== undefined) {
+      batches.push({ metric: 'exercise.power', samples: [{ ts: timestamp, value: power }] });
+    }
+
+    const bodyWeightKg = getMetricFromRecords(records, [
+      'weightKg',
+      'weight_kg',
+      'bodyWeight',
+      'body_weight',
+    ]);
+    if (bodyWeightKg !== undefined) {
+      batches.push({ metric: 'body.weight_kg', samples: [{ ts: timestamp, value: bodyWeightKg }] });
+    }
+
+    const glucose = getMetricFromRecords(records, ['glucose', 'bloodGlucose', 'blood_glucose']);
+    if (glucose !== undefined) {
+      batches.push({ metric: 'vitals.glucose', samples: [{ ts: timestamp, value: glucose }] });
+    }
+
+    const bodyTemperature = getMetricFromRecords(records, [
+      'bodyTemperature',
+      'body_temperature',
+      'bodyTemp',
+      'body_temp',
+      'skinTemperature',
+      'skin_temperature',
+    ]);
+    if (bodyTemperature !== undefined) {
+      batches.push({ metric: 'sensor.body_temperature_c', samples: [{ ts: timestamp, value: bodyTemperature }] });
+    }
+
+    const ambientTemperature = getMetricFromRecords(records, [
+      'ambientTemperature',
+      'ambient_temperature',
+      'outsideTemperature',
+      'outside_temperature',
+      'outsideTemp',
+      'outside_temp',
+      'outdoorTemperature',
+      'outdoor_temperature',
+      'roomTemperature',
+      'room_temperature',
+      'aht20Temperature',
+      'aht20_temperature',
+      'temperatureC',
+      'temperature_c',
+    ]);
+    if (ambientTemperature !== undefined) {
+      batches.push({ metric: 'sensor.ambient_temperature_c', samples: [{ ts: timestamp, value: ambientTemperature }] });
+    }
+
+    const humidity = getMetricFromRecords(records, [
+      'humidity',
+      'humidityPct',
+      'humidity_pct',
+      'relativeHumidity',
+      'relative_humidity',
+    ]);
+    if (humidity !== undefined) {
+      batches.push({ metric: 'sensor.humidity_pct', samples: [{ ts: timestamp, value: humidity }] });
+    }
+
+    const co2 = getMetricFromRecords(records, [
+      'co2',
+      'co2ppm',
+      'co2_ppm',
+      'carbonDioxide',
+      'carbon_dioxide',
+    ]);
+    if (co2 !== undefined) {
+      batches.push({ metric: 'sensor.co2_ppm', samples: [{ ts: timestamp, value: co2 }] });
+    }
+
+    const voc = getMetricFromRecords(records, ['voc', 'vocPpb', 'voc_ppb', 'tvoc']);
+    if (voc !== undefined) {
+      batches.push({ metric: 'sensor.voc_ppb', samples: [{ ts: timestamp, value: voc }] });
+    }
+
+    const pressure = getMetricFromRecords(records, [
+      'pressure',
+      'pressureHpa',
+      'pressure_hpa',
+      'barometer',
+    ]);
+    if (pressure !== undefined) {
+      batches.push({ metric: 'sensor.pressure_hpa', samples: [{ ts: timestamp, value: pressure }] });
+    }
+
+    const pm25 = getMetricFromRecords(records, [
+      'pm25',
+      'pm2_5',
+      'pm2_5_ugm3',
+      'pm25Ugm3',
+      'pm25_ugm3',
+      'particulate25',
+      'particulate_25',
+    ]);
+    if (pm25 !== undefined) {
+      batches.push({ metric: 'sensor.pm25_ugm3', samples: [{ ts: timestamp, value: pm25 }] });
+    }
+
+    const systolic = getMetricFromRecords(records, ['systolic', 'systolicBp', 'systolic_bp']);
+    if (systolic !== undefined) {
+      batches.push({ metric: 'vitals.systolic_bp', samples: [{ ts: timestamp, value: systolic }] });
+    }
+
+    const diastolic = getMetricFromRecords(records, ['diastolic', 'diastolicBp', 'diastolic_bp']);
+    if (diastolic !== undefined) {
+      batches.push({ metric: 'vitals.diastolic_bp', samples: [{ ts: timestamp, value: diastolic }] });
+    }
+
+    const readiness = getMetricFromRecords(records, [
+      'readiness',
+      'readinessScore',
+      'readiness_score',
+      'recoveryScore',
+      'recovery_score',
+    ]);
+    if (readiness !== undefined) {
+      batches.push({ metric: 'vitals.readiness', samples: [{ ts: timestamp, value: readiness }] });
+    }
+
     const totalSleepHours = getDurationHoursFromRecords(
       records,
       ['sleepHours', 'sleep_hours', 'totalSleepHours', 'total_sleep_hours', 'asleepHours', 'asleep_hours'],

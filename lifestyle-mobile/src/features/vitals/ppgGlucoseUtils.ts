@@ -103,7 +103,10 @@ export function getPpgBlockingMessage(status: PpgStatusResponse | null | undefin
 }
 
 export function canRunPpgDemo(status: PpgStatusResponse | null | undefined) {
-  return Boolean(status) && !getPpgBlockingMessage(status) && status?.demoInput?.ready !== false;
+  return Boolean(status) &&
+    !getPpgBlockingMessage(status) &&
+    Array.isArray(status?.demoDatasets) &&
+    status!.demoDatasets.some((dataset) => dataset?.ready !== false);
 }
 
 export function canRunPpgLive(status: PpgStatusResponse | null | undefined) {
@@ -120,23 +123,35 @@ export function getPpgIdleMessage(status: PpgStatusResponse | null | undefined) 
   if (blocking) {
     return blocking;
   }
+  const hasReadyDemo = Array.isArray(status?.demoDatasets)
+    && status!.demoDatasets.some((dataset) => dataset?.ready !== false);
+  if (status?.profile?.ready === false && hasReadyDemo) {
+    return `${status.profile.message} Demo datasets are still available.`;
+  }
   if (status?.profile?.ready === false) {
     return status.profile.message;
   }
   if (status?.liveInput?.ready === true) {
-    return 'No inference run yet. Run the latest PPG window or the bundled demo.';
+    return 'No inference run yet. Run the live watch stream or choose one of the bundled demo datasets.';
   }
   return (
     status?.liveInput?.message ||
-    'No inference run yet. Stream a 15-minute ppg.raw window or run the bundled demo.'
+    'No inference run yet. Stream a 15-minute ppg.raw window or choose one of the bundled demo datasets.'
   );
 }
 
 export function getPpgRunModeLabel(mode: string | null | undefined, isDemo?: boolean | null) {
+  const normalized = String(mode || '').trim().toLowerCase();
+  if (normalized.startsWith('demo.dataset.')) {
+    return 'demo dataset';
+  }
   if (mode === 'demo' || isDemo) {
     return 'demo';
   }
-  return 'live';
+  if (normalized === 'latest') {
+    return 'live watch stream';
+  }
+  return normalized || 'live';
 }
 
 function normalizeZoneKey(value: string | null | undefined) {

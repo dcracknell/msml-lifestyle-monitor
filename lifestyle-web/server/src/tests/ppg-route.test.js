@@ -222,6 +222,17 @@ describe('PPG route', () => {
       confidence: 0.52,
     });
     expect(completeRunRunMock).toHaveBeenCalled();
+    const persistedPayload = JSON.parse(completeRunRunMock.mock.calls[0][11]);
+    expect(persistedPayload.input_preview).toMatchObject({
+      sourceType: 'stream',
+      signalFileName: 'ppg.raw',
+      signalMetric: 'ppg.raw',
+      sampleRateHz: 2,
+      window: expect.objectContaining({
+        usedLatestWindow: true,
+        label: 'Latest streamed window',
+      }),
+    });
   });
 
   it('uses the latest streamed window and user demographics for live inference', async () => {
@@ -357,6 +368,71 @@ describe('PPG route', () => {
     });
   });
 
+  it('accepts a named demo dataset and persists demo preview metadata', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+
+    const response = await request(app)
+      .post('/api/ppg/run')
+      .send({
+        demoDatasetId: 'activity-middle',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      mode: 'csv',
+      metric: 'demo.dataset.activity-middle',
+    });
+
+    const [, args] = spawnMock.mock.calls[0];
+    const outputPath = getArgValue(args, '--output');
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(
+        {
+          model_name: 'bgl_catboost_current_ppg_demo_no_preop',
+          model_version: '20260501T165537Z',
+          prediction: {
+            label: 'hyper',
+            probabilities: {
+              low: 0.14,
+              elevated: 0.31,
+              hyper: 0.55,
+            },
+          },
+          quality: {
+            n_subwindows_attempted: 30,
+            n_subwindows_used: 28,
+            mean_sqi: 0.83,
+            min_sqi: 0.71,
+          },
+          warnings: [],
+        },
+        null,
+        2
+      )
+    );
+
+    proc.emit('close', 0);
+
+    const persistedPayload = JSON.parse(completeRunRunMock.mock.calls[0][11]);
+    expect(persistedPayload.input_preview).toMatchObject({
+      sourceType: 'demo-dataset',
+      demoDatasetId: 'activity-middle',
+      demoDatasetLabel: 'Demo 2 · Middle 15 min',
+      signalFileName: 'Demo 2 · Middle 15 min',
+      sampleRateHz: 25,
+      heartRate: expect.objectContaining({
+        fileName: '21031807035_ACTIVITY_heart_rate.csv',
+      }),
+      window: expect.objectContaining({
+        label: 'Middle 15 min',
+        usedLatestWindow: false,
+      }),
+    });
+  });
+
   it('rejects live inference when the BGL profile is incomplete', async () => {
     subjectRow = {
       ...subjectRow,
@@ -371,6 +447,32 @@ describe('PPG route', () => {
     expect(response.body.message).toContain('BGL profile is incomplete');
     expect(response.body.message).toContain('age');
     expect(response.body.message).toContain('bmi');
+  });
+
+  it('still allows demo dataset inference when the live BGL profile is incomplete', async () => {
+    subjectRow = {
+      ...subjectRow,
+      age: null,
+      bmi: null,
+      preop_dm: null,
+    };
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+
+    const response = await request(app)
+      .post('/api/ppg/run')
+      .send({
+        demoDatasetId: 'activity-start',
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      mode: 'csv',
+      metric: 'demo.dataset.activity-start',
+    });
+    expect(spawnMock).toHaveBeenCalled();
+
+    proc.emit('close', 0);
   });
 
   it('rejects overlapping runs while an inference is already active', async () => {

@@ -11,6 +11,17 @@ describe('resolvePythonRuntime', () => {
     ).toBe('/custom/python');
   });
 
+  it('prefers the local virtualenv over a generic command override', () => {
+    expect(
+      resolvePythonRuntime({
+        envOverride: 'python3',
+        localVenvPython: '/tmp/.venv/bin/python',
+        existsSync: (targetPath) => targetPath === '/tmp/.venv/bin/python',
+        commandExistsFn: (command) => command === 'python3',
+      })
+    ).toBe('/tmp/.venv/bin/python');
+  });
+
   it('ignores an invalid environment override and falls back', () => {
     expect(
       resolvePythonRuntime({
