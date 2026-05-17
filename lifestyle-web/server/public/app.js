@@ -14226,12 +14226,13 @@ function renderPpgModelChart(prediction) {
   const entries = getPpgChartEntries(prediction);
   if (!entries.length) {
     state.charts.ppgModel?.destroy();
+    state.charts.ppgModel = null;
     return;
   }
 
   state.charts.ppgModel?.destroy();
   const ctx = canvas.getContext('2d');
-  state.charts.ppgModel = new Chart(ctx, {
+  state.charts.ppgModel = createChart(ctx, {
     type: 'bar',
     data: {
       labels: entries.map((entry) => entry.label),
@@ -14338,6 +14339,7 @@ async function loadPpgResults() {
     if (!data.run || !data.prediction) {
       if (ppgResultsDiv) ppgResultsDiv.classList.add('hidden');
       state.charts.ppgModel?.destroy();
+      state.charts.ppgModel = null;
       state.charts.ppgSource?.destroy();
       state.charts.ppgSource = null;
       if (ppgSourceMeta) {

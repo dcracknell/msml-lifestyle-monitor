@@ -57,7 +57,7 @@ const CSV_DEMO_DATASETS = [
   {
     id: 'activity-start',
     label: 'Demo 1 · First 15 min',
-    description: 'First 15 minutes of the provided activity recording.',
+    description: 'First 15 minutes of the bundled activity recording.',
     signalPath: CSV_DEMO_SIGNAL_PATH,
     heartRatePath: CSV_DEMO_HEART_RATE_PATH,
     rrPath: CSV_DEMO_RR_PATH,
@@ -70,7 +70,7 @@ const CSV_DEMO_DATASETS = [
   {
     id: 'activity-middle',
     label: 'Demo 2 · Middle 15 min',
-    description: 'Middle 15 minutes of the provided activity recording.',
+    description: 'Middle 15 minutes of the bundled activity recording.',
     signalPath: CSV_DEMO_SIGNAL_PATH,
     heartRatePath: CSV_DEMO_HEART_RATE_PATH,
     rrPath: CSV_DEMO_RR_PATH,
@@ -83,7 +83,7 @@ const CSV_DEMO_DATASETS = [
   {
     id: 'activity-finish',
     label: 'Demo 3 · Final 15 min',
-    description: 'Final 15 minutes of the provided activity recording.',
+    description: 'Final 15 minutes of the bundled activity recording.',
     signalPath: CSV_DEMO_SIGNAL_PATH,
     heartRatePath: CSV_DEMO_HEART_RATE_PATH,
     rrPath: CSV_DEMO_RR_PATH,
