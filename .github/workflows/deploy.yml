@@ -176,9 +176,111 @@ jobs:
           deploy_port="${LIFESTYLE_WEB_HOST_PORT:-4000}"
           export LIFESTYLE_WEB_HOST_PORT="${deploy_port}"
 
+          process_cmd() {
+            local pid="$1"
+            ps -p "${pid}" -o args= 2>/dev/null || true
+          }
+
+          process_cwd() {
+            local pid="$1"
+            readlink -f "/proc/${pid}/cwd" 2>/dev/null || true
+          }
+
+          process_ppid() {
+            local pid="$1"
+            ps -p "${pid}" -o ppid= 2>/dev/null | tr -d '[:space:]'
+          }
+
+          process_service_unit() {
+            local pid="$1"
+
+            [ -r "/proc/${pid}/cgroup" ] || return 0
+            awk -F/ '/\.service$/ { print $NF; exit }' "/proc/${pid}/cgroup"
+          }
+
+          is_lifestyle_web_host_process() {
+            local pid="$1"
+            local cwd
+
+            cwd="$(process_cwd "${pid}")"
+            case "${cwd}" in
+              "${DEPLOY_ROOT}/lifestyle-web/server"|\
+              "${DEPLOY_ROOT}/lifestyle-web/server/"*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          is_lifestyle_web_host_root_candidate() {
+            local pid="$1"
+            local cmd
+
+            if ! is_lifestyle_web_host_process "${pid}"; then
+              return 1
+            fi
+
+            cmd="$(process_cmd "${pid}")"
+            case "${cmd}" in
+              *"src/server.js"*|\
+              *nodemon*|\
+              *"npm start"*|\
+              *"npm run "*|\
+              *"pnpm "*|\
+              *"yarn "*|\
+              *"node "*|\
+              *"nodejs "*|\
+              *"sh -c "*|\
+              *"bash -c "*|\
+              *"bash -lc "*)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+
+          find_lifestyle_web_process_root() {
+            local pid="$1"
+            local current="$1"
+            local parent_pid
+
+            while :; do
+              parent_pid="$(process_ppid "${current}")"
+              [ -n "${parent_pid}" ] || break
+              [ "${parent_pid}" -gt 1 ] 2>/dev/null || break
+
+              if ! is_lifestyle_web_host_root_candidate "${parent_pid}"; then
+                break
+              fi
+
+              current="${parent_pid}"
+            done
+
+            printf '%s\n' "${current}"
+          }
+
+          kill_process_tree() {
+            local pid="$1"
+            local signal="$2"
+            local child_pid
+
+            for child_pid in $(ps -o pid= --ppid "${pid}" 2>/dev/null || true); do
+              child_pid="$(printf '%s' "${child_pid}" | tr -d '[:space:]')"
+              [ -n "${child_pid}" ] || continue
+              kill_process_tree "${child_pid}" "${signal}"
+            done
+
+            kill -"${signal}" "${pid}" 2>/dev/null || true
+          }
+
           stop_conflicting_host_listener() {
             local port="$1"
-            local listener_pids cmd cwd remaining_pids
+            local signal="${2:-TERM}"
+            local listener_pids pid root_pid cmd cwd service_unit
 
             if ! command -v lsof >/dev/null 2>&1; then
               echo "lsof is required on the self-hosted deploy runner."
@@ -189,29 +291,31 @@ jobs:
             [ -n "${listener_pids}" ] || return 0
 
             for pid in ${listener_pids}; do
-              cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
-              cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+              cmd="$(process_cmd "${pid}")"
+              cwd="$(process_cwd "${pid}")"
               echo "tcp:${port} already in use by pid ${pid}: ${cmd} (cwd: ${cwd})"
 
-              case "${cwd}" in
-                "${DEPLOY_ROOT}/lifestyle-web/server"|\
-                "${DEPLOY_ROOT}/lifestyle-web/server/"*)
-                  echo "Stopping stale lifestyle-web host process ${pid}."
-                  kill "${pid}"
-                  ;;
-                *)
-                  echo "Refusing to stop unrelated process on tcp:${port}."
-                  return 1
-                  ;;
-              esac
-            done
+              if ! is_lifestyle_web_host_process "${pid}"; then
+                echo "Refusing to stop unrelated process on tcp:${port}."
+                return 1
+              fi
 
-            sleep 2
-            remaining_pids="$(lsof -tiTCP:${port} -sTCP:LISTEN 2>/dev/null || true)"
-            if [ -n "${remaining_pids}" ]; then
-              echo "tcp:${port} is still occupied after cleanup: ${remaining_pids}"
-              return 1
-            fi
+              service_unit="$(process_service_unit "${pid}")"
+              if [ -n "${service_unit}" ]; then
+                echo "Stopping systemd unit ${service_unit} for stale lifestyle-web host process ${pid}."
+                systemctl stop "${service_unit}" 2>/dev/null \
+                  || systemctl --user stop "${service_unit}" 2>/dev/null \
+                  || true
+              fi
+
+              root_pid="$(find_lifestyle_web_process_root "${pid}")"
+              if [ "${root_pid}" = "${pid}" ]; then
+                echo "Stopping stale lifestyle-web host process tree rooted at ${pid} with SIG${signal}."
+              else
+                echo "Stopping stale lifestyle-web host process tree rooted at ${root_pid} with SIG${signal}."
+              fi
+              kill_process_tree "${root_pid}" "${signal}"
+            done
           }
 
           stop_conflicting_docker_publisher() {
@@ -252,6 +356,21 @@ jobs:
 
               if [ -z "${listener_pids}" ] && [ -z "${publisher_ids}" ]; then
                 return 0
+              fi
+
+              if [ -n "${listener_pids}" ]; then
+                echo "Attempt ${attempt}: tcp:${port} still has host listeners: ${listener_pids}"
+                if [ "${attempt}" -ge 10 ]; then
+                  stop_conflicting_host_listener "${port}" KILL
+                else
+                  stop_conflicting_host_listener "${port}" TERM
+                fi
+              fi
+
+              if [ -n "${publisher_ids}" ]; then
+                echo "Attempt ${attempt}: tcp:${port} is still published by containers: ${publisher_ids}"
+                stop_conflicting_docker_publisher "${port}"
+                compose rm -fs lifestyle-web || true
               fi
 
               sleep 1
