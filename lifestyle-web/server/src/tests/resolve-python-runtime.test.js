@@ -32,6 +32,17 @@ describe('resolvePythonRuntime', () => {
     ).toBe('python3');
   });
 
+  it('resolves a relative environment override from the configured base directory', () => {
+    expect(
+      resolvePythonRuntime({
+        baseDir: '/workspace/server',
+        envOverride: './ppg_glucose/.venv/bin/python',
+        existsSync: (targetPath) => targetPath === '/workspace/server/ppg_glucose/.venv/bin/python',
+        commandExistsFn: () => false,
+      })
+    ).toBe('/workspace/server/ppg_glucose/.venv/bin/python');
+  });
+
   it('prefers the local POSIX virtualenv when present', () => {
     expect(
       resolvePythonRuntime({

@@ -56,6 +56,7 @@ const LOCAL_VENV_WINDOWS_PYTHON = path.resolve(
   'python.exe'
 );
 const DEFAULT_PYTHON_BIN = resolvePythonRuntime({
+  baseDir: path.resolve(__dirname, '..', '..'),
   envOverride: process.env.NUT_MODEL_PYTHON_BIN,
   localVenvPython: LOCAL_VENV_PYTHON,
   localVenvWindowsPython: LOCAL_VENV_WINDOWS_PYTHON,

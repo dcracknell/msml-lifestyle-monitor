@@ -1,3 +1,4 @@
+const path = require('path');
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 
@@ -14,21 +15,35 @@ function commandExists(command) {
   return !result.error && result.status === 0;
 }
 
-function isConfiguredRuntimeAvailable(runtime, { existsSync, commandExistsFn }) {
+function normalizeConfiguredRuntime(runtime, { baseDir = process.cwd() } = {}) {
+  if (typeof runtime !== 'string' || !runtime.trim()) {
+    return '';
+  }
+
+  const trimmedRuntime = runtime.trim();
+  if (!/[\\/]/.test(trimmedRuntime) || path.isAbsolute(trimmedRuntime)) {
+    return trimmedRuntime;
+  }
+
+  return path.resolve(baseDir, trimmedRuntime);
+}
+
+function isConfiguredRuntimeAvailable(runtime, { existsSync, commandExistsFn, baseDir }) {
   if (typeof runtime !== 'string' || !runtime.trim()) {
     return false;
   }
 
-  const trimmedRuntime = runtime.trim();
-  if (/[\\/]/.test(trimmedRuntime)) {
-    return existsSync(trimmedRuntime);
+  const normalizedRuntime = normalizeConfiguredRuntime(runtime, { baseDir });
+  if (/[\\/]/.test(runtime.trim())) {
+    return existsSync(normalizedRuntime);
   }
 
-  return commandExistsFn(trimmedRuntime);
+  return commandExistsFn(normalizedRuntime);
 }
 
 function resolvePythonRuntime({
   envOverride = '',
+  baseDir = process.cwd(),
   localVenvPython = '',
   localVenvWindowsPython = '',
   existsSync = fs.existsSync,
@@ -36,12 +51,13 @@ function resolvePythonRuntime({
 } = {}) {
   const trimmedOverride = typeof envOverride === 'string' ? envOverride.trim() : '';
   const overrideIsPathLike = /[\\/]/.test(trimmedOverride);
+  const normalizedOverride = normalizeConfiguredRuntime(trimmedOverride, { baseDir });
   if (
     trimmedOverride &&
     overrideIsPathLike &&
-    isConfiguredRuntimeAvailable(trimmedOverride, { existsSync, commandExistsFn })
+    isConfiguredRuntimeAvailable(trimmedOverride, { existsSync, commandExistsFn, baseDir })
   ) {
-    return trimmedOverride;
+    return normalizedOverride;
   }
 
   if (localVenvPython && existsSync(localVenvPython)) {
@@ -55,7 +71,7 @@ function resolvePythonRuntime({
   if (
     trimmedOverride &&
     !overrideIsPathLike &&
-    isConfiguredRuntimeAvailable(trimmedOverride, { existsSync, commandExistsFn })
+    isConfiguredRuntimeAvailable(trimmedOverride, { existsSync, commandExistsFn, baseDir })
   ) {
     return trimmedOverride;
   }

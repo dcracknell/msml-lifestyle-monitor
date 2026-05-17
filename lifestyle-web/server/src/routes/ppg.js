@@ -10,7 +10,8 @@ const { resolvePythonRuntime } = require('../utils/resolve-python-runtime');
 
 const router = express.Router();
 
-const PPG_DIR = path.resolve(__dirname, '..', '..', 'ppg_glucose');
+const SERVER_ROOT = path.resolve(__dirname, '..', '..');
+const PPG_DIR = path.join(SERVER_ROOT, 'ppg_glucose');
 const MODEL_DIR = path.join(PPG_DIR, 'models', 'bgl_catboost_current_ppg_demo_no_preop');
 const DEMO_SIGNAL_PATH = path.join(PPG_DIR, 'examples', 'bgl', 'demo.signal.npy');
 const DEMO_DEMOGRAPHICS_PATH = path.join(PPG_DIR, 'examples', 'bgl', 'demo.example.json');
@@ -321,6 +322,7 @@ function writeFloat32Npy(filePath, values) {
 
 function resolvePpgPythonBin() {
   return resolvePythonRuntime({
+    baseDir: SERVER_ROOT,
     envOverride: process.env.PPG_MODEL_PYTHON_BIN || process.env.PPG_PYTHON_BIN,
     localVenvPython: LOCAL_VENV_PYTHON,
     localVenvWindowsPython: LOCAL_VENV_WINDOWS_PYTHON,

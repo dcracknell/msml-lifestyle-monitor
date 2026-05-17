@@ -8,7 +8,11 @@ LOCAL_VENV_PYTHON="$PPG_ROOT/.venv/bin/python"
 REQ_DESC="$PPG_ROOT/requirements_server.txt"
 
 if [[ -n "${PPG_MODEL_PYTHON_BIN:-}" ]]; then
-  PY="$PPG_MODEL_PYTHON_BIN"
+  if [[ "$PPG_MODEL_PYTHON_BIN" = /* ]]; then
+    PY="$PPG_MODEL_PYTHON_BIN"
+  else
+    PY="$ROOT/${PPG_MODEL_PYTHON_BIN#./}"
+  fi
 elif [[ -x "$LOCAL_VENV_PYTHON" ]]; then
   PY="$LOCAL_VENV_PYTHON"
 else

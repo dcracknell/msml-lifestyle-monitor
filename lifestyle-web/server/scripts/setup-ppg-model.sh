@@ -7,6 +7,7 @@ PPG_ROOT="$ROOT/ppg_glucose"
 VENV="$PPG_ROOT/.venv"
 PY="$VENV/bin/python"
 REQ="$PPG_ROOT/requirements_server.txt"
+PORTABLE_RUNTIME_ENV="./ppg_glucose/.venv/bin/python"
 MANAGED_ROOT="${PPG_MODEL_MANAGED_ROOT:-$HOME/.local/share/lifestyle-monitor}"
 MICROMAMBA_HOME="$MANAGED_ROOT/tools/micromamba"
 MICROMAMBA_BIN="$MICROMAMBA_HOME/bin/micromamba"
@@ -167,7 +168,7 @@ if [[ -z "$SETUP_PYTHON" ]]; then
   echo "No local Python 3.11/3.12 runtime found. Bootstrapping managed Python 3.12 runtime..." >&2
   create_managed_env
   patch_pyppg
-  update_env_runtime ".env" "PPG_MODEL_PYTHON_BIN=$PY"
+  update_env_runtime ".env" "PPG_MODEL_PYTHON_BIN=$PORTABLE_RUNTIME_ENV"
   "$PY" -c "
 import numpy, pandas, scipy, sklearn, PyEMD, catboost, dotmap, yaml, pyPPG
 print('BGL inference dependencies OK')
@@ -188,7 +189,7 @@ case "$PYTHON_MINOR" in
     echo "System Python 3.13 is not compatible with the pinned PPG model stack. Bootstrapping managed Python 3.12 runtime..." >&2
     create_managed_env
     patch_pyppg
-    update_env_runtime ".env" "PPG_MODEL_PYTHON_BIN=$PY"
+    update_env_runtime ".env" "PPG_MODEL_PYTHON_BIN=$PORTABLE_RUNTIME_ENV"
     "$PY" -c "
 import numpy, pandas, scipy, sklearn, PyEMD, catboost, dotmap, yaml, pyPPG
 print('BGL inference dependencies OK')
@@ -207,7 +208,7 @@ rm -rf "$VENV"
 install_python_packages
 patch_pyppg
 
-update_env_runtime ".env" "PPG_MODEL_PYTHON_BIN=$PY"
+update_env_runtime ".env" "PPG_MODEL_PYTHON_BIN=$PORTABLE_RUNTIME_ENV"
 
 "$PY" -c "
 import numpy, pandas, scipy, sklearn, PyEMD, catboost, dotmap, yaml, pyPPG
