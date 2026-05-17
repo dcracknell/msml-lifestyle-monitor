@@ -11,16 +11,21 @@ FROM base AS node-deps
 
 WORKDIR /app/lifestyle-web/server
 
-# Better-SQLite3 compiles native bindings, so install build prereqs only for this stage.
-RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing build-essential python3 pkg-config \
-  && rm -rf /var/lib/apt/lists/*
-
 COPY server/package*.json ./
 COPY server/scripts ./scripts
 RUN npm ci --omit=dev
 
-FROM base AS nut-deps
+FROM base AS python-runtime
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
+    ca-certificates \
+    libglib2.0-0 \
+    libgomp1 \
+    python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM python-runtime AS nut-deps
 
 ENV VIRTUAL_ENV=/opt/nut-venv \
     PATH=/opt/nut-venv/bin:$PATH \
@@ -30,10 +35,6 @@ ENV VIRTUAL_ENV=/opt/nut-venv \
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
     build-essential \
-    ca-certificates \
-    libglib2.0-0 \
-    libgomp1 \
-    python3 \
     python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
@@ -46,20 +47,13 @@ RUN pip install --upgrade pip setuptools wheel \
     --extra-index-url https://pypi.org/simple \
     -r /tmp/nut-requirements.txt
 
-FROM base AS runner
+FROM python-runtime AS runner
 
 ENV NODE_ENV=production \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/nut-venv \
     PATH=/opt/nut-venv/bin:$PATH
-
-RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
-    libglib2.0-0 \
-    libgomp1 \
-    python3 \
-  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/lifestyle-web/server
 
