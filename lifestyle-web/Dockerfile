@@ -54,13 +54,12 @@ RUN apt-get update \
 
 WORKDIR /app/lifestyle-web/server
 
-COPY . /app/lifestyle-web
-COPY --from=node-deps /app/lifestyle-web/server/node_modules ./node_modules
+COPY --chown=node:node . /app/lifestyle-web
+COPY --from=node-deps --chown=node:node /app/lifestyle-web/server/node_modules ./node_modules
 COPY --from=nut-deps /opt/nut-venv /opt/nut-venv
 
-RUN mkdir -p ../database/storage \
-  && chmod +x /app/lifestyle-web/server/docker-entrypoint.sh \
-  && chown -R node:node /app/lifestyle-web
+RUN install -d -o node -g node ../database/storage \
+  && chmod +x /app/lifestyle-web/server/docker-entrypoint.sh
 
 USER node
 EXPOSE 4000

@@ -122,7 +122,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.vars.outputs.image }}
           tags: |
             type=raw,value=latest
-            type=sha,prefix=sha-
+            type=sha,format=long,prefix=sha-
 
       - name: Build and push image
         uses: docker/build-push-action@v5
