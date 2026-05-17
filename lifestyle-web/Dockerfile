@@ -1,17 +1,26 @@
-FROM node:20-bullseye-slim AS node-deps
+FROM node:20-bullseye-slim AS base
+
+# Buildx/QEMU multi-arch builds occasionally see transient Debian mirror resets.
+RUN printf '%s\n' \
+  'Acquire::Retries "5";' \
+  'Acquire::http::Timeout "30";' \
+  'Acquire::https::Timeout "30";' \
+  > /etc/apt/apt.conf.d/80-retry-downloads
+
+FROM base AS node-deps
 
 WORKDIR /app/lifestyle-web/server
 
 # Better-SQLite3 compiles native bindings, so install build prereqs only for this stage.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential python3 pkg-config \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing build-essential python3 pkg-config \
   && rm -rf /var/lib/apt/lists/*
 
 COPY server/package*.json ./
 COPY server/scripts ./scripts
 RUN npm ci --omit=dev
 
-FROM node:20-bullseye-slim AS nut-deps
+FROM base AS nut-deps
 
 ENV VIRTUAL_ENV=/opt/nut-venv \
     PATH=/opt/nut-venv/bin:$PATH \
@@ -19,7 +28,7 @@ ENV VIRTUAL_ENV=/opt/nut-venv \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
     build-essential \
     ca-certificates \
     libglib2.0-0 \
@@ -37,7 +46,7 @@ RUN pip install --upgrade pip setuptools wheel \
     --extra-index-url https://pypi.org/simple \
     -r /tmp/nut-requirements.txt
 
-FROM node:20-bullseye-slim AS runner
+FROM base AS runner
 
 ENV NODE_ENV=production \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -46,7 +55,7 @@ ENV NODE_ENV=production \
     PATH=/opt/nut-venv/bin:$PATH
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
     libglib2.0-0 \
     libgomp1 \
     python3 \
