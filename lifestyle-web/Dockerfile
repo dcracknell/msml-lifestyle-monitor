@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:20-bullseye-slim AS base
 
 # Buildx/QEMU multi-arch builds occasionally see transient Debian mirror resets.
@@ -13,7 +15,8 @@ WORKDIR /app/lifestyle-web/server
 
 COPY server/package*.json ./
 COPY server/scripts ./scripts
-RUN npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm ci --omit=dev
 
 FROM base AS python-runtime
 
@@ -30,7 +33,6 @@ FROM python-runtime AS ppg-deps
 ENV VIRTUAL_ENV=/opt/ppg-venv \
     PATH=/opt/ppg-venv/bin:$PATH \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
     MICROMAMBA_HOME=/opt/micromamba \
     MICROMAMBA_BIN=/opt/micromamba/bin/micromamba \
     MICROMAMBA_ROOT_PREFIX=/opt/mamba-root
@@ -55,7 +57,8 @@ RUN arch="$(uname -m)" \
   && chmod +x "$MICROMAMBA_BIN" \
   && rm -rf "$tmp_dir"
 
-RUN "$MICROMAMBA_BIN" create -y -r "$MICROMAMBA_ROOT_PREFIX" -p "$VIRTUAL_ENV" -c conda-forge \
+RUN --mount=type=cache,target=/opt/mamba-root/pkgs,sharing=locked \
+    "$MICROMAMBA_BIN" create -y -r "$MICROMAMBA_ROOT_PREFIX" -p "$VIRTUAL_ENV" -c conda-forge \
     python=3.12 \
     pip \
     setuptools \
@@ -72,7 +75,8 @@ RUN "$MICROMAMBA_BIN" create -y -r "$MICROMAMBA_ROOT_PREFIX" -p "$VIRTUAL_ENV" -
     cryptography \
     'pytest>=7.0'
 
-RUN pip install --upgrade pip setuptools wheel \
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --upgrade pip setuptools wheel \
   && pip install --retries 10 --timeout 120 EMD-signal \
   && pip install --no-deps pyPPG==1.0.73 dotmap==1.3.30 \
   && python - <<'PY'
@@ -100,8 +104,7 @@ FROM python-runtime AS nut-deps
 
 ENV VIRTUAL_ENV=/opt/nut-venv \
     PATH=/opt/nut-venv/bin:$PATH \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
@@ -112,7 +115,8 @@ RUN apt-get update \
 RUN python3 -m venv "$VIRTUAL_ENV"
 
 COPY server/NUT_model/requirements.txt /tmp/nut-requirements.txt
-RUN pip install --upgrade pip setuptools wheel \
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --upgrade pip setuptools wheel \
   && pip install \
     --index-url https://download.pytorch.org/whl/cpu \
     --extra-index-url https://pypi.org/simple \
