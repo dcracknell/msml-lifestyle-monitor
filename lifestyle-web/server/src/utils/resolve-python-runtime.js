@@ -35,7 +35,7 @@ function isConfiguredRuntimeAvailable(runtime, { existsSync, commandExistsFn, ba
 
   const normalizedRuntime = normalizeConfiguredRuntime(runtime, { baseDir });
   if (/[\\/]/.test(runtime.trim())) {
-    return existsSync(normalizedRuntime);
+    return existsSync(normalizedRuntime) && commandExistsFn(normalizedRuntime);
   }
 
   return commandExistsFn(normalizedRuntime);
@@ -60,11 +60,21 @@ function resolvePythonRuntime({
     return normalizedOverride;
   }
 
-  if (localVenvPython && existsSync(localVenvPython)) {
+  if (
+    localVenvPython &&
+    isConfiguredRuntimeAvailable(localVenvPython, { existsSync, commandExistsFn, baseDir })
+  ) {
     return localVenvPython;
   }
 
-  if (localVenvWindowsPython && existsSync(localVenvWindowsPython)) {
+  if (
+    localVenvWindowsPython &&
+    isConfiguredRuntimeAvailable(localVenvWindowsPython, {
+      existsSync,
+      commandExistsFn,
+      baseDir,
+    })
+  ) {
     return localVenvWindowsPython;
   }
 

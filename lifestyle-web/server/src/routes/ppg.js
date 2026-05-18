@@ -5,6 +5,7 @@ const fsSync = require('fs');
 const express = require('express');
 const db = require('../db');
 const { authenticate } = require('../services/session-store');
+const { seedPpgDemoStream } = require('../services/ppg-demo-stream-seeder');
 const { coerceRole, isHeadCoach } = require('../utils/role');
 const { resolvePythonRuntime } = require('../utils/resolve-python-runtime');
 
@@ -27,6 +28,11 @@ const DEFAULT_WINDOW_SECONDS = Math.max(
   1,
   parseInt(process.env.PPG_BGL_WINDOW_SECONDS || '900', 10)
 );
+const AUTO_SEED_DEMO_STREAM =
+  String(process.env.PPG_AUTO_SEED_DEMO_STREAM || '').trim().toLowerCase() === 'true';
+const AUTO_SEED_DEMO_DATASET =
+  String(process.env.PPG_AUTO_SEED_DEMO_DATASET || 'activity-start').trim().toLowerCase()
+  || 'activity-start';
 const WINDOW_SAMPLE_COUNT = DEFAULT_FS_HZ * DEFAULT_WINDOW_SECONDS;
 const WINDOW_SPAN_TOLERANCE_MS = Math.max(
   1000,
@@ -629,8 +635,46 @@ function getLatestSignalWindowStatus(subjectId) {
   };
 }
 
+function getLiveInputStatus(subjectId, { allowAutoSeed = false } = {}) {
+  let status = getLatestSignalWindowStatus(subjectId);
+  if (status.ready || !allowAutoSeed || !AUTO_SEED_DEMO_STREAM) {
+    return status;
+  }
+
+  try {
+    const seeded = seedPpgDemoStream({
+      db,
+      userId: subjectId,
+      metric: SIGNAL_METRIC,
+      datasetId: AUTO_SEED_DEMO_DATASET,
+      fsHz: DEFAULT_FS_HZ,
+      windowSeconds: DEFAULT_WINDOW_SECONDS,
+    });
+
+    status = getLatestSignalWindowStatus(subjectId);
+    if (status.ready) {
+      return {
+        ...status,
+        autoSeeded: true,
+        message:
+          `Auto-seeded ${SIGNAL_METRIC} from demo dataset "${seeded.datasetId}". ` +
+          `A full ${DEFAULT_WINDOW_SECONDS}-second window is ready.`,
+      };
+    }
+  } catch (error) {
+    return {
+      ...status,
+      autoSeeded: false,
+      message:
+        `${status.message} Auto-seeding demo stream failed: ${error.message || String(error)}`,
+    };
+  }
+
+  return status;
+}
+
 function loadLatestSignalWindow(subjectId) {
-  const status = getLatestSignalWindowStatus(subjectId);
+  const status = getLiveInputStatus(subjectId, { allowAutoSeed: true });
   if (!status.ready) {
     return { error: status.message, statusCode: 400 };
   }
@@ -1710,7 +1754,7 @@ router.get('/status', authenticate, (req, res) => {
     bundle: getModelBundleStatus(),
     demoInput: getDemoInputStatus(),
     demoDatasets: getDemoDatasetStatuses(),
-    liveInput: getLatestSignalWindowStatus(subject.id),
+    liveInput: getLiveInputStatus(subject.id, { allowAutoSeed: true }),
     arduinoInput: arduinoMetric && arduinoFsHz
       ? getArduinoSignalStatus(subject.id, arduinoMetric, arduinoFsHz)
       : null,

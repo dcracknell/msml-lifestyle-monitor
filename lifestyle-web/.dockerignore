@@ -11,6 +11,7 @@ server/data/FoodSeg103/custom-images
 server/data/FoodSeg103/test_recipe1m_id.txt
 server/data/FoodSeg103/train_test_recipe1m_id.txt
 server/NUT_model/.venv
+server/ppg_glucose/.venv
 server/NUT_model/__pycache__
 server/NUT_model/*.pyc
 server/noip-duc_3.3.0

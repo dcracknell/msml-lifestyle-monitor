@@ -19,6 +19,7 @@ describe('PPG route', () => {
   let app;
   let spawnMock;
   let spawnSyncMock;
+  let seedPpgDemoStreamMock;
   let resolvePythonRuntimeMock;
   let subjectRow;
   let latestWindowStatusRow;
@@ -32,6 +33,8 @@ describe('PPG route', () => {
     jest.resetModules();
     process.env.PPG_BGL_FS_HZ = '2';
     process.env.PPG_BGL_WINDOW_SECONDS = '3';
+    process.env.PPG_AUTO_SEED_DEMO_STREAM = 'true';
+    process.env.PPG_AUTO_SEED_DEMO_DATASET = 'activity-start';
     delete process.env.PPG_MODEL_PYTHON_BIN;
     delete process.env.PPG_PYTHON_BIN;
 
@@ -68,6 +71,36 @@ describe('PPG route', () => {
       stdout: JSON.stringify({ missing: [] }),
       stderr: '',
     }));
+    seedPpgDemoStreamMock = jest.fn(({ userId, metric, datasetId, fsHz, windowSeconds }) => {
+      const seededFsHz = Number.parseInt(process.env.PPG_BGL_FS_HZ || String(fsHz || 2), 10);
+      const seededWindowSeconds = Number.parseInt(
+        process.env.PPG_BGL_WINDOW_SECONDS || String(windowSeconds || 3),
+        10
+      );
+      const seededSampleCount = Math.max(1, seededFsHz * seededWindowSeconds);
+      const firstTimestampMs = 1000;
+      const lastTimestampMs =
+        firstTimestampMs + Math.round(((seededSampleCount - 1) * 1000) / seededFsHz);
+
+      latestWindowStatusRow = {
+        count: seededSampleCount,
+        minTs: firstTimestampMs,
+        maxTs: lastTimestampMs,
+      };
+      latestSignalSamples = Array.from({ length: seededSampleCount }, (_, index) => ({
+        ts: lastTimestampMs - Math.round((index * 1000) / seededFsHz),
+        value: seededSampleCount - index,
+      }));
+
+      return {
+        user: { id: userId, name: subjectRow.name },
+        metric,
+        datasetId,
+        fsHz: seededFsHz,
+        windowSeconds: seededWindowSeconds,
+        sampleCount: seededSampleCount,
+      };
+    });
     resolvePythonRuntimeMock = jest.fn(() => '/tmp/ppg-venv/bin/python');
     insertRunRunMock = jest.fn(() => ({ lastInsertRowid: 77 }));
     completeRunRunMock = jest.fn();
@@ -92,6 +125,10 @@ describe('PPG route', () => {
 
     jest.doMock('../utils/resolve-python-runtime', () => ({
       resolvePythonRuntime: resolvePythonRuntimeMock,
+    }));
+
+    jest.doMock('../services/ppg-demo-stream-seeder', () => ({
+      seedPpgDemoStream: seedPpgDemoStreamMock,
     }));
 
     jest.doMock('../db', () => ({
@@ -134,6 +171,8 @@ describe('PPG route', () => {
   afterEach(() => {
     delete process.env.PPG_BGL_FS_HZ;
     delete process.env.PPG_BGL_WINDOW_SECONDS;
+    delete process.env.PPG_AUTO_SEED_DEMO_STREAM;
+    delete process.env.PPG_AUTO_SEED_DEMO_DATASET;
   });
 
   it('returns the latest persisted prediction after a completed live inference run', async () => {
@@ -283,6 +322,50 @@ describe('PPG route', () => {
     });
 
     proc.emit('close', 0);
+  });
+
+  it('auto-seeds the live stream when no recent ppg.raw window exists', async () => {
+    latestWindowStatusRow = {
+      count: 0,
+      minTs: null,
+      maxTs: null,
+    };
+    latestSignalSamples = [];
+
+    const status = await request(app).get('/api/ppg/status');
+
+    expect(status.status).toBe(200);
+    expect(status.body.liveInput).toMatchObject({
+      ready: true,
+      autoSeeded: true,
+    });
+    expect(status.body.liveInput.message).toContain(
+      'Auto-seeded ppg.raw from demo dataset "activity-start"'
+    );
+    expect(seedPpgDemoStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 3,
+        metric: 'ppg.raw',
+        datasetId: 'activity-start',
+        fsHz: 2,
+        windowSeconds: 3,
+      })
+    );
+
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+
+    const response = await request(app).post('/api/ppg/run').send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      mode: 'latest',
+      metric: 'ppg.raw',
+    });
+    expect(spawnMock).toHaveBeenCalled();
+    expect(seedPpgDemoStreamMock).toHaveBeenCalledTimes(1);
+
+    proc.emit('close', 1);
   });
 
   it('accepts an uploaded CSV signal source and persists preview metadata', async () => {

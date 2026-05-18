@@ -21,7 +21,8 @@
     "reset": "node scripts/reset-db.js && node scripts/kill-port.js && node src/server.js",
     "check:nut-model": "bash ./scripts/check-nut-model.sh",
     "setup:ppg-model": "bash ./scripts/setup-ppg-model.sh",
-    "check:ppg-model": "bash ./scripts/check-ppg-model.sh"
+    "check:ppg-model": "bash ./scripts/check-ppg-model.sh",
+    "seed:ppg-demo-stream": "node scripts/seed-ppg-demo-stream.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",

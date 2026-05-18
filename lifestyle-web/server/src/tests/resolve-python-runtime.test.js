@@ -6,7 +6,7 @@ describe('resolvePythonRuntime', () => {
       resolvePythonRuntime({
         envOverride: '/custom/python',
         existsSync: (targetPath) => targetPath === '/custom/python',
-        commandExistsFn: () => false,
+        commandExistsFn: (command) => command === '/custom/python',
       })
     ).toBe('/custom/python');
   });
@@ -17,7 +17,7 @@ describe('resolvePythonRuntime', () => {
         envOverride: 'python3',
         localVenvPython: '/tmp/.venv/bin/python',
         existsSync: (targetPath) => targetPath === '/tmp/.venv/bin/python',
-        commandExistsFn: (command) => command === 'python3',
+        commandExistsFn: (command) => command === '/tmp/.venv/bin/python' || command === 'python3',
       })
     ).toBe('/tmp/.venv/bin/python');
   });
@@ -38,7 +38,7 @@ describe('resolvePythonRuntime', () => {
         baseDir: '/workspace/server',
         envOverride: './ppg_glucose/.venv/bin/python',
         existsSync: (targetPath) => targetPath === '/workspace/server/ppg_glucose/.venv/bin/python',
-        commandExistsFn: () => false,
+        commandExistsFn: (command) => command === '/workspace/server/ppg_glucose/.venv/bin/python',
       })
     ).toBe('/workspace/server/ppg_glucose/.venv/bin/python');
   });
@@ -49,9 +49,20 @@ describe('resolvePythonRuntime', () => {
         localVenvPython: '/tmp/.venv/bin/python',
         localVenvWindowsPython: 'C:\\tmp\\.venv\\Scripts\\python.exe',
         existsSync: (targetPath) => targetPath === '/tmp/.venv/bin/python',
-        commandExistsFn: () => true,
+        commandExistsFn: (command) => command === '/tmp/.venv/bin/python' || command === 'python3',
       })
     ).toBe('/tmp/.venv/bin/python');
+  });
+
+  it('skips a local virtualenv that exists but is not executable and falls back', () => {
+    expect(
+      resolvePythonRuntime({
+        envOverride: 'python3',
+        localVenvPython: '/tmp/.venv/bin/python',
+        existsSync: (targetPath) => targetPath === '/tmp/.venv/bin/python',
+        commandExistsFn: (command) => command === 'python3',
+      })
+    ).toBe('python3');
   });
 
   it('falls back to python3 before python when no local virtualenv exists', () => {
