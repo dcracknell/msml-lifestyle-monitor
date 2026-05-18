@@ -13673,7 +13673,6 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 
 // ─── PPG Glucose Model ────────────────────────────────────────────────────
 
-const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
 const ppgDemoDatasetSelect = document.getElementById('ppgDemoDatasetSelect');
 const ppgDemoDatasetStatus = document.getElementById('ppgDemoDatasetStatus');
 const ppgRunFullBtn = document.getElementById('ppgRunFull');
@@ -13806,10 +13805,13 @@ function renderPpgDemoDatasetSelect() {
   }
 
   const readyDatasets = getReadyPpgDemoDatasets();
-  const hasSelectedDataset = datasets.some((dataset) => dataset.id === ppgSelectedDemoDatasetId);
-  if (!hasSelectedDataset) {
-    ppgSelectedDemoDatasetId = readyDatasets[0]?.id || datasets[0]?.id || '';
-  }
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = readyDatasets.length === 0
+    ? 'No demo datasets available'
+    : 'Choose a demo dataset to run…';
+  ppgDemoDatasetSelect.appendChild(placeholder);
 
   datasets.forEach((dataset) => {
     const option = document.createElement('option');
@@ -13818,13 +13820,10 @@ function renderPpgDemoDatasetSelect() {
       ? `${dataset.label} (unavailable)`
       : dataset.label;
     option.disabled = dataset.ready === false;
-    option.selected = dataset.id === ppgSelectedDemoDatasetId;
     ppgDemoDatasetSelect.appendChild(option);
   });
 
-  if (ppgSelectedDemoDatasetId) {
-    ppgDemoDatasetSelect.value = ppgSelectedDemoDatasetId;
-  }
+  ppgDemoDatasetSelect.value = '';
   ppgDemoDatasetSelect.disabled = readyDatasets.length === 0;
 }
 
@@ -13845,14 +13844,18 @@ function updatePpgDemoDatasetStatus() {
     return;
   }
 
-  const selected = getSelectedPpgDemoDatasetStatus() || readyDatasets[0];
-  const durationCopy = Number.isFinite(Number(selected?.durationSeconds))
-    ? formatDurationFromSeconds(Number(selected.durationSeconds))
-    : 'unknown duration';
-  const selectedDescription = selected?.description ? `${selected.description} ` : '';
-  ppgDemoDatasetStatus.textContent =
-    `Selected demo: ${selected?.label || 'none'} (${durationCopy}). ` +
-    `${selectedDescription}Choose from the dropdown, then click "Run Demo Data".`;
+  const lastRun = getSelectedPpgDemoDatasetStatus();
+  if (lastRun) {
+    const durationCopy = Number.isFinite(Number(lastRun?.durationSeconds))
+      ? formatDurationFromSeconds(Number(lastRun.durationSeconds))
+      : 'unknown duration';
+    const description = lastRun?.description ? ` ${lastRun.description}` : '';
+    ppgDemoDatasetStatus.textContent =
+      `Last demo run: ${lastRun.label} (${durationCopy}).${description} Pick another from the dropdown to run again.`;
+  } else {
+    ppgDemoDatasetStatus.textContent =
+      `${readyDatasets.length} demo dataset${readyDatasets.length === 1 ? '' : 's'} ready. Pick one from the dropdown to run inference.`;
+  }
   ppgDemoDatasetStatus.className = 'ppg-demo-status ready';
 }
 
@@ -13908,17 +13911,15 @@ function setPpgButtonsDisabled(disabled, status = {}) {
 
   if (ppgDemoDatasetSelect) {
     ppgDemoDatasetSelect.disabled = disabled || !demoReady;
-  }
-
-  if (ppgRunDemoBtn) {
-    ppgRunDemoBtn.disabled = disabled || !demoReady;
     if (!demoReady) {
-      ppgRunDemoBtn.title =
+      ppgDemoDatasetSelect.title =
         blockingMessage ||
         ppgDemoInputStatus?.message ||
         'No demo datasets are ready right now.';
     } else {
-      ppgRunDemoBtn.title = disabled ? 'BGL inference running.' : '';
+      ppgDemoDatasetSelect.title = disabled
+        ? 'BGL inference running.'
+        : 'Pick a bundled demo dataset to run it';
     }
   }
 
@@ -14049,7 +14050,7 @@ if (ppgDemoDatasetSelect) {
     const nextId = String(event.target?.value || '').trim();
     if (!nextId) return;
     ppgSelectedDemoDatasetId = nextId;
-    updatePpgDemoDatasetStatus();
+    triggerPpgDemoDataset();
   });
 }
 
@@ -14426,7 +14427,6 @@ async function loadPpgResults() {
   } catch { /* ignore */ }
 }
 
-if (ppgRunDemoBtn) ppgRunDemoBtn.addEventListener('click', triggerPpgDemoDataset);
 if (ppgRunFullBtn) ppgRunFullBtn.addEventListener('click', triggerPpgLive);
 
 updateNutritionFilterButtons();
