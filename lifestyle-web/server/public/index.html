@@ -845,12 +845,18 @@
                 <p class="section-eyebrow">PPG Sensor · Glucose Inference</p>
                 <h3 class="ppg-hero-title">Keep the photoplethysmography stream front and center.</h3>
                 <p class="ppg-hero-text">
-                  Run a live watch-driven <code>ppg.raw</code> window or choose one of the three bundled demo recordings.
+                  Run a live watch-driven <code>ppg.raw</code> window pulled from the database, or choose one of the three bundled demo recordings from the dropdown.
                   Every inference surfaces the waveform preview and the model’s BGL confidence below.
                 </p>
 
                 <div class="ppg-actions ppg-action-strip">
                   <button id="ppgRunFull" type="button" class="btn-primary btn-sm" title="Run using the latest watch/ppg.raw stream (500 Hz, 15 min window)">Run Live Watch Stream</button>
+                  <div class="ppg-demo-picker">
+                    <label class="ppg-demo-picker-label" for="ppgDemoDatasetSelect">Demo dataset</label>
+                    <select id="ppgDemoDatasetSelect" class="ppg-demo-select" title="Choose one of the bundled demo datasets">
+                      <option value="">Loading demo datasets…</option>
+                    </select>
+                  </div>
                   <button id="ppgRunDemo" type="button" class="btn-secondary btn-sm" title="Choose one of the bundled demo PPG datasets and run it">Run Demo Data</button>
                 </div>
 
@@ -871,8 +877,8 @@
                   <span class="ppg-kicker">Sensor Focus</span>
                   <h4>PPG waveform window</h4>
                   <p>
-                    Live mode expects the latest watch/BLE stream on <code>ppg.raw</code> with a full 15-minute capture.
-                    Demo mode lets you pick from three bundled activity recordings and graphs the exact analyzed segment.
+                    Live mode only uses the newest 15-minute <code>ppg.raw</code> window stored in the database.
+                    Demo mode lets you choose from three bundled activity recordings and graphs the exact analyzed segment.
                   </p>
                   <div class="ppg-spotlight-wave" aria-hidden="true">
                     <span></span><span></span><span></span><span></span><span></span><span></span>
@@ -896,8 +902,8 @@
             </div>
 
             <p class="field-hint" id="ppgHintText">
-              Use the live watch stream after your watch/BLE bridge has uploaded a full <code>ppg.raw</code> window,
-              or click demo and choose one of the three bundled recordings. The selected run is graphed below after inference.
+              Use the live watch stream after your watch/BLE bridge has uploaded a full <code>ppg.raw</code> window into the database,
+              or use the demo dropdown to choose one of the three bundled recordings. The selected run is graphed below after inference.
               Prototype only; not clinically validated.
             </p>
 

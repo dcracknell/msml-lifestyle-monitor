@@ -13674,6 +13674,7 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 // ─── PPG Glucose Model ────────────────────────────────────────────────────
 
 const ppgRunDemoBtn = document.getElementById('ppgRunDemo');
+const ppgDemoDatasetSelect = document.getElementById('ppgDemoDatasetSelect');
 const ppgDemoDatasetStatus = document.getElementById('ppgDemoDatasetStatus');
 const ppgRunFullBtn = document.getElementById('ppgRunFull');
 const ppgStatusText = document.getElementById('ppgStatusText');
@@ -13789,6 +13790,44 @@ function getSelectedPpgDemoDatasetStatus() {
   return ppgDemoDatasets.find((dataset) => dataset.id === selectedId) || null;
 }
 
+function renderPpgDemoDatasetSelect() {
+  if (!ppgDemoDatasetSelect) return;
+
+  const datasets = ppgDemoDatasets.filter((dataset) => dataset && typeof dataset.id === 'string');
+  ppgDemoDatasetSelect.innerHTML = '';
+
+  if (!datasets.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Loading demo datasets…';
+    ppgDemoDatasetSelect.appendChild(option);
+    ppgDemoDatasetSelect.disabled = true;
+    return;
+  }
+
+  const readyDatasets = getReadyPpgDemoDatasets();
+  const hasSelectedDataset = datasets.some((dataset) => dataset.id === ppgSelectedDemoDatasetId);
+  if (!hasSelectedDataset) {
+    ppgSelectedDemoDatasetId = readyDatasets[0]?.id || datasets[0]?.id || '';
+  }
+
+  datasets.forEach((dataset) => {
+    const option = document.createElement('option');
+    option.value = dataset.id;
+    option.textContent = dataset.ready === false
+      ? `${dataset.label} (unavailable)`
+      : dataset.label;
+    option.disabled = dataset.ready === false;
+    option.selected = dataset.id === ppgSelectedDemoDatasetId;
+    ppgDemoDatasetSelect.appendChild(option);
+  });
+
+  if (ppgSelectedDemoDatasetId) {
+    ppgDemoDatasetSelect.value = ppgSelectedDemoDatasetId;
+  }
+  ppgDemoDatasetSelect.disabled = readyDatasets.length === 0;
+}
+
 function updatePpgDemoDatasetStatus() {
   if (!ppgDemoDatasetStatus) return;
   if (!ppgDemoDatasets.length) {
@@ -13810,12 +13849,10 @@ function updatePpgDemoDatasetStatus() {
   const durationCopy = Number.isFinite(Number(selected?.durationSeconds))
     ? formatDurationFromSeconds(Number(selected.durationSeconds))
     : 'unknown duration';
-  const availableCopy = readyDatasets
-    .map((dataset, index) => `${index + 1}) ${dataset.label}`)
-    .join('  ');
+  const selectedDescription = selected?.description ? `${selected.description} ` : '';
   ppgDemoDatasetStatus.textContent =
     `Selected demo: ${selected?.label || 'none'} (${durationCopy}). ` +
-    `Click "Run Demo Data" to choose from ${availableCopy}.`;
+    `${selectedDescription}Choose from the dropdown, then click "Run Demo Data".`;
   ppgDemoDatasetStatus.className = 'ppg-demo-status ready';
 }
 
@@ -13824,6 +13861,7 @@ function syncPpgDemoDatasets(datasets = []) {
     if (Array.isArray(datasets) && !datasets.length) {
       ppgDemoDatasets = [];
       ppgSelectedDemoDatasetId = '';
+      renderPpgDemoDatasetSelect();
       updatePpgDemoDatasetStatus();
     }
     return;
@@ -13837,6 +13875,7 @@ function syncPpgDemoDatasets(datasets = []) {
   if (!hasExistingSelection) {
     ppgSelectedDemoDatasetId = readyDatasets[0]?.id || ppgDemoDatasets[0]?.id || '';
   }
+  renderPpgDemoDatasetSelect();
   updatePpgDemoDatasetStatus();
 }
 
@@ -13848,43 +13887,6 @@ function resolvePpgRunModeLabel(run = {}) {
   if (run?.mode === 'latest') return 'live watch stream';
   if (run?.mode === 'demo') return 'bundled demo';
   return run?.mode || 'PPG run';
-}
-
-function promptForPpgDemoDataset() {
-  const readyDatasets = getReadyPpgDemoDatasets();
-  if (!readyDatasets.length) {
-    return null;
-  }
-  if (readyDatasets.length === 1) {
-    return readyDatasets[0];
-  }
-
-  const defaultIndex = Math.max(
-    1,
-    readyDatasets.findIndex((dataset) => dataset.id === ppgSelectedDemoDatasetId) + 1 || 1
-  );
-  const promptText = [
-    'Choose a demo dataset:',
-    ...readyDatasets.map((dataset, index) => `${index + 1}. ${dataset.label}`),
-    '',
-    `Enter 1-${readyDatasets.length} or the dataset id.`,
-  ].join('\n');
-  const response = window.prompt(promptText, String(defaultIndex));
-  if (response == null) {
-    return undefined;
-  }
-
-  const trimmed = response.trim().toLowerCase();
-  if (!trimmed) {
-    return null;
-  }
-
-  const numericChoice = Number.parseInt(trimmed, 10);
-  if (Number.isFinite(numericChoice) && numericChoice >= 1 && numericChoice <= readyDatasets.length) {
-    return readyDatasets[numericChoice - 1];
-  }
-
-  return readyDatasets.find((dataset) => dataset.id === trimmed) || null;
 }
 
 function setPpgButtonsDisabled(disabled, status = {}) {
@@ -13903,6 +13905,10 @@ function setPpgButtonsDisabled(disabled, status = {}) {
   const demoReady = baseReady && getReadyPpgDemoDatasets().length > 0;
   const liveReady =
     baseReady && ppgProfileStatus?.ready === true && ppgLiveInputStatus?.ready === true;
+
+  if (ppgDemoDatasetSelect) {
+    ppgDemoDatasetSelect.disabled = disabled || !demoReady;
+  }
 
   if (ppgRunDemoBtn) {
     ppgRunDemoBtn.disabled = disabled || !demoReady;
@@ -13951,7 +13957,7 @@ function getPpgIdleText() {
   }
   return (
     ppgLiveInputStatus?.message ||
-    'No inference run yet. Stream a 15-minute watch/ppg.raw window or choose one of the bundled demo datasets.'
+    'No inference run yet. Stream a fresh 15-minute watch/ppg.raw window into the database or choose one of the bundled demo datasets.'
   );
 }
 
@@ -13994,10 +14000,7 @@ function startPpgPoll() {
 }
 
 async function triggerPpgDemoDataset() {
-  const selectedDataset = promptForPpgDemoDataset();
-  if (selectedDataset === undefined) {
-    return;
-  }
+  const selectedDataset = getSelectedPpgDemoDatasetStatus();
   if (!selectedDataset) {
     setPpgStatus('No valid demo dataset was selected.', 'ppg-error');
     updatePpgDemoDatasetStatus();
@@ -14039,6 +14042,15 @@ async function triggerPpgDemoDataset() {
     setPpgStatus(`Error: ${err.message}`, 'ppg-error');
     setPpgButtonsDisabled(false);
   }
+}
+
+if (ppgDemoDatasetSelect) {
+  ppgDemoDatasetSelect.addEventListener('change', (event) => {
+    const nextId = String(event.target?.value || '').trim();
+    if (!nextId) return;
+    ppgSelectedDemoDatasetId = nextId;
+    updatePpgDemoDatasetStatus();
+  });
 }
 
 async function triggerPpgLive() {

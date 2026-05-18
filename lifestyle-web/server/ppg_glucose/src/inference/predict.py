@@ -38,9 +38,10 @@ BANDPASS_LOW = 0.5
 BANDPASS_HIGH = 8.0
 BANDPASS_ORDER = 4
 # Minimum sample rate for the bandpass filter to be valid (must satisfy Nyquist > BANDPASS_HIGH).
-# Signals below this rate are upsampled to RESAMPLE_TARGET_FS before processing.
 MIN_FS_FOR_FILTER = int(BANDPASS_HIGH * 2) + 2   # 18 Hz
-RESAMPLE_TARGET_FS = 75                            # resample low-rate signals to 75 Hz (pyPPG firls needs ≥ 75 Hz)
+# pyPPG's FIR pipeline is materially more stable at >= 75 Hz, so lower-rate inputs
+# are resampled before subwindow feature extraction.
+RESAMPLE_TARGET_FS = 75
 CLASS_LABELS = ["low", "elevated", "hyper"]
 FORBIDDEN_DEMOGRAPHIC_KEYS = {
     "demo_preop_gluc",
@@ -340,10 +341,11 @@ def extract_features_from_signal(signal: np.ndarray, fs: int) -> tuple[dict, dic
     if filled is None:
         raise InferenceError("Signal contains no finite samples.")
 
-    # Upsample low-rate signals so the bandpass filter's Nyquist constraint is met.
-    # Arduino streams at ≥10 Hz; the filter needs fs > 2 * BANDPASS_HIGH (18 Hz min).
+    # Upsample low-rate signals before pyPPG feature extraction.
+    # The bandpass itself only needs fs > 2 * BANDPASS_HIGH, but pyPPG's FIR pipeline
+    # is not reliable below 75 Hz, which includes the bundled 25 Hz CSV demos.
     effective_fs = int(fs)
-    if effective_fs < MIN_FS_FOR_FILTER:
+    if effective_fs < RESAMPLE_TARGET_FS:
         target = RESAMPLE_TARGET_FS
         g = gcd(effective_fs, target)
         filled = resample_poly(filled, target // g, effective_fs // g).astype(np.float32)

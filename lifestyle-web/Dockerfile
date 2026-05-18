@@ -146,9 +146,7 @@ ENV PORT=4000 \
     NUT_MODEL_SCRIPT=/app/lifestyle-web/server/NUT_model/nut_estimator.py \
     NUT_MODEL_WEIGHTS=/app/lifestyle-web/server/NUT_model/checkpoint/canet_NUT.pth \
     NUT_MODEL_LABELS=/app/lifestyle-web/server/data/FoodSeg103/category_id.txt \
-    PPG_MODEL_PYTHON_BIN=/app/lifestyle-web/server/ppg_glucose/.venv/bin/python \
-    PPG_AUTO_SEED_DEMO_STREAM=true \
-    PPG_AUTO_SEED_DEMO_DATASET=activity-start
+    PPG_MODEL_PYTHON_BIN=/app/lifestyle-web/server/ppg_glucose/.venv/bin/python
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
 

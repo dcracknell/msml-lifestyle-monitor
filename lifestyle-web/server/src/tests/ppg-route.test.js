@@ -19,7 +19,6 @@ describe('PPG route', () => {
   let app;
   let spawnMock;
   let spawnSyncMock;
-  let seedPpgDemoStreamMock;
   let resolvePythonRuntimeMock;
   let subjectRow;
   let latestWindowStatusRow;
@@ -28,15 +27,17 @@ describe('PPG route', () => {
   let insertRunRunMock;
   let completeRunRunMock;
   let failRunRunMock;
+  let nowMs;
+  let dateNowSpy;
 
   beforeEach(() => {
     jest.resetModules();
     process.env.PPG_BGL_FS_HZ = '2';
     process.env.PPG_BGL_WINDOW_SECONDS = '3';
-    process.env.PPG_AUTO_SEED_DEMO_STREAM = 'true';
-    process.env.PPG_AUTO_SEED_DEMO_DATASET = 'activity-start';
     delete process.env.PPG_MODEL_PYTHON_BIN;
     delete process.env.PPG_PYTHON_BIN;
+    nowMs = Date.parse('2026-05-18T12:00:00.000Z');
+    dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(nowMs);
 
     subjectRow = {
       id: 3,
@@ -52,16 +53,16 @@ describe('PPG route', () => {
     };
     latestWindowStatusRow = {
       count: 6,
-      minTs: 1000,
-      maxTs: 3500,
+      minTs: nowMs - 2500,
+      maxTs: nowMs,
     };
     latestSignalSamples = [
-      { ts: 3500, value: 6 },
-      { ts: 3000, value: 5 },
-      { ts: 2500, value: 4 },
-      { ts: 2000, value: 3 },
-      { ts: 1500, value: 2 },
-      { ts: 1000, value: 1 },
+      { ts: nowMs, value: 6 },
+      { ts: nowMs - 500, value: 5 },
+      { ts: nowMs - 1000, value: 4 },
+      { ts: nowMs - 1500, value: 3 },
+      { ts: nowMs - 2000, value: 2 },
+      { ts: nowMs - 2500, value: 1 },
     ];
     latestRunRow = null;
 
@@ -71,36 +72,6 @@ describe('PPG route', () => {
       stdout: JSON.stringify({ missing: [] }),
       stderr: '',
     }));
-    seedPpgDemoStreamMock = jest.fn(({ userId, metric, datasetId, fsHz, windowSeconds }) => {
-      const seededFsHz = Number.parseInt(process.env.PPG_BGL_FS_HZ || String(fsHz || 2), 10);
-      const seededWindowSeconds = Number.parseInt(
-        process.env.PPG_BGL_WINDOW_SECONDS || String(windowSeconds || 3),
-        10
-      );
-      const seededSampleCount = Math.max(1, seededFsHz * seededWindowSeconds);
-      const firstTimestampMs = 1000;
-      const lastTimestampMs =
-        firstTimestampMs + Math.round(((seededSampleCount - 1) * 1000) / seededFsHz);
-
-      latestWindowStatusRow = {
-        count: seededSampleCount,
-        minTs: firstTimestampMs,
-        maxTs: lastTimestampMs,
-      };
-      latestSignalSamples = Array.from({ length: seededSampleCount }, (_, index) => ({
-        ts: lastTimestampMs - Math.round((index * 1000) / seededFsHz),
-        value: seededSampleCount - index,
-      }));
-
-      return {
-        user: { id: userId, name: subjectRow.name },
-        metric,
-        datasetId,
-        fsHz: seededFsHz,
-        windowSeconds: seededWindowSeconds,
-        sampleCount: seededSampleCount,
-      };
-    });
     resolvePythonRuntimeMock = jest.fn(() => '/tmp/ppg-venv/bin/python');
     insertRunRunMock = jest.fn(() => ({ lastInsertRowid: 77 }));
     completeRunRunMock = jest.fn();
@@ -125,10 +96,6 @@ describe('PPG route', () => {
 
     jest.doMock('../utils/resolve-python-runtime', () => ({
       resolvePythonRuntime: resolvePythonRuntimeMock,
-    }));
-
-    jest.doMock('../services/ppg-demo-stream-seeder', () => ({
-      seedPpgDemoStream: seedPpgDemoStreamMock,
     }));
 
     jest.doMock('../db', () => ({
@@ -171,8 +138,7 @@ describe('PPG route', () => {
   afterEach(() => {
     delete process.env.PPG_BGL_FS_HZ;
     delete process.env.PPG_BGL_WINDOW_SECONDS;
-    delete process.env.PPG_AUTO_SEED_DEMO_STREAM;
-    delete process.env.PPG_AUTO_SEED_DEMO_DATASET;
+    dateNowSpy.mockRestore();
   });
 
   it('returns the latest persisted prediction after a completed live inference run', async () => {
@@ -324,7 +290,7 @@ describe('PPG route', () => {
     proc.emit('close', 0);
   });
 
-  it('auto-seeds the live stream when no recent ppg.raw window exists', async () => {
+  it('returns an error when no recent ppg.raw database window exists', async () => {
     latestWindowStatusRow = {
       count: 0,
       minTs: null,
@@ -336,36 +302,19 @@ describe('PPG route', () => {
 
     expect(status.status).toBe(200);
     expect(status.body.liveInput).toMatchObject({
-      ready: true,
-      autoSeeded: true,
+      ready: false,
     });
     expect(status.body.liveInput.message).toContain(
-      'Auto-seeded ppg.raw from demo dataset "activity-start"'
+      'No ppg.raw data was found in the database for the last 3 seconds'
     );
-    expect(seedPpgDemoStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 3,
-        metric: 'ppg.raw',
-        datasetId: 'activity-start',
-        fsHz: 2,
-        windowSeconds: 3,
-      })
-    );
-
-    const proc = createMockProcess();
-    spawnMock.mockReturnValue(proc);
 
     const response = await request(app).post('/api/ppg/run').send({});
 
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      mode: 'latest',
-      metric: 'ppg.raw',
-    });
-    expect(spawnMock).toHaveBeenCalled();
-    expect(seedPpgDemoStreamMock).toHaveBeenCalledTimes(1);
-
-    proc.emit('close', 1);
+    expect(response.status).toBe(400);
+    expect(response.body.message).toContain(
+      'No ppg.raw data was found in the database for the last 3 seconds'
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it('accepts an uploaded CSV signal source and persists preview metadata', async () => {

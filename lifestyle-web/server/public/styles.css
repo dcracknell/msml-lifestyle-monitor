@@ -3934,6 +3934,42 @@ li.pending-delete { opacity: 0.38; pointer-events: none; transition: opacity 0.2
   font-size: 14px;
 }
 
+.ppg-demo-picker {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ppg-demo-picker-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: #8ca4cf;
+}
+
+.ppg-demo-select {
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(7, 16, 30, 0.9);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.ppg-demo-select:focus {
+  border-color: rgba(45, 212, 191, 0.7);
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.16);
+}
+
+.ppg-demo-select:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 .ppg-status-stack {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

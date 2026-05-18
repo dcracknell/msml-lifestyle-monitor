@@ -5,7 +5,6 @@ const fsSync = require('fs');
 const express = require('express');
 const db = require('../db');
 const { authenticate } = require('../services/session-store');
-const { seedPpgDemoStream } = require('../services/ppg-demo-stream-seeder');
 const { coerceRole, isHeadCoach } = require('../utils/role');
 const { resolvePythonRuntime } = require('../utils/resolve-python-runtime');
 
@@ -28,11 +27,6 @@ const DEFAULT_WINDOW_SECONDS = Math.max(
   1,
   parseInt(process.env.PPG_BGL_WINDOW_SECONDS || '900', 10)
 );
-const AUTO_SEED_DEMO_STREAM =
-  String(process.env.PPG_AUTO_SEED_DEMO_STREAM || '').trim().toLowerCase() === 'true';
-const AUTO_SEED_DEMO_DATASET =
-  String(process.env.PPG_AUTO_SEED_DEMO_DATASET || 'activity-start').trim().toLowerCase()
-  || 'activity-start';
 const WINDOW_SAMPLE_COUNT = DEFAULT_FS_HZ * DEFAULT_WINDOW_SECONDS;
 const WINDOW_SPAN_TOLERANCE_MS = Math.max(
   1000,
@@ -572,11 +566,54 @@ function buildDemographicsPayload(subject) {
   return demographics;
 }
 
+function formatWindowDurationLabel(totalSeconds) {
+  const seconds = Math.max(1, Math.round(Number(totalSeconds) || 0));
+  if (seconds % 3600 === 0 && seconds >= 3600) {
+    const hours = seconds / 3600;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  if (seconds % 60 === 0 && seconds >= 60) {
+    const minutes = seconds / 60;
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  return `${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
 function getLatestSignalWindowStatus(subjectId) {
+  const windowLabel = formatWindowDurationLabel(DEFAULT_WINDOW_SECONDS);
+  const windowMs = DEFAULT_WINDOW_SECONDS * 1000;
   const row = latestSignalWindowStatusStatement.get(subjectId, SIGNAL_METRIC, WINDOW_SAMPLE_COUNT);
   const count = Number(row?.count || 0);
   const minTs = Number(row?.minTs);
   const maxTs = Number(row?.maxTs);
+
+  if (!Number.isFinite(maxTs) || count <= 0) {
+    return {
+      ready: false,
+      metric: SIGNAL_METRIC,
+      sampleCount: count,
+      requiredSamples: WINDOW_SAMPLE_COUNT,
+      fsHz: DEFAULT_FS_HZ,
+      windowSeconds: DEFAULT_WINDOW_SECONDS,
+      message:
+        `No ${SIGNAL_METRIC} data was found in the database for the last ${windowLabel}. ` +
+        `Live mode only uses the newest ${windowLabel} database window.`,
+    };
+  }
+
+  if (Date.now() - maxTs > windowMs) {
+    return {
+      ready: false,
+      metric: SIGNAL_METRIC,
+      sampleCount: count,
+      requiredSamples: WINDOW_SAMPLE_COUNT,
+      fsHz: DEFAULT_FS_HZ,
+      windowSeconds: DEFAULT_WINDOW_SECONDS,
+      message:
+        `Latest ${SIGNAL_METRIC} data in the database is older than ${windowLabel}. ` +
+        `Live mode only uses the newest ${windowLabel} database window.`,
+    };
+  }
 
   if (count < WINDOW_SAMPLE_COUNT) {
     return {
@@ -587,8 +624,8 @@ function getLatestSignalWindowStatus(subjectId) {
       fsHz: DEFAULT_FS_HZ,
       windowSeconds: DEFAULT_WINDOW_SECONDS,
       message:
-        `Latest ${SIGNAL_METRIC} window is incomplete. ` +
-        `Need ${WINDOW_SAMPLE_COUNT} samples at ${DEFAULT_FS_HZ} Hz; found ${count}.`,
+        `Latest ${SIGNAL_METRIC} database window is incomplete. ` +
+        `Need ${WINDOW_SAMPLE_COUNT} samples at ${DEFAULT_FS_HZ} Hz over ${windowLabel}; found ${count}.`,
     };
   }
 
@@ -617,8 +654,8 @@ function getLatestSignalWindowStatus(subjectId) {
       spanMs,
       expectedSpanMs,
       message:
-        `Latest ${SIGNAL_METRIC} window spans ${(spanMs / 1000).toFixed(1)}s; ` +
-        `expected about ${DEFAULT_WINDOW_SECONDS}s at ${DEFAULT_FS_HZ} Hz.`,
+        `Latest ${SIGNAL_METRIC} database window spans ${(spanMs / 1000).toFixed(1)}s; ` +
+        `expected about ${DEFAULT_WINDOW_SECONDS}s over the last ${windowLabel} at ${DEFAULT_FS_HZ} Hz.`,
     };
   }
 
@@ -631,50 +668,16 @@ function getLatestSignalWindowStatus(subjectId) {
     windowSeconds: DEFAULT_WINDOW_SECONDS,
     spanMs,
     expectedSpanMs,
-    message: `Latest ${SIGNAL_METRIC} window is ready.`,
+      message: `Latest ${SIGNAL_METRIC} window is ready.`,
   };
 }
 
-function getLiveInputStatus(subjectId, { allowAutoSeed = false } = {}) {
-  let status = getLatestSignalWindowStatus(subjectId);
-  if (status.ready || !allowAutoSeed || !AUTO_SEED_DEMO_STREAM) {
-    return status;
-  }
-
-  try {
-    const seeded = seedPpgDemoStream({
-      db,
-      userId: subjectId,
-      metric: SIGNAL_METRIC,
-      datasetId: AUTO_SEED_DEMO_DATASET,
-      fsHz: DEFAULT_FS_HZ,
-      windowSeconds: DEFAULT_WINDOW_SECONDS,
-    });
-
-    status = getLatestSignalWindowStatus(subjectId);
-    if (status.ready) {
-      return {
-        ...status,
-        autoSeeded: true,
-        message:
-          `Auto-seeded ${SIGNAL_METRIC} from demo dataset "${seeded.datasetId}". ` +
-          `A full ${DEFAULT_WINDOW_SECONDS}-second window is ready.`,
-      };
-    }
-  } catch (error) {
-    return {
-      ...status,
-      autoSeeded: false,
-      message:
-        `${status.message} Auto-seeding demo stream failed: ${error.message || String(error)}`,
-    };
-  }
-
-  return status;
+function getLiveInputStatus(subjectId) {
+  return getLatestSignalWindowStatus(subjectId);
 }
 
 function loadLatestSignalWindow(subjectId) {
-  const status = getLiveInputStatus(subjectId, { allowAutoSeed: true });
+  const status = getLiveInputStatus(subjectId);
   if (!status.ready) {
     return { error: status.message, statusCode: 400 };
   }
@@ -1215,13 +1218,19 @@ function prepareCsvRunConfig(subject, input = {}, options = {}) {
     Math.round(signalSource.fsHz * targetWindowSeconds)
   );
   const useStrictLength = selectedSignal.signalValues.length >= desiredSampleCount;
+  const preserveLeadingWindow = Boolean(options.window);
   const startIndex = useStrictLength
-    ? Math.max(0, selectedSignal.signalValues.length - desiredSampleCount)
+    ? (preserveLeadingWindow
+      ? 0
+      : Math.max(0, selectedSignal.signalValues.length - desiredSampleCount))
     : 0;
-  const analysisSignal = selectedSignal.signalValues.slice(startIndex);
+  const endIndexExclusive = useStrictLength && preserveLeadingWindow
+    ? Math.min(selectedSignal.signalValues.length, desiredSampleCount)
+    : selectedSignal.signalValues.length;
+  const analysisSignal = selectedSignal.signalValues.slice(startIndex, endIndexExclusive);
   const analysisStartSec = Number(selectedSignal.timesSec[startIndex] || 0);
   const analysisEndSec = Number(
-    selectedSignal.timesSec[selectedSignal.timesSec.length - 1] || analysisStartSec
+    selectedSignal.timesSec[Math.max(startIndex, endIndexExclusive - 1)] || analysisStartSec
   );
   const analysisDurationSeconds = analysisSignal.length / signalSource.fsHz;
 
@@ -1754,7 +1763,7 @@ router.get('/status', authenticate, (req, res) => {
     bundle: getModelBundleStatus(),
     demoInput: getDemoInputStatus(),
     demoDatasets: getDemoDatasetStatuses(),
-    liveInput: getLiveInputStatus(subject.id, { allowAutoSeed: true }),
+    liveInput: getLiveInputStatus(subject.id),
     arduinoInput: arduinoMetric && arduinoFsHz
       ? getArduinoSignalStatus(subject.id, arduinoMetric, arduinoFsHz)
       : null,
